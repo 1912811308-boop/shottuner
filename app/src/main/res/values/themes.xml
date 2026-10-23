@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.ShotTuner" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/st_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <!--
+          API 26+ 才有 windowLightNavigationBar。显式给 false：深色底上要浅色图标。
+          不同 ROM 的默认值不一致，不写会出现"浅底配白图标"看不见的情况。
+        -->
+        <item name="android:windowLightNavigationBar">false</item>
+        <!-- 冷启动背景（API 24–30）：纯色 + 居中图标；API 31+ 由 values-v31 覆盖 -->
+        <item name="android:windowBackground">@drawable/bg_splash</item>
+    </style>
+</resources>

@@ -1,0 +1,1978 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/st_bg">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:implementationMode="compatible"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <com.shottuner.app.ui.GuideOverlayView
+        android:id="@+id/guideOverlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!--
+      快门白闪（v1.7 P0-5）。全屏白色，alpha 0 → 0.55 → 0，总时长 90ms。
+      放在 guideOverlay 之后、panel 之前：盖住取景与引导线，但不盖住面板与页签，
+      这样"闪"只作用在画面上，不影响正在读的文字。clickable=false 保证它不吃触摸。
+    -->
+    <View
+        android:id="@+id/tvShutterFlash"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:alpha="0"
+        android:background="@android:color/white"
+        android:clickable="false"
+        android:focusable="false"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <LinearLayout
+        android:id="@+id/topBar"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="44dp"
+        android:background="@drawable/bg_pill"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="10dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/tvScene"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="正在识别场景"
+            android:textColor="@color/st_text"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvMode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="教练模式 · 照拨"
+                android:textColor="@color/st_accent"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/tvLuma"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="亮度 --"
+                android:textColor="@color/st_text_dim"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!--
+      教练提示槽（v1.5 引入，v1.8 上移到取景区）。
+
+      为什么从面板里搬出来：提示和取景被面板分隔在两个区域，用户的眼睛要在
+      "画面 → 提示"之间跑 400dp。搬到这里，这段距离缩到 40dp 左右。
+
+      三条必须守住的约束：
+      1. **无内容时 GONE**，不占空间。否则它会常驻遮住取景上部约 13%，
+         把 1.7.1 刚调好的 45% 取景区又吃掉一块。
+      2. 文字压成 2 行：动作最多 2 行 + 理由最多 1 行。再长就截断 —— 提示是
+         "扫一眼就走"的东西，不是正文。
+      3. 优先级**不能只靠颜色**表达（无障碍：色盲用户分不清橙/青/蓝），
+         所以是「8dp 色点 + 2 字标签」，两者同时在。
+    -->
+    <LinearLayout
+        android:id="@+id/llCoachSlot"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="24dp"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_pill"
+        android:orientation="vertical"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="8dp"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/topBar">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!--
+              优先级色点（8dp）。id 沿用 tvCoachTag，方便 renderCoachSlot 直接改色；
+              类型从 TextView 换成 View —— 这一批的目标是极简，不再用文字标签占宽度。
+            -->
+            <View
+                android:id="@+id/tvCoachTag"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:background="@drawable/bg_dot" />
+
+            <TextView
+                android:id="@+id/tvCoachAction"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:text=""
+                android:textColor="@color/st_text"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvCoachReason"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text=""
+            android:textColor="@color/st_text_dim"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!--
+      G1 任务卡（v3.1.0）。
+
+      z 序：声明在 llCoachSlot 之后、panel 之前 —— 盖住取景与引导线，
+      但不盖面板/页签；同时被后面的 llCameraOff / llPrivacyGate 盖住，
+      不会出现"相机关着还弹任务卡"。
+
+      垂直位置：锚在 topBar 下沿与 panel 上沿之间，bias 0.62 让它落在
+      取景区偏下的位置（画面上部留给 topBar 与地平线，下部是用户视线
+      从画面移到面板的过渡带，卡片放这里不挡主体）。
+
+      **必须双锚点 + bias**：与 panel 同一个坑（P1-a），单锚点会在部分
+      ConstraintLayout 版本上把高度解析成 0。
+
+      背景用 bg_pill（92% 不透明深底）而不是 bg_card（12% 白）：
+      bg_card 是给面板里的深色底用的，浮在明亮取景画面上完全读不清。
+
+      默认 gone。显隐只由 MainActivity.renderTaskSurface() 一处控制。
+    -->
+    <LinearLayout
+        android:id="@+id/llTaskCard"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="24dp"
+        android:background="@drawable/bg_pill"
+        android:orientation="vertical"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="10dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/panel"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/topBar"
+        app:layout_constraintVertical_bias="0.62">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvTaskTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text=""
+                android:textColor="@color/st_text"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvTaskScore"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:fontFamily="monospace"
+                android:text="参考分 --"
+                android:textColor="@color/st_text_warm"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvTaskHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text=""
+            android:textColor="@color/st_text_dim"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!--
+      G1 成绩卡（v3.1.0）。声明在 llTaskCard 之后 → z 序更高，到位时盖住任务卡。
+
+      背景同样用 bg_pill，理由同上。
+
+      bias 0.45 → 落在取景区正中偏上，这是 Aha 的产物，要给主位。
+      刻意不放进 panel 里的 llReviewCard 那个位置：复盘卡在 ScrollView 中，
+      需要 panel.scrollTo(0,0) 才看得见；Aha 的产物不该需要一个滚动补丁才能被看到。
+    -->
+    <LinearLayout
+        android:id="@+id/llAchieveCard"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="20dp"
+        android:background="@drawable/bg_pill"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="14dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/panel"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/topBar"
+        app:layout_constraintVertical_bias="0.45">
+
+        <TextView
+            android:id="@+id/tvAchieveScore"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="monospace"
+            android:maxLines="1"
+            android:text=""
+            android:textColor="@color/st_accent"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvAchieveReason"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text=""
+            android:textColor="@color/st_text"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/btnAchieveAgain"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_chip"
+                android:gravity="center"
+                android:paddingVertical="8dp"
+                android:text="再来一张"
+                android:textColor="@color/st_accent"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnAchieveDex"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/bg_chip"
+                android:gravity="center"
+                android:paddingVertical="8dp"
+                android:text="看技法 ›"
+                android:textColor="@color/st_accent"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!--
+      底部面板（v1.7 P0-1 / P0-2）。
+
+      高度从 wrap_content + constraintHeight_max=600dp 改成屏高百分比：
+      600dp 硬编码在 640dp 屏上占 94%（取景几乎为零），在 900dp 屏上只占 67%，
+      同一份布局在两端体验相反。取景器是这个产品的全部意义，它的高度必须按
+      屏幕比例而不是绝对 dp。min=240dp 是"能装下 3 行内容"的下限，
+      max=560dp 防止平板上一屏全是面板。
+
+      比例取 **0.45**（v1.7.1 P1-b）：0.52 在 360×640dp 上算下来面板上沿在 y≈197dp，
+      扣掉 topBar 遮挡后取景区净可见只有 ~17.7%，低于设计文档的「三档 ≥34%」验收线。
+      0.45 之后三档分别是 38.6% / 41.9% / 42.4%，且仍高于 min 240dp。
+
+      底边约束改为 toTopOf=llControlBar：快门移出滚动区后，面板要在控制条上方收住。
+
+      **必须双锚点**（v1.7.1 P1-a）：`height=0dp` + `constraintHeight_percent` 是
+      MATCH_CONSTRAINT 的用法，只有底边锚点时部分机型/ConstraintLayout 版本会把高度
+      解析成 0 —— 面板整块消失。补上 constraintTop_toBottomOf=topBar 之后，
+      percent 依然生效（percent 优先于拉伸），但解析路径不再依赖"单锚点推断"。
+
+      补了顶边锚点就必须同时给 `constraintVertical_bias="1"`：一旦上下都有锚点，
+      固定高度的子 View 默认按 0.5 偏置居中，面板会从"贴着控制条"变成"悬在中间"。
+      bias=1 让它继续压在控制条上沿，视觉与改之前一致。
+    -->
+    <ScrollView
+        android:id="@+id/panel"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_margin="12dp"
+        android:background="@drawable/bg_panel"
+        android:clipToPadding="false"
+        android:padding="14dp"
+        android:scrollbars="none"
+        app:layout_constraintBottom_toTopOf="@id/llControlBar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHeight_max="560dp"
+        app:layout_constraintHeight_min="240dp"
+        app:layout_constraintHeight_percent="0.45"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/topBar"
+        app:layout_constraintVertical_bias="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tabPhoto"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_chip"
+                    android:gravity="center"
+                    android:text="照片"
+                    android:textColor="@color/st_accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tabVideo"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="录像"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tabFeature"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="功能"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tabSkill"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:layout_marginStart="6dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="技法"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <!--
+              拍照复盘卡（v1.7 P0-5 / P1-d）。刻意放在页签**之后**：
+
+              它是拍照最高频动作的产物。若放在页签之前，每拍一张就把页签和四个页面
+              整体下推 100–115dp、5 秒后再弹回 —— 拍照时手指正悬在页签上，会误触。
+              放在这里，被推走的是页面内容，页签位置不动。
+              默认 gone，由 MainActivity.showReviewCard() 写入并显示，5 秒后自动收起
+              （点一下可保持常驻）。
+            -->
+            <LinearLayout
+                android:id="@+id/llReviewCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="@drawable/bg_card"
+                android:orientation="vertical"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="9dp"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:baselineAligned="false"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/tvReviewHead"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text=""
+                        android:textColor="@color/st_text"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/btnReviewSkill"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:background="@drawable/bg_chip"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="6dp"
+                        android:text="看技法 ›"
+                        android:textColor="@color/st_accent"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvReviewDims"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:fontFamily="monospace"
+                    android:text=""
+                    android:textColor="@color/st_text_warm"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/tvReviewAdvice"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:maxLines="2"
+                    android:text=""
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/tvReviewStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:text=""
+                    android:textColor="@color/st_text_faint"
+                    android:textSize="10sp" />
+
+                <!--
+                  G2-B：一键分享。发出去的一定是「已写进相册的那张带水印的图」，
+                  相册写入失败时 ShareKit 退回 FileProvider 的 cache-path。
+                -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:gravity="end|center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/btnReviewShare"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_chip"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="6dp"
+                        android:text="分享这张 ›"
+                        android:textColor="@color/st_accent"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ========== 照片页 ========== -->
+            <LinearLayout
+                android:id="@+id/pagePhoto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:baselineAligned="false"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/tvScore"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:text="构图 --"
+                        android:textColor="@color/st_accent"
+                        android:textSize="17sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvCompose"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="2"
+                        android:text="正在分析构图"
+                        android:textColor="@color/st_text_body"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/btnGuide"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_chip"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="6dp"
+                        android:text="网格"
+                        android:textColor="@color/st_accent"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <!--
+                  四维参考分（v1.5 表格区）。刻意叫「参考分」不叫「评分」：
+                  这个数是从画面统计里反推的，不是相机的测光结论，措辞上不能越权。
+                  未测维度显示「未测」而不是 0 —— 0 会被读成「拍得很差」。
+                -->
+                <TextView
+                    android:id="@+id/tvScoreDetail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:fontFamily="monospace"
+                    android:text="参考分 --"
+                    android:textColor="@color/st_text_warm"
+                    android:textSize="11sp" />
+
+                <!--
+                  G1 参数降级（v3.1.0 L3）。
+
+                  ISO / 快门 / 色温 / 偏差 与直方图**一个都不删**，只是整块包进 llParams
+                  并默认收起。首屏主位让给任务卡 —— 那串只有学过摄影才读得懂的数字
+                  不该排在"把主体挪到右上交点"前面。ProShot 那批用户点一下
+                  「参数 ▾」就全回来了。
+
+                  histogram 从原来的位置搬进来，**android:id 不变**，
+                  MainActivity 的 binding.histogram 引用不受影响。
+
+                  visibility=gone 是初始值；由 MainActivity.applyUiPreset() 覆盖。
+                -->
+                <LinearLayout
+                    android:id="@+id/llParams"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <com.shottuner.app.ui.HistogramView
+                        android:id="@+id/histogram"
+                        android:layout_width="match_parent"
+                        android:layout_height="46dp"
+                        android:layout_marginTop="8dp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:baselineAligned="false"
+                        android:orientation="horizontal">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="感光度"
+                                android:textColor="@color/st_text_dim"
+                                android:textSize="10sp" />
+
+                            <TextView
+                                android:id="@+id/tvIso"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="monospace"
+                                android:maxLines="1"
+                                android:text="--"
+                                android:textColor="@color/st_text"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                app:autoSizeMaxTextSize="20sp"
+                                app:autoSizeMinTextSize="14sp"
+                                app:autoSizeStepGranularity="1sp"
+                                app:autoSizeTextType="uniform" />
+                        </LinearLayout>
+
+                        <!-- 1dp 发丝分隔线（v1.8 P1-3）：四格不是平权的，先靠字号分层，
+                             再用分隔线把"三个读数 + 一个偏差"在视觉上分组 -->
+                        <View
+                            android:layout_width="1dp"
+                            android:layout_height="34dp"
+                            android:layout_gravity="center_vertical"
+                            android:background="@color/st_hairline" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="快门"
+                                android:textColor="@color/st_text_dim"
+                                android:textSize="10sp" />
+
+                            <TextView
+                                android:id="@+id/tvShutter"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="monospace"
+                                android:maxLines="1"
+                                android:text="--"
+                                android:textColor="@color/st_text"
+                                android:textSize="26sp"
+                                android:textStyle="bold"
+                                app:autoSizeMaxTextSize="26sp"
+                                app:autoSizeMinTextSize="14sp"
+                                app:autoSizeStepGranularity="1sp"
+                                app:autoSizeTextType="uniform" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="1dp"
+                            android:layout_height="34dp"
+                            android:layout_gravity="center_vertical"
+                            android:background="@color/st_hairline" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="色温"
+                                android:textColor="@color/st_text_dim"
+                                android:textSize="10sp" />
+
+                            <TextView
+                                android:id="@+id/tvKelvin"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="monospace"
+                                android:maxLines="1"
+                                android:text="--"
+                                android:textColor="@color/st_text"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                app:autoSizeMaxTextSize="20sp"
+                                app:autoSizeMinTextSize="14sp"
+                                app:autoSizeStepGranularity="1sp"
+                                app:autoSizeTextType="uniform" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="1dp"
+                            android:layout_height="34dp"
+                            android:layout_gravity="center_vertical"
+                            android:background="@color/st_hairline" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="偏差"
+                                android:textColor="@color/st_text_dim"
+                                android:textSize="10sp" />
+
+                            <TextView
+                                android:id="@+id/tvEv"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="monospace"
+                                android:text="--"
+                                android:textColor="@color/st_text_dim"
+                                android:textSize="11sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!--
+                  参数折叠头（v3.1.0 L3）。
+
+                  收起时由 tvParamsSummary 显示一行摘要 —— "参数还在"这件事必须有可见
+                  证据，否则用户会以为功能被删了。点这一整行切换展开/收起。
+                -->
+                <LinearLayout
+                    android:id="@+id/llParamsHeader"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:baselineAligned="false"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/tvParamsToggle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="参数 ▾"
+                        android:textColor="@color/st_accent"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvParamsSummary"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:fontFamily="monospace"
+                        android:gravity="end"
+                        android:maxLines="1"
+                        android:text=""
+                        android:textColor="@color/st_text_dim"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <!--
+                  参数建议区（v1.8 P1-1）。
+
+                  原来这里是三行：tvTip（建议）/ tvDetail（细节）/ tvFraming（机位，还在页首）。
+                  三者说的是同一件事——"接下来手怎么动"，却占了三个层级、要用户自己对应。
+                  v1.8 合成一个 tvAdvice：
+                    · 主句 = 原 tvTip，13sp 粗体
+                    · 副句 = 原 tvDetail + 原 tvFraming 的机位信息，11sp 灰字
+                  用 Spannable 在一个 TextView 里做两级字号，而不是两个 View —— 少一层布局、
+                  少一次 measure，也避免两行字行距对不齐。
+
+                  tvCompose（构图建议）**没有并进来**：它讲"画面结构"，与"手怎么动"是两个
+                  层级，合并会丢信息。所以照片页现在只剩 2 个"该怎么做"的出口：tvAdvice + tvCompose。
+                -->
+                <TextView
+                    android:id="@+id/tvAdvice"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:ellipsize="end"
+                    android:maxLines="3"
+                    android:text="把镜头对准要拍的画面"
+                    android:textColor="@color/st_text_body"
+                    android:textSize="13sp" />
+
+                <!--
+                  主操作行（v1.8 P1-4）。
+
+                  原来这里常驻 5 个按钮（本机写入 / 锁定参数 / 恢复自动 / 复制参数 / 怎么拨），
+                  其中"复制参数"和"怎么拨"是**首次使用学一次**的动作，却和每次调参都会点的
+                  "本机写入"平级，等于让 40% 的常用区被两个低频按钮占着。
+
+                  现在：常驻 2 个（本机写入 + 更多），低频 4 个收进 llMoreActions，
+                  默认收起、状态不持久化（每次进页面都是收起）。
+                  5 个按钮的文案与点击行为一个字没改，只改显隐。
+
+                  高度统一 48dp：Material 的触控目标下限，原来 38–40dp 不达标。
+                -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnMode"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="6dp"
+                        android:layout_weight="1"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minHeight="44dp"
+                        android:text="本机写入（可选）"
+                        android:textColor="@color/st_bg"
+                        android:textSize="11sp"
+                        app:backgroundTint="@color/st_accent"
+                        app:cornerRadius="12dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnMore"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:minHeight="44dp"
+                        android:text="更多 ⌄"
+                        android:textColor="@color/st_text_body"
+                        android:textSize="11sp"
+                        app:backgroundTint="@color/st_scrim"
+                        app:cornerRadius="12dp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/llMoreActions"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnLock"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="6dp"
+                            android:layout_weight="1"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:minHeight="44dp"
+                            android:text="锁定参数"
+                            android:textColor="@color/st_text_body"
+                            android:textSize="11sp"
+                            app:backgroundTint="@color/st_scrim"
+                            app:cornerRadius="12dp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnAuto"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:minHeight="44dp"
+                            android:text="恢复自动"
+                            android:textColor="@color/st_text_body"
+                            android:textSize="11sp"
+                            app:backgroundTint="@color/st_scrim"
+                            app:cornerRadius="12dp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnCopy"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="6dp"
+                            android:layout_weight="1"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:minHeight="44dp"
+                            android:text="复制参数"
+                            android:textColor="@color/st_accent"
+                            android:textSize="11sp"
+                            app:backgroundTint="@color/st_scrim"
+                            app:cornerRadius="12dp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnHelp"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:minHeight="44dp"
+                            android:text="怎么拨"
+                            android:textColor="@color/st_accent"
+                            android:textSize="11sp"
+                            app:backgroundTint="@color/st_scrim"
+                            app:cornerRadius="12dp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- 快门已移出滚动区，见文件末尾的 llControlBar（v1.7 P0-1） -->
+            </LinearLayout>
+
+            <!-- ========== 录像页 ========== -->
+            <LinearLayout
+                android:id="@+id/pageVideo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/llIntents"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal" />
+                </HorizontalScrollView>
+
+                <TextView
+                    android:id="@+id/tvIntentDesc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="选一个拍摄意图，给出完整录像方案"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="11sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:baselineAligned="false"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="分辨率"
+                            android:textColor="@color/st_text_dim"
+                            android:textSize="10sp" />
+
+                        <TextView
+                            android:id="@+id/tvVRes"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="monospace"
+                            android:text="--"
+                            android:textColor="@color/st_text"
+                            android:textSize="21sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="帧率"
+                            android:textColor="@color/st_text_dim"
+                            android:textSize="10sp" />
+
+                        <TextView
+                            android:id="@+id/tvVFps"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="monospace"
+                            android:text="--"
+                            android:textColor="@color/st_text"
+                            android:textSize="21sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="快门"
+                            android:textColor="@color/st_text_dim"
+                            android:textSize="10sp" />
+
+                        <TextView
+                            android:id="@+id/tvVShutter"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="monospace"
+                            android:text="--"
+                            android:textColor="@color/st_text"
+                            android:textSize="21sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="码率"
+                            android:textColor="@color/st_text_dim"
+                            android:textSize="10sp" />
+
+                        <TextView
+                            android:id="@+id/tvVBitrate"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="monospace"
+                            android:text="--"
+                            android:textColor="@color/st_text_dim"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvVStab"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text=""
+                    android:textColor="@color/st_accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvVTips"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text=""
+                    android:textColor="@color/st_text_body"
+                    android:textSize="11sp"
+                    android:lineSpacingExtra="3dp" />
+
+                <TextView
+                    android:id="@+id/tvVAudio"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text=""
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="11sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCopyVideo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minHeight="44dp"
+                    android:text="复制录像方案"
+                    android:textColor="@color/st_bg"
+                    android:textSize="12sp"
+                    app:backgroundTint="@color/st_accent"
+                    app:cornerRadius="12dp" />
+            </LinearLayout>
+
+            <!-- ========== 功能页 ========== -->
+            <LinearLayout
+                android:id="@+id/pageFeature"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- 提示密度三档（ARCH P1-5 / QA P1-2）：没有这个入口，R10 兜底轮播
+                     在 STANDARD 档下永远出不来，用户也没法自己调到 CHATTER。 -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="提示密度"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <RadioGroup
+                    android:id="@+id/rgPromptDensity"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:orientation="horizontal">
+
+                    <RadioButton
+                        android:id="@+id/rbDensityQuiet"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:buttonTint="@color/st_accent"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="0dp"
+                        android:text="安静"
+                        android:textColor="@color/st_text_option"
+                        android:textSize="12sp" />
+
+                    <RadioButton
+                        android:id="@+id/rbDensityStandard"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:buttonTint="@color/st_accent"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="0dp"
+                        android:text="标准"
+                        android:textColor="@color/st_text_option"
+                        android:textSize="12sp" />
+
+                    <RadioButton
+                        android:id="@+id/rbDensityChatter"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:buttonTint="@color/st_accent"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="0dp"
+                        android:text="话多"
+                        android:textColor="@color/st_text_option"
+                        android:textSize="12sp" />
+                </RadioGroup>
+
+                <TextView
+                    android:id="@+id/tvDensityHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="硬伤 + 当前场景建议（含运镜与网格）"
+                    android:textColor="@color/st_text_faint"
+                    android:textSize="10sp" />
+
+                <TextView
+                    android:id="@+id/tvVolumeShutterTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="音量键拍照"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Switch
+                    android:id="@+id/swVolumeShutter"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:checked="true"
+                    android:showText="false"
+                    android:switchPadding="10dp"
+                    android:text="按音量下键当快门"
+                    android:textColor="@color/st_text_option"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tvVolumeShutterHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="音量上键仍然调音量；无障碍模式下建议关掉这项"
+                    android:textColor="@color/st_text_faint"
+                    android:textSize="10sp" />
+
+                <!--
+                  G2-A：成片水印开关。默认开 —— 水印是唯一能跟着照片跑出应用的传播载体。
+                  只对之后拍的照片生效（已写进相册的那张改不动），所以副标题里写明。
+                -->
+                <TextView
+                    android:id="@+id/tvWatermarkTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="成绩水印"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Switch
+                    android:id="@+id/swWatermark"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:checked="true"
+                    android:showText="false"
+                    android:switchPadding="10dp"
+                    android:text="照片右下角标注参考分"
+                    android:textColor="@color/st_text_option"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tvWatermarkHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="水印打在照片上，发朋友圈时别人也能看到；只对之后拍的照片生效"
+                    android:textColor="@color/st_text_faint"
+                    android:textSize="10sp" />
+
+                <!--
+                  G1：到位震动开关。
+
+                  震动是可感知的打扰，**必须给用户关闭的出口**，否则差评。
+                  关掉之后"到位"仍有颜色、线宽、中心点与文案四个信号，功能不打折。
+                -->
+                <TextView
+                    android:id="@+id/tvTaskBuzzTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="到位震动"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Switch
+                    android:id="@+id/swTaskBuzz"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:checked="true"
+                    android:showText="false"
+                    android:switchPadding="10dp"
+                    android:text="完成任务时震一下"
+                    android:textColor="@color/st_text_option"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tvTaskBuzzHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="约 15 毫秒的极短震动；关掉后仍有颜色与文案提示"
+                    android:textColor="@color/st_text_faint"
+                    android:textSize="10sp" />
+
+                <TextView
+                    android:id="@+id/tvFeatureTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="这会儿该开什么"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:id="@+id/llFeatures"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="vertical" />
+            </LinearLayout>
+
+            <!-- ========== 技法页 ========== -->
+            <LinearLayout
+                android:id="@+id/pageSkill"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tvSkillTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="新手起步包"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvDexProgress"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="已解锁 0 / 83"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="11sp" />
+
+                <ProgressBar
+                    android:id="@+id/pbDex"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="5dp"
+                    android:layout_marginTop="4dp"
+                    android:max="83"
+                    android:progress="0"
+                    android:progressTint="@color/st_accent"
+                    android:progressBackgroundTint="@color/st_scrim" />
+
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/llSkillCats"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal" />
+                </HorizontalScrollView>
+
+                <LinearLayout
+                    android:id="@+id/llSkills"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="vertical" />
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnFloat"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="44dp"
+                android:text="在系统相机上浮一个建议卡"
+                android:textColor="@color/st_accent"
+                android:textSize="11sp"
+                app:backgroundTint="@color/st_scrim"
+                app:cornerRadius="12dp" />
+
+            <TextView
+                android:id="@+id/tvCaps"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text=""
+                android:textColor="@color/st_text_faint"
+                android:textSize="10sp" />
+
+            <!--
+              导出诊断信息（v3.0.0 阶段 3）。**只有用户主动点击才会产生文件**，
+              打包后走系统分享面板交给用户自己决定发给谁 —— 应用自身没有任何上传通路。
+            -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnExportDiag"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="44dp"
+                android:text="导出诊断信息"
+                android:textColor="@color/st_text_dim"
+                android:textSize="11sp"
+                app:backgroundTint="@color/st_scrim"
+                app:cornerRadius="12dp" />
+
+            <!--
+              关于页入口（P0-2）。隐私政策里写了「历史版本可在应用内『关于』页面查阅」，
+              而这个页面之前并不存在 —— 那句话当时是假的。另外用户一旦同意或关掉
+              首次覆盖层，全 App 就再也找不到隐私政策全文了，这里是唯一常驻入口。
+            -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnAbout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="44dp"
+                android:text="关于 · 隐私与第三方清单"
+                android:textColor="@color/st_text_dim"
+                android:textSize="11sp"
+                app:backgroundTint="@color/st_scrim"
+                app:cornerRadius="12dp" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!--
+      底部固定控制条（v1.7 P0-1）。
+
+      快门必须常驻（A2）。以前它在 pagePhoto 的内容流最后一行、套在 ScrollView 里，
+      文案一长或小屏一挤就被滚走，而且位置随内容长度浮动 —— 和"快门固定"直接冲突。
+
+      结构：左缩略图（48dp，拍照后从快门位置飞入，这就是"已保存"的唯一确认）
+            + 居中的快门（72dp，业界相机 68–76dp）
+            + 右侧 48dp 占位，让快门保持在屏幕正中间。
+      刻意不放在 ScrollView 里，也不参与任何滚动容器的测量。
+    -->
+    <LinearLayout
+        android:id="@+id/llControlBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginBottom="14dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="6dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <ImageView
+            android:id="@+id/ivThumb"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@drawable/bg_thumb"
+            android:clipToOutline="true"
+            android:contentDescription="最近一张"
+            android:scaleType="centerCrop"
+            android:visibility="invisible" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <ImageButton
+            android:id="@+id/btnShutter"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:background="@drawable/bg_shutter"
+            android:contentDescription="拍照"
+            android:padding="0dp"
+            android:scaleType="centerInside" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <!-- 与 ivThumb 等宽的占位，保证快门在屏幕水平正中 -->
+        <View
+            android:layout_width="48dp"
+            android:layout_height="48dp" />
+    </LinearLayout>
+
+    <!--
+      受限 / 不可用状态的取景占位（v3.0.0 阶段 3 扩成两态）。
+
+      两种原因，行动建议完全不同，所以标题/正文/按钮都要能换：
+        · 隐私未同意 → 「相机已关闭」+ 按钮「重新开启相机」（点开隐私门）
+        · 相机权限被拒 → 「需要相机权限」+ 按钮「去设置授权」
+
+      **只盖取景区**（底边约束到 panel 上沿）：这两种状态下
+      技法页 / 录像页 / 功能页必须仍然可点，所以这一层不能压住面板。
+    -->
+    <LinearLayout
+        android:id="@+id/llCameraOff"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@color/st_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingHorizontal="36dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/panel"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/tvCameraOffTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="相机已关闭"
+            android:textColor="@color/st_text"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvCameraOffBody"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:lineSpacingMultiplier="1.3"
+            android:text="你选择了暂不同意隐私政策，所以相机、拍照与画面分析都不会启动。\n技法库、录像方案与功能建议仍然可以正常查看。"
+            android:textColor="@color/st_text_dim"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/btnCameraOffAction"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:paddingHorizontal="20dp"
+            android:text="重新开启相机"
+            android:textColor="@color/st_accent"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!--
+      相机打不开的错误条（v3.0.0 阶段 3）。
+
+      相机被占用是**常态**（微信视频通话、系统相机没退干净），现在失败后是黑屏无提示。
+      这里给一条可操作的错误条：说清原因 + 一个「重试」。
+      位置在取景区底部、面板之上，不挡快门与面板。
+    -->
+    <LinearLayout
+        android:id="@+id/llCameraError"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/bg_pill"
+        android:orientation="vertical"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="12dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/panel"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <TextView
+            android:id="@+id/tvCameraErrorTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="相机打不开"
+            android:textColor="@color/st_text"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvCameraErrorBody"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:maxLines="2"
+            android:text="可能被其他应用占用了"
+            android:textColor="@color/st_text_dim"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/btnCameraRetry"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:minHeight="40dp"
+            android:paddingHorizontal="18dp"
+            android:text="重试"
+            android:textColor="@color/st_accent"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!--
+      关于页（P0-2）。原生 ScrollView + TextView，不引任何 Markdown 渲染依赖。
+
+      三个入口都在这一页里：
+      ① 隐私政策全文 → 复用 llPrivacyFull（与首次覆盖层读的是同一份 res/raw/privacy_v1.txt，
+         不复制第二份，避免两处文案日后走样）；
+      ② 个人信息收集清单 → 下面的条列式说明；
+      ③ 第三方共享清单 → 同页第三段。
+      底部一行是版本号 + 应用名 + 联系方式。
+
+      z 序：声明在所有隐私覆盖层**之前**，保证「没同意隐私」时隐私门永远盖在它上面。
+    -->
+    <LinearLayout
+        android:id="@+id/llAbout"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@color/st_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="12dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="关于"
+            android:textColor="@color/st_text"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="10dp"
+            android:layout_weight="1"
+            android:scrollbars="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvAboutMeta"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingMultiplier="1.35"
+                    android:text="光影调参 · 版本 3.0.0\n联系邮箱：1912811308@qq.com"
+                    android:textColor="@color/st_text_body"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/btnAboutPolicy"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/bg_thumb"
+                    android:gravity="center"
+                    android:minHeight="48dp"
+                    android:text="隐私政策全文"
+                    android:textColor="@color/st_accent"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:text="个人信息收集清单"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:lineSpacingMultiplier="1.4"
+                    android:text="本应用不收集、不上传任何个人信息。逐项说明：\n\n· 姓名、手机号、身份证号、邮箱、通讯录、短信、位置：不收集。\n· 照片与视频：不收集。只有你按下快门时，照片才会写入你自己的相册，应用不保留副本。\n· 设备标识符（IMEI / OAID / Android ID / MAC 地址）：不收集。\n· 使用行为、点击记录：不收集。\n· 崩溃与诊断日志：只存在你的手机里（应用私有目录），不会自动上传；只有你主动点「导出诊断信息」才会生成文件，发给谁由你决定。\n· 人脸信息：只做本机检测，输出坐标与朝向数值，不生成人脸特征值、不做比对、不做身份识别、不存储人脸图像。\n· 账号：没有账号体系，也没有登录功能。\n\n结论：全部处理都在你的手机上完成。"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:text="第三方共享清单"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:lineSpacingMultiplier="1.4"
+                    android:text="本应用仅集成两个第三方组件，二者都是随安装包分发的端侧模型，在手机本地完成计算。\n\n① ML Kit 图像标注（image-labeling）17.0.9\n· 提供方：Google LLC\n· 用途：在本机识别画面主体类别（人物、食物、建筑等），用于匹配拍摄技法\n· 是否联网传输图像：否。模型打包在安装包内，推理在本地完成\n· 共享的个人信息：无\n\n② ML Kit 人脸检测（face-detection）16.1.6\n· 提供方：Google LLC\n· 用途：在本机检测人脸位置与朝向，用于构图建议与测光参考\n· 是否联网传输图像：否。同上\n· 共享的个人信息：无\n\n本应用未集成任何广告、统计分析、推送、社交分享、崩溃上报 SDK，也不存在向任何第三方共享、转让、公开披露个人信息的情形 —— 因为本应用不持有任何个人信息。"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:lineSpacingMultiplier="1.4"
+                    android:text="本应用未申请网络访问权限，在操作系统层面不具备联网能力。"
+                    android:textColor="@color/st_text_faint"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </ScrollView>
+
+        <TextView
+            android:id="@+id/btnAboutClose"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_thumb"
+            android:gravity="center"
+            android:minHeight="48dp"
+            android:text="返回"
+            android:textColor="@color/st_accent"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!--
+      悬浮教练说明页（v3.0.0 阶段 3）。
+
+      产品经理的原话是"这是给审核看的证据，不是给用户看的弹窗"——所以它只在
+      **第一次**点「悬浮教练」时出现，把"为什么必须录屏"和"我们不做什么"一次讲清，
+      之后不再打扰（uiPrefs 记 coach_intro_shown）。
+
+      z 序：声明在隐私覆盖层**之前**，所以隐私门永远盖在它上面 ——
+      没同意隐私的用户碰不到悬浮教练这条路（startFloatingCoach 里也有硬判断）。
+    -->
+    <LinearLayout
+        android:id="@+id/llCoachIntro"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@color/st_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:paddingHorizontal="28dp"
+        android:paddingVertical="32dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="悬浮教练"
+            android:textColor="@color/st_text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="14dp"
+            android:layout_weight="1"
+            android:scrollbars="none">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingMultiplier="1.45"
+                android:text="它能做什么\n· 读取屏幕上的画面像素，在你用系统相机取景时，把一条拍摄建议叠在画面上方。\n· Android 不允许任何应用直接读取别的 App 的相机画面，所以这是唯一的合规做法：由你授权一次屏幕捕获，系统把画面帧交给我们，我们在本地算完就丢。\n\n它不会做什么\n· 不录制屏幕视频。应用里没有任何视频编码组件。\n· 不保存任何画面。帧只在内存里存在几百毫秒，不写文件、不进相册、不进缓存。\n· 不上传任何内容。应用没有网络权限，系统层面就联不了网。\n\n需要两个权限\n· 显示在其他应用上层：不加这个，建议卡片没法盖在系统相机上。\n· 屏幕捕获：每次开启都会由系统弹窗向你确认一次，授权只对那一次会话有效。\n\n随时可以停止：通知栏常驻一条通知，点「停止」立刻结束。"
+                android:textColor="@color/st_text_body"
+                android:textSize="13sp" />
+        </ScrollView>
+
+        <TextView
+            android:id="@+id/btnCoachIntroStart"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="52dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_chip"
+            android:backgroundTint="@color/st_accent"
+            android:gravity="center"
+            android:text="开始"
+            android:textColor="@color/st_bg"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnCoachIntroCancel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:layout_marginTop="4dp"
+            android:gravity="center"
+            android:text="取消"
+            android:textColor="@color/st_text_dim"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!--
+      隐私同意覆盖层（v3.0.0 阶段 2）。
+
+      为什么不用 Dialog：首次冷启动时 Activity 还没画出来，Dialog 会先于窗口显示，
+      出现"闪一下桌面再弹框"的观感。用一个铺满的 View 盖在根布局上就没有这个问题，
+      而且它是 Activity 的一部分，配置变更（旋转/字体缩放）时状态自然跟着走。
+
+      z 序：它声明在最后，因此盖住包括 llControlBar 在内的全部内容。
+    -->
+    <LinearLayout
+        android:id="@+id/llPrivacyGate"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@color/st_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:paddingHorizontal="28dp"
+        android:paddingVertical="32dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="开始前请了解"
+            android:textColor="@color/st_text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvPrivacySummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:lineSpacingMultiplier="1.45"
+            android:text="· 这个 App 不联网，也不上传任何东西 —— 它没有网络权限，技术上也做不到。\n\n· 你的照片只留在你自己的相册里，我们不留副本。\n\n· 曝光、构图、清晰度的分析全部在你的手机上完成。\n\n· 需要相机权限用于取景与拍照；「悬浮教练」还需要录屏与通知权限，二者都是可选的。\n\n· 你可以拒绝任何一项权限，只有对应功能不可用，其余照常。"
+            android:textColor="@color/st_text_body"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/btnPrivacyFull"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:layout_marginTop="24dp"
+            android:background="@drawable/bg_thumb"
+            android:gravity="center"
+            android:text="查看完整隐私政策"
+            android:textColor="@color/st_accent"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/btnPrivacyAgree"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="52dp"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_chip"
+            android:backgroundTint="@color/st_accent"
+            android:gravity="center"
+            android:text="同意并继续"
+            android:textColor="@color/st_bg"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnPrivacyDeny"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:layout_marginTop="4dp"
+            android:gravity="center"
+            android:text="暂不同意"
+            android:textColor="@color/st_text_dim"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!--
+      隐私政策全文页。与覆盖层同层级、声明更晚，所以能盖住覆盖层；
+      返回时只把这一页藏起来，覆盖层仍在原处（用户还没做选择）。
+    -->
+    <LinearLayout
+        android:id="@+id/llPrivacyFull"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@color/st_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="12dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="隐私政策"
+            android:textColor="@color/st_text"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="10dp"
+            android:layout_weight="1"
+            android:scrollbars="vertical">
+
+            <TextView
+                android:id="@+id/tvPrivacyFull"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingMultiplier="1.4"
+                android:text=""
+                android:textColor="@color/st_text_body"
+                android:textIsSelectable="true"
+                android:textSize="12sp" />
+        </ScrollView>
+
+        <TextView
+            android:id="@+id/btnPrivacyClose"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_thumb"
+            android:gravity="center"
+            android:text="返回"
+            android:textColor="@color/st_accent"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

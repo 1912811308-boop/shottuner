@@ -1,0 +1,31 @@
+# ── 凭据：绝不能提交 ────────────────────────────────────────────────────────────
+# gradle.properties 里含 release 签名口令
+gradle.properties
+*.jks
+*.keystore
+CREDENTIALS.txt
+
+# 本机路径（sdk.dir 等）
+local.properties
+
+# ── 构建产物 ────────────────────────────────────────────────────────────────────
+# dist/ 是交付物（每个 release APK 约 40MB），不入库：仓库会随版本数迅速膨胀，
+# 而交付走 present_files / 侧载 / USB，不需要从 git 历史里翻旧包。
+# 构建目录本身已经被 build/ 排除了，不会误收中间产物。
+build/
+.gradle/
+.gradle-native/
+dist/
+work/
+
+# ── IDE ────────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.DS_Store
+
+# ── 其他 ────────────────────────────────────────────────────────────────────────
+captures/
+.externalNativeBuild/
+.cxx/
+__pycache__/
+*.pyc

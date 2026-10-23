@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 及以下的备份规则（v3.0.0 阶段 2）。
+
+  与 data_extraction_rules.xml 保持同义：全部 exclude，不备份任何数据。
+  两份都要有 —— 只在 12+ 生效的那份在旧系统上会被忽略，
+  而 allowBackup=false 本身在部分厂商 ROM 上不一定被严格遵守，
+  显式声明"什么都不备份"是第二道闸。
+-->
+<full-backup-content>
+    <exclude domain="root" />
+    <exclude domain="file" />
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="external" />
+</full-backup-content>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  顶部信息条 / 提示胶囊。不透明度 70% → 88% → **92%**（v1.7.0 P0-4 / v1.7.1 P2-b）。
+  88% 时对着纯白画面，11sp 次要文本实际只有 4.46:1，差一点没到 AA；
+  92% 把最坏情况的对比度抬到安全线以上，同时仍能看出这是浮在画面上的一层。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#EB12161A" />
+    <corners android:radius="18dp" />
+</shape>

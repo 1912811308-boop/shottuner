@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      G1（v3.1.0）：任务"到位"时的触觉反馈。
+
+      保护级别是 **normal** —— 安装时系统自动授予，不弹运行时授权框，用户不会看到
+      任何授权流程。零数据、零网络：它只驱动马达振 15 毫秒，不读取任何信息、
+      不产生任何记录，与 INTERNET / ACCESS_NETWORK_STATE 那两条 remove 完全无关。
+      隐私政策 2.7 已同步说明；应用内提供关闭开关（功能页「到位震动」）。
+
+      ⚠️ 不要给这一行加任何 tools:node 属性，也不要碰下面那两条 remove。
+    -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!--
+      P0（v3.0.0 上架阻断项）：剥离 ML Kit 传递依赖带进来的网络权限。
+
+      来源不是我们声明的，是这条链：
+        com.google.mlkit:vision-internal-vkp → com.google.android.datatransport:transport-*
+      它会在合并后的清单里塞进 INTERNET 与 ACCESS_NETWORK_STATE，而隐私政策里
+      有三处直接写「本应用未申请 INTERNET 网络访问权限……系统层面不具备联网能力」。
+      留着就是虚假陈述，审核一对权限列表就露。
+
+      只移除权限、**不 exclude 依赖**：datatransport 的类还在 dex 里，
+      ML Kit 运行时不会 NoClassDefFoundError；只是拿不到网络能力，
+      那几个 telemetry 上传通路会在 socket 层失败（它们本来就被设计成"发不出去就算了"）。
+    -->
+    <uses-permission
+        android:name="android.permission.INTERNET"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.ACCESS_NETWORK_STATE"
+        tools:node="remove" />
+
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
+    <uses-feature
+        android:name="android.hardware.camera.autofocus"
+        android:required="false" />
+
+    <!--
+      v3.0.0 阶段 2：商店合规收口。
+      · icon / roundIcon 指到 mipmap 的自适应图标（原来指向一张 drawable，商店不认）；
+      · allowBackup=false + 两份"全部 exclude"的备份规则：我们对外承诺"数据只在本机"，
+        备份到用户的云盘等于复制了一份，必须显式关掉（minSdk 24，所以两份都要）；
+      · enableOnBackInvokedCallback：Android 13+ 的预测性返回手势需要它，
+        否则 App 拿不到返回事件（悬浮卡/隐私页/后续的三级返回都依赖它）。
+    -->
+    <application
+        android:name=".ShotTunerApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ShotTuner"
+        tools:targetApi="35">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.ShotTuner">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".screen.ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
+            android:name=".tile.CameraTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/tile_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- 仅用于把缓存里的照片分享出去，不暴露其他目录 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

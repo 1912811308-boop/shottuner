@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  提示优先级的 8dp 色点（v1.8 P1-1）。
+  底色固定白色，运行时用 backgroundTintList 上色（URGENT/CONTEXT/GUIDE）。
+  注意：色点只是**冗余**线索，标签文字（硬伤/建议/教学）才是主线索——
+  色盲用户分不清橙、青、蓝，只靠颜色等于没有信息。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#FFFFFFFF" />
+</shape>

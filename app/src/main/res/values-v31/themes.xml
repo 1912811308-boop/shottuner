@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+（API 31）的启动画面。只使用系统 API，**没有引入 core-splashscreen 依赖**。
+
+  两个属性：
+  · windowSplashScreenBackground —— 与窗口底色一致，避免"白闪一下再变黑"；
+  · windowSplashScreenAnimatedIcon —— 用星芒前景（透明底），在深色底上清晰可见。
+
+  注意 1：`postSplashScreenTheme` 是 androidx core-splashscreen 的**兼容库属性**
+  （不带 android: 前缀），平台里没有 android:postSplashScreenTheme 这个东西，
+  写了会直接资源链接失败。系统 API 的做法不需要它 —— 启动画面在 Activity 画出
+  第一帧后自动消失，Activity 用的就是这个主题。
+
+  注意 2：这个文件里的 Theme.ShotTuner 是**完整定义**而不是继承 values/themes.xml 的同名项
+  （同名 style 在 v31 下会整体替换、不会叠加），所以四项基础配置必须原样重复。
+-->
+<resources>
+    <style name="Theme.ShotTuner" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/st_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+
+        <item name="android:windowSplashScreenBackground">@color/st_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+</resources>

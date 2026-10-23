@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  面板背景。不透明度 80% -> 95%（v1.7 P0-4）。
+
+  理由：面板后面是实时画面，亮度不可控。80% 意味着 20% 的取景会透上来，
+  对着雪地/天空时面板内 10sp 文字的实际对比度会掉到 2:1 以下 —— 这是"同一份
+  UI 有时清楚有时糊"的根因，比字色本身影响更大。95% 基本消除串色，
+  同时仍能看出"这是浮在画面上的一层"。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#F212161A" />
+    <corners android:radius="20dp" />
+    <stroke
+        android:width="1dp"
+        android:color="#26FFFFFF" />
+</shape>

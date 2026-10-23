@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  统一色板（v1.7 P0-4）。
+
+  以前这些十六进制散在 activity_main.xml 的 20 多处和 MainActivity 的 9 处
+  Color.parseColor 里，调一次色要全文搜索，改漏一处不报错、只是看起来"有点不对"。
+
+  对比度口径（WCAG 相对亮度，底色取面板底 #12161A）：
+    st_text        16.7:1   正文与参数数值
+    st_accent      12.3:1   主色（模式/页签/参考分/快门）
+    st_text_warm   10.1:1   四维明细
+    st_warn        10.5:1   警示（倾斜/别用）
+    st_text_body   15.0:1   建议正文
+    st_text_dim     6.3:1   次要文本（单位/说明）
+    st_text_faint   5.1:1   10sp 最小字号（旧值 #5F6E77 只有 3.5:1，不达 AA）
+
+  崩溃级注意：st_priority_* 三个是「硬伤用橙色」的语义载体，必须与
+  PromptPriority.URGENT / CONTEXT / GUIDE 一一对应。错位不会有任何测试报错。
+-->
+<resources>
+    <!-- 底色 -->
+    <color name="st_bg">#0E1113</color>
+
+    <!-- 文本 -->
+    <color name="st_text">#F2F6F8</color>
+    <color name="st_text_body">#E8F0F2</color>
+    <color name="st_text_dim">#8A9AA5</color>
+    <color name="st_text_warm">#9FC6E8</color>
+    <color name="st_text_faint">#7A8B96</color>
+
+    <!-- 强调 / 警示 -->
+    <color name="st_accent">#7FE3C0</color>
+    <color name="st_warn">#FFB74D</color>
+    <!-- 悬浮卡的高亮警示（比 st_warn 更黄一点，落在系统相机上更醒目） -->
+    <color name="st_warn_strong">#FFC53D</color>
+
+    <!-- 单选/开选项的文字（比 st_text_dim 亮一档，未选中态仍可读） -->
+    <color name="st_text_option">#C6D2D9</color>
+    <!-- 悬浮卡正文的次级文字（介于 st_text_option 与 st_text_dim 之间） -->
+    <color name="st_text_muted">#B9C6CC</color>
+
+    <!-- 次按钮底（白 12% 叠在面板上） -->
+    <color name="st_scrim">#1FFFFFFF</color>
+    <!-- 1px 发丝线（直方图参考线等） -->
+    <color name="st_hairline">#33FFFFFF</color>
+
+    <!--
+      直方图配色。alpha 是语义的一部分，所以单独命名而不是靠代码里 argb：
+        st_hist_stroke  描边（70% 主色）
+        st_hist_top / _mid / _bottom  渐变三个停靠点（80% → 13% → 全透明）
+    -->
+    <color name="st_hist_stroke">#B37FE3C0</color>
+    <color name="st_hist_top">#CC7FE3C0</color>
+    <color name="st_hist_mid">#227FE3C0</color>
+    <color name="st_hist_bottom">#007FE3C0</color>
+
+    <!--
+      提示优先级配色。三个值必须原样映射：
+        PromptPriority.URGENT  -> st_priority_urgent  (#FF8A65 橙，硬伤)
+        PromptPriority.CONTEXT -> st_priority_context (#7FE3C0 主色，场景强相关)
+        PromptPriority.GUIDE   -> st_priority_guide   (#9FC6E8 冷蓝，教学)
+    -->
+    <color name="st_priority_urgent">#FF8A65</color>
+    <color name="st_priority_context">#7FE3C0</color>
+    <color name="st_priority_guide">#9FC6E8</color>
+
+    <!--
+      悬浮卡（Apple 风格，v2.0）。核心是"纯黑半透明 + 极淡白边 + 白字分层"，
+      不再用彩色描边和多彩文字——那会让小卡片上三种颜色互抢。
+
+      ⚠️ 透明度是硬约束：Android 的 TYPE_APPLICATION_OVERLAY 浮窗**拿不到背景模糊**
+      （那是系统级材质，第三方浮窗不支持），所以可读性只能靠两件事兜住：
+        1) 卡底留够暗化（HIG 对"浮在明亮媒体上的控件"建议 35%，这里取 45%）
+        2) 每个 TextView 都带 setShadowLayer 黑色阴影，压在花哨的相机画面上也能读
+
+      v2.0.1 把卡底从 72% 降到 45%——用户反馈太实、影响取景。
+
+        st_glass_bg       卡底（45% 黑）
+        st_glass_stroke   1dp 描边（14% 白，卡变透后边界要更明确）
+        st_glass_handle   拖动手柄（25% 白）
+        st_glass_divider  分组分隔线（12% 白）
+        st_glass_text_secondary  次级文字（62% 白）
+        st_glass_text_tertiary   三级文字（45% 白）
+        st_glass_close    关闭按钮文字（55% 白）
+    -->
+    <color name="st_glass_bg">#73000000</color>
+    <color name="st_glass_stroke">#24FFFFFF</color>
+    <color name="st_glass_handle">#40FFFFFF</color>
+    <color name="st_glass_divider">#1FFFFFFF</color>
+    <color name="st_glass_text_secondary">#9EFFFFFF</color>
+    <color name="st_glass_text_tertiary">#73FFFFFF</color>
+    <color name="st_glass_close">#8CFFFFFF</color>
+
+    <!--
+      悬浮卡 v2.1：回到 1.6 的彩色风格（clover 对比后选定的）。
+      黑玻璃那版太素，缺少辨识度；这版用青色描边 + 青绿参数文字，层次更清楚。
+        st_overlay_bg      卡底（84% 深灰，够实所以不需要文字投影）
+        st_overlay_stroke  1dp 描边（35% 青绿）
+    -->
+    <color name="st_overlay_bg">#D60E1113</color>
+    <color name="st_overlay_stroke">#5A7FE3C0</color>
+</resources>

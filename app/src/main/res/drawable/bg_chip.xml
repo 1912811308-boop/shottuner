@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 页签/胶囊选中态的底。色值与 st_scrim 同源，v1.9 改为直接引用，避免调色时漏改。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/st_scrim" />
+    <corners android:radius="12dp" />
+</shape>

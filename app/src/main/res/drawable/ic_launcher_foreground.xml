@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标的前景层（Android 8+，API 26）。
+
+  安全区规则：108dp 画布，系统只显示中心 72dp，且内容应落在中心 66dp 内
+  （即 21..87 范围内），否则会被启动器裁掉或被圆形遮罩切到。
+  这里的星形跨度是 22..86 = 64dp，正好在安全区内，不需要额外缩放。
+
+  背景层是纯色 @color/st_bg，由 mipmap-anydpi-v26/ic_launcher.xml 指定。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/st_accent"
+        android:pathData="M54,22 L61.5,46.5 L86,54 L61.5,61.5 L54,86 L46.5,61.5 L22,54 L46.5,46.5 Z" />
+    <path
+        android:fillColor="#FFD98A"
+        android:pathData="M80,20 L82.6,26.4 L89,29 L82.6,31.6 L80,38 L77.4,31.6 L71,29 L77.4,26.4 Z" />
+</vector>

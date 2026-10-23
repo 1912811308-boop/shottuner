@@ -1,0 +1,25 @@
+# 仓库里没有 `gradle.properties`（它含签名口令，已被 .gitignore 排除）。
+# 新机器 / CI 第一次拉代码后：把本文件复制成 `gradle.properties`，再填四项 RELEASE_*。
+#
+#   cp gradle.properties.example gradle.properties
+#
+# 这四项缺任何一项，app/build.gradle.kts 里的 `?: throw GradleException(...)`
+# 会直接终止构建 —— 这是有意的：宁可构建失败，也不要静默签出一个装不上去的包。
+
+# ── 构建参数（必须有，缺了 android.useAndroidX 会编译失败） ──────────────────────
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.caching=true
+android.useAndroidX=true
+android.nonTransitiveRClass=true
+kotlin.code.style=official
+android.overridePathCheck=true
+
+# ── 正式签名（release） ─────────────────────────────────────────────────────────
+# 密钥库是 PKCS12 / RSA 4096 / SHA384withRSA / 10000 天。
+# 证书 SHA-256 指纹（备案与分发核对用）：
+#   08:B2:09:A3:5B:B8:5B:70:39:43:B4:FE:BF:5B:91:EC:59:30:43:FD:B7:9B:53:D7:ED:15:29:00:0A:CA:26:2B
+RELEASE_STORE_FILE=
+RELEASE_STORE_PASSWORD=
+RELEASE_KEY_ALIAS=shottuner
+RELEASE_KEY_PASSWORD=

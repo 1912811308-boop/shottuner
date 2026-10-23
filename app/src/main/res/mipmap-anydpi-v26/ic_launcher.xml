@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标（Android 8.0+ / API 26）。
+
+  background 用纯色（@color/st_bg，#0E1113），foreground 用星芒 vector。
+  monochrome 供 Android 13+ 的「主题图标」使用——系统会把它染成桌面壁纸
+  取色后的单色，所以这里只需要形状，颜色会被忽略。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/st_bg" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

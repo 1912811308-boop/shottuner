@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  冷启动背景（API 24–30；Android 12+ 走系统 SplashScreen，见 values-v31/themes.xml）。
+
+  纯色底 + 居中图标。图标用 @drawable/ic_app_icon 是可行的：
+  它自带的方底就是 #0E1113，与窗口底色完全相同，叠上去只剩中间那枚星芒可见，
+  看不出方块边界。这样 ic_app_icon.xml 也不再是孤儿（阶段 2 改 mipmap 后没人引用它）。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/st_bg" />
+    <item
+        android:width="120dp"
+        android:height="120dp"
+        android:drawable="@drawable/ic_app_icon"
+        android:gravity="center" />
+</layer-list>
