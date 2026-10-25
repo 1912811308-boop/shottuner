@@ -1,0 +1,49 @@
+# ⚠️ 硬规则一：CI 一律不签名 —— 签名在设备端用 SideStore 侧载时完成。
+# ⚠️ 硬规则二：Apple ID / 证书 / provisioning profile 绝不进本仓库的 secrets，也绝不入库。
+# ⚠️ 硬规则三：若将来 CI 要直出可安装包，必须用 App Store Connect API Key，
+#              不得使用 `-allowProvisioningUpdates` 搭配 Apple ID —— 出现该配置评审直接打回。
+#
+# 为什么这三条要写成注释而不是只写进文档：
+#   凭据一旦入库，CI 才有能力用它。README 里写"不进 secrets"只是**承诺**，
+#   承诺会被人绕过，机器不会。真正的保障是 tools/ci/check-apple-credentials.sh。
+name: ci-gates
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    name: 零网络 / 凭据 / 门禁自检
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 门禁自己先被测一遍：注入「应该绿」的东西必须绿，注入「应该红」的东西必须红。
+      # 这一步放在最前面 —— 它抓到过 common.sh 里一个让门禁永远绿的 bug。
+      - name: 门禁反向验证
+        run: bash tools/ci/test-gates.sh
+
+      - name: L1 源码层零网络
+        run: bash tools/ci/check-no-network.sh
+
+      - name: L2 配置层零网络
+        run: bash tools/ci/check-no-network-config.sh
+
+      - name: G1-d Apple 凭据门禁
+        run: bash tools/ci/check-apple-credentials.sh
+
+  # ── 待建：common-gate（第一批开工后启用）──────────────────────────────────
+  # 目的：commonMain 能编译 + commonTest 通过。**跑在 Linux runner 上**，
+  #   不占 macOS 配额（免费私有仓库每月只有约 200 macOS 分钟，而 macOS 是 10× 倍率）。
+  #   命令： ./gradlew :shared:compileKotlinIosSimulatorArm64 :shared:testDebugUnitTest
+  # 注意：`:shared:testDebugUnitTest` 会带上 commonTest 源集，不需要 macOS。
+  # common-gate:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-java@v4
+  #       with: { distribution: temurin, java-version: '17' }
+  #     - uses: gradle/actions/setup-gradle@v4
+  #     - run: ./gradlew :shared:compileKotlinIosSimulatorArm64 :shared:testDebugUnitTest

@@ -1,0 +1,20 @@
+# L3 · 供应链层禁用特征串（第三方遥测 / 网络 SDK 血统）
+# ─────────────────────────────────────────────────────────────────────────────
+# 消费者：
+#   1) L2 配置层：tools/ci/check-no-network-config.sh 扫 iOS 依赖声明文件
+#      （Package.swift / Podfile / Cartfile / project.yml），用于"第一批不引第三方 SDK"。
+#   2) L3 二进制层：将来的 tools/ci/scan-binary.sh 在 macOS runner 上扫未签名 .app
+#      的二进制符号（T21 任务，本次不实现，但清单先立好，避免到时候临时手写）。
+#
+# ★ 本清单**只放第三方 SDK**，不放任何 Foundation / 系统框架自带的符号。
+#   理由：Foundation 永远链着 URLSession / CFNetwork，扫它们 100% 误报。
+#   真正的判据只有一个 —— 有没有第三方遥测 SDK 的血统混进来。
+#
+# 固定字符串匹配（grep -F），一行一条，'#' 之后为注释。
+
+GoogleDataTransport
+GTMSessionFetcher
+FIRApp
+FirebaseCore
+GoogleUtilities
+Analytics

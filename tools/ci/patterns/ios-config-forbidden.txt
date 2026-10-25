@@ -1,0 +1,14 @@
+# L2 · iOS 配置层禁止项
+# ─────────────────────────────────────────────────────────────────────────────
+# 消费者：tools/ci/check-no-network-config.sh
+# 语义：命中即失败（这些是"配置里的联网放行开关"）。
+#
+# ★ 为什么这些字面量也放在清单里、脚本不写：
+#   纪律统一 —— 所有"被禁特征串"只出现在 patterns/*.txt。
+#   将来有人要加一条新的禁止项，改清单即可，不用改脚本、也不用重新审脚本。
+#
+# 固定字符串匹配（grep -F），一行一条，'#' 之后为注释。
+
+NSAllowsArbitraryLoads
+NSAllowsArbitraryLoadsInWebContent
+com.apple.security.network

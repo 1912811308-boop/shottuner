@@ -1,0 +1,19 @@
+# L1 · 源码层禁用特征串
+# ─────────────────────────────────────────────────────────────────────────────
+# 扫描范围：仅 ios/**/*.swift 与 shared/src/**/*.kt（见 tools/ci/check-no-network.sh）。
+# 语义：这些是"我们自己写出来的联网调用"。Foundation 自带这些 API 不代表违规，
+#       但我们自己调用它 = 想联网 = 违反零网络承诺，所以源码层一律禁。
+#
+# ★ 绝不把本清单里的任何一项搬进 network-binary.txt：
+#   Foundation 永远链着 URLSession / CFNetwork 这些符号，扫二进制必然误报。
+#   红一次的 CI 门禁等于没有门禁（见 docs/IOS-ARCH-EXEC.md §4.3 的技术更正）。
+#
+# 固定字符串匹配（grep -F），一行一条，'#' 之后为注释。
+
+URLSession
+URLRequest
+NSURLConnection
+CFNetwork
+NWConnection
+WebSocket
+Data(contentsOf:)
