@@ -86,14 +86,19 @@ for rel in "${FILES[@]}"; do
   abs="$ROOT/$rel"
   [ -f "$abs" ] || continue
   for var in "${EMPTYVAR[@]}"; do
-    # 取「变量名 + : 或 =」之后的部分，去掉引号与空白后必须为空。
+    # ★ 必须锚定行首，否则会误伤文档。
+    #   锚定前，`| \`CODE_SIGN_IDENTITY\` | 构建配置层锁死 |` 这种 Markdown 表格行
+    #   会被当成"赋值"（因为后面跟着 `|` 再跟着别的字面量），实测在
+    #   docs/IOS-ARCH-EXEC.md 上一次误报 7 处 —— **第一次跑就红的门禁等于没有门禁**。
+    #   锚定后仍然能拦住的写法：YAML 映射、YAML 序列项、shell export。
+    #   而文档里的"提及"（表格、代码片段、行内引用）不再误伤。
     while IFS= read -r raw; do
       [ -n "$raw" ] || continue
       val="$(printf '%s' "$raw" | sed -E 's/.*[:=][[:space:]]*//' | tr -d '"'"'" | tr -d '[:space:]')"
       [ -n "$val" ] || continue                       # 空值 → 通过
       ci_error "$rel" "-" "构建变量 $var 必须恒为空（CI 一律不签名），但发现非空赋值：$val"
       VIOLATIONS=$((VIOLATIONS + 1))
-    done < <(grep -InE -- "${var}[[:space:]]*[:=]" "$abs" 2>/dev/null || true)
+    done < <(grep -InE -- "^[[:space:]]*(-[[:space:]]+)?(export[[:space:]]+)?${var}[[:space:]]*[:=]" "$abs" 2>/dev/null || true)
   done
 done
 
