@@ -1,5 +1,7 @@
 package com.shottuner.app.model
 
+import kotlin.math.ln
+
 /**
  * 一帧画面的统计特征。所有亮度值均为 0f..1f 的归一化值。
  * 这里刻意不使用 data class：包含 FloatArray，默认 equals/hashCode 无意义。
@@ -67,7 +69,10 @@ class FrameStats(
     /** 对比度偏低的粗略判断 */
     val isFlat: Boolean get() = dynamicRange < 0.35f
 
-    private fun log2(x: Float): Float = (Math.log(x.toDouble()) / Math.log(2.0)).toFloat()
+    // kotlin.math.ln 是自然对数，等价于 java.lang.Math.log。
+    // 这里不用 java.lang.Math：commonMain 里没有 Math 类（java.lang 是自动导入，
+    // 按 import 扫描查不出来，是 KMP 迁移最容易漏的一类依赖）。
+    private fun log2(x: Float): Float = (ln(x.toDouble()) / ln(2.0)).toFloat()
 
     companion object {
         val EMPTY: FrameStats = FrameStats(

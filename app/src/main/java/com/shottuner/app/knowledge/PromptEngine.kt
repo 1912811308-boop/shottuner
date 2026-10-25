@@ -2,6 +2,7 @@ package com.shottuner.app.knowledge
 
 import com.shottuner.app.model.SceneType
 import com.shottuner.app.sensors.LevelMath
+import com.shottuner.app.text.NumFmt
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -149,7 +150,7 @@ object PromptEngine {
     }
 
     /** 百分比格式化，避免各处各写一遍。 */
-    private fun pct(value: Float): String = "%.0f".format(value.coerceIn(0f, 1f) * 100f)
+    private fun pct(value: Float): String = NumFmt.fixed(value.coerceIn(0f, 1f) * 100f, 0)
 
     /** 11 条规则。顺序即求值顺序，R10 必须最后（它依赖"前面没有硬候选"）。 */
     private val RULES: List<Rule> = listOf(

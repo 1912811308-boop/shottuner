@@ -5,6 +5,7 @@ import com.shottuner.app.device.CameraMode
 import com.shottuner.app.device.DeviceProfile
 import com.shottuner.app.model.FrameStats
 import com.shottuner.app.model.SceneType
+import com.shottuner.app.text.NumFmt
 import kotlin.math.roundToInt
 
 /** 建议的三种语气：现在该用、现在别用、值得知道 */
@@ -130,12 +131,14 @@ object FeatureAdvisor {
                 .maxByOrNull { it.sensorArea }
             if (tele != null && tele.sensorArea > 0f && tele.sensorArea < main.sensorArea * 0.5f) {
                 val ratio = (tele.sensorArea / main.sensorArea * 100).roundToInt()
+                val stops = kotlin.math.ln(main.sensorArea.toDouble() / tele.sensorArea) /
+                    kotlin.math.ln(2.0)
                 out.add(
                     FeatureSuggestion(
                         AdviceKind.AVOID,
                         "弱光别切 ${tele.equivFocalMm}mm 长焦",
-                        "长焦的传感器面积只有主摄的 $ratio%%，进光量差约 %.1f 档，同样亮度下噪点明显更多。宁可拍完再用主摄裁切"
-                            .format(kotlin.math.ln(main.sensorArea.toDouble() / tele.sensorArea) / kotlin.math.ln(2.0)),
+                        "长焦的传感器面积只有主摄的 $ratio%，进光量差约 ${NumFmt.one(stops)} 档，" +
+                            "同样亮度下噪点明显更多。宁可拍完再用主摄裁切",
                         BrandGuide.hint(profile.brand, CameraMode.ZOOM),
                         85
                     )
@@ -306,6 +309,6 @@ object FeatureAdvisor {
 
     private fun formatLong(ns: Long): String {
         val sec = ns / 1e9
-        return if (sec >= 1.0) "%.0fs".format(sec) else "1/${(1.0 / sec).roundToInt()}s"
+        return if (sec >= 1.0) NumFmt.fixed(sec, 0) + "s" else "1/${(1.0 / sec).roundToInt()}s"
     }
 }

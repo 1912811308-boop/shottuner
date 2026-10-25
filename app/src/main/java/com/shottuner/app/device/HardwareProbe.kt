@@ -7,6 +7,7 @@ import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.util.Size
 import com.shottuner.app.model.CameraCaps
+import com.shottuner.app.text.NumFmt
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -33,8 +34,8 @@ class LensInfo(
     val label: String
         get() {
             val f = if (equivFocalMm > 0) "${equivFocalMm}mm" else "?mm"
-            val a = if (aperture > 0f) " f/%.1f".format(aperture) else ""
-            return "$f$a · %.1fMP".format(megapixels)
+            val a = if (aperture > 0f) " f/${NumFmt.one(aperture)}" else ""
+            return "$f$a · ${NumFmt.one(megapixels)}MP"
         }
 }
 

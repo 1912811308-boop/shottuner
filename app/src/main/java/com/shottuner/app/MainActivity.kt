@@ -105,6 +105,7 @@ import com.shottuner.app.screen.ScreenCaptureService
 import com.shottuner.app.share.ShareKit
 import com.shottuner.app.share.Watermark
 import com.shottuner.app.sensors.LevelSensor
+import com.shottuner.app.text.NumFmt
 import com.shottuner.app.ui.GuideOverlayView
 import com.shottuner.app.video.VideoIntent
 import com.shottuner.app.video.VideoPlan
@@ -508,7 +509,7 @@ class MainActivity : AppCompatActivity() {
     /**
      * **所有中断任务的唯一入口**（规格 §6.3）。
      *
-     * 除了状态机回 IDLE，还顺手清掉 overlay 上的任务痕���（高亮交点 + 环）：
+     * 除了状态机回 IDLE，还顺手清掉 overlay 上的任务痕迹（高亮交点 + 环）：
      * 只 `abort()` 不清 Mission，等网格重新打开时任务态早已结束，
      * 画面上却还挂着一个没有任务在管的灰环 —— 那是"指引残留"，比没有更误导人。
      */
@@ -761,7 +762,7 @@ class MainActivity : AppCompatActivity() {
         return result.total
     }
 
-    /** 任务卡右上角的实时参考分。与 [formatScore] 的第���行同口径，未测时显示「参考分 --」。 */
+    /** 任务卡右上角的实时参考分。与 [formatScore] 的第一行同口径，未测时显示「参考分 --」。 */
     private fun scoreHeadOnly(result: ScoreResult?): String {
         val total = scoreTotalIfMeasured(result)
         return if (total != null) "参考分 $total" else "参考分 --"
@@ -2965,7 +2966,7 @@ class MainActivity : AppCompatActivity() {
      * 藏掉它这一档就没法用了。同理 `tvScore`（构图分）和 `tvScene` 也留着。
      *
      * **G1 改动**：`tvScoreDetail`（参考分）**不再跟着档位隐藏**。它承载 Aha 的分数，
-     * 两个档位都必须可见 —— 以前它被归进"沉��档看不懂的数字"，但那串四格参数
+     * 两个档位都必须可见 —— 以前它被归进"沉浸档看不懂的数字"，但那串四格参数
      * 已经降级到 L3 了，参考分才是照片页该留下的那个数。
      *
      * **不要在这里碰 `llTaskCard` / `llAchieveCard`**：这两个的显隐只由 [renderTaskSurface]
@@ -3004,7 +3005,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun formatEv(ev: Float): String {
         if (abs(ev) < 0.05f) return "±0"
-        return String.format("%+.1f", ev)
+        return NumFmt.signed(ev, 1)
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()

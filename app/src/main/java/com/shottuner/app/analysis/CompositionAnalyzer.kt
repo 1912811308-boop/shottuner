@@ -2,11 +2,13 @@ package com.shottuner.app.analysis
 
 import com.shottuner.app.model.CompositionHint
 import com.shottuner.app.model.FrameStats
+import com.shottuner.app.text.NumFmt
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.PI
 import kotlin.math.sqrt
 
 /**
@@ -156,7 +158,10 @@ object CompositionAnalyzer {
         var horizonY = 0.5f
         if (trace > 1e-3) {
             val coherence = (hypot(jxx - jyy, 2 * jxy) / trace).toFloat()
-            var angle = Math.toDegrees(0.5 * atan2(2 * jxy, jxx - jyy)).toFloat() + 90f
+            // 弧度转角度：写死 * 180.0 / PI，不用 java.lang.Math.toDegrees
+            // （commonMain 没有 Math 类），也不用 kotlin.math.toDegrees
+            // —— kotlin.math 里**没有** toDegrees 这个函数，import 进来会编译失败。
+            var angle = ((0.5 * atan2(2 * jxy, jxx - jyy)) * 180.0 / PI).toFloat() + 90f
             if (angle > 90f) angle -= 180f
             if (angle <= -90f) angle += 180f
             if (coherence > MIN_COHERENCE && abs(angle) <= 30f) {
@@ -185,7 +190,10 @@ object CompositionAnalyzer {
 
         if (horizonDetected && abs(tilt) > TILT_TOLERANCE) {
             val dir = if (tilt > 0f) "顺时针" else "逆时针"
-            tips.add("画面有 %.0f° 的倾斜，%s转一点手机，让橙色虚线和绿色横线重合".format(abs(tilt), dir))
+            tips.add(
+                "画面有 ${NumFmt.fixed(abs(tilt), 0)}° 的倾斜，${dir}转一点手机，" +
+                    "让橙色虚线和绿色横线重合"
+            )
             tiltPenalty = min(20f, 4f * abs(tilt)).roundToInt()
             score -= tiltPenalty
         }

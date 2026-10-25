@@ -1,9 +1,11 @@
 package com.shottuner.app.sensors
 
+import com.shottuner.app.text.NumFmt
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+import kotlin.math.PI
 
 /**
  * 姿态数学：重力向量 → 横滚/俯仰，以及水平仪的方向文案。
@@ -38,7 +40,8 @@ object LevelMath {
         /** 俯仰角（度），0 = 手机竖直，负值 = 俯拍 */
         val pitch: Float
     ) {
-        override fun toString(): String = "LevelReading(roll=%.2f, pitch=%.2f)".format(roll, pitch)
+        override fun toString(): String =
+            "LevelReading(roll=${NumFmt.fixed(roll, 2)}, pitch=${NumFmt.fixed(pitch, 2)})"
     }
 
     /** 水平仪文案。 */
@@ -66,7 +69,7 @@ object LevelMath {
         val magnitude = hypot(hypot(gx, gy), gz)
         if (magnitude < MIN_GRAVITY) return null
 
-        val deg = 180.0 / Math.PI
+        val deg = 180.0 / PI
         val normalized = ((rotationDegrees % 360) + 360) % 360
         val quarter = ((normalized + 45) / 90) * 90 % 360
 

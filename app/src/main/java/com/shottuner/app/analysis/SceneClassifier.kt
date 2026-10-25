@@ -2,6 +2,7 @@ package com.shottuner.app.analysis
 
 import com.shottuner.app.model.FrameStats
 import com.shottuner.app.model.SceneType
+import kotlin.math.abs
 
 /**
  * 规则型场景判定。
@@ -82,7 +83,7 @@ object SceneClassifier {
         var portrait = 0f
         if (s.skinRatio > 0.05f) portrait += 0.40f
         if (s.skinRatio > 0.10f) portrait += 0.35f
-        if (Math.abs(s.centerBias) < 0.12f) portrait += 0.10f
+        if (abs(s.centerBias) < 0.12f) portrait += 0.10f
         if (s.saturation < 0.45f) portrait += 0.05f
         // 肤色占比过半时更可能是暖色墙面或木质桌面，而不是真的拍人
         if (s.skinRatio > 0.75f) portrait -= 0.30f

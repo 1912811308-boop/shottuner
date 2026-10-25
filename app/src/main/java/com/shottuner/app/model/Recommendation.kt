@@ -1,5 +1,8 @@
 package com.shottuner.app.model
 
+import com.shottuner.app.text.NumFmt
+import kotlin.math.floor
+
 enum class SceneType(val label: String) {
     NIGHT("夜景 / 弱光"),
     BACKLIT("逆光"),
@@ -60,8 +63,12 @@ class Recommendation(
         get() {
             if (shutterNs <= 0) return "--"
             val sec = shutterNs / 1_000_000_000.0
-            return if (sec >= 0.5) String.format("%.1fs", sec)
-            else "1/" + Math.round(1.0 / sec).toInt()
+            return             if (sec >= 0.5) NumFmt.one(sec) + "s"
+            // 这里必须显式写成 floor(x + 0.5)，不能换成 kotlin.math.round：
+            // java.lang.Math.round 是「向 +∞ 取整」（2.5 → 3），而 kotlin.math.round
+            // 是「平局向偶数」（2.5 → 2.0）。用户直接看到的是快门标签，换错会输出
+            // "1/2" 而不是 "1/60"。sec 恒为正，四舍五入即 floor(x + 0.5)。
+            else "1/" + floor(1.0 / sec + 0.5).toInt()
         }
 
     val isoLabel: String get() = "ISO $iso"

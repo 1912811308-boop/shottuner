@@ -5,6 +5,7 @@ import com.shottuner.app.device.CameraMode
 import com.shottuner.app.device.DeviceProfile
 import com.shottuner.app.model.FrameStats
 import com.shottuner.app.model.SceneType
+import com.shottuner.app.text.NumFmt
 import kotlin.math.roundToInt
 
 /** 拍什么，决定了录像的一切参数。这比「用什么镜头」重要得多。 */
@@ -325,7 +326,7 @@ object VideoRecommender {
     fun shutterLabel(fps: Int): String {
         val ns = shutterForFps(fps)
         val sec = ns / 1e9
-        return if (sec >= 1.0) "%.1fs".format(sec) else "1/${(1.0 / sec).roundToInt()}"
+        return if (sec >= 1.0) NumFmt.one(sec) + "s" else "1/${(1.0 / sec).roundToInt()}"
     }
 
     private fun pickTier(prefer: List<String>, p: DeviceProfile, needFps: Int): String {
