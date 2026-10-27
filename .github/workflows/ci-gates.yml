@@ -62,14 +62,21 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
+      # ★ gradlew 的可执行位：Windows 上 git 的 core.fileMode 默认 false，
+      #   本地文件看着有执行位，但**提交进仓库的模式可能是 644** ——
+      #   checkout 到 Linux runner 上就没有执行权限，./gradlew 直接
+      #   "Permission denied"（exit 126）。这一步当年就是这么翻车的。
+      - name: 准备 gradle.properties
+        run: cp gradle.properties.example gradle.properties
+
+      - name: 确保 gradlew 可执行
+        run: chmod +x gradlew
+
       # gradle.properties 被 .gitignore 排除（里面有明文签名口令），
       # 但其中的构建必需项（android.useAndroidX 等）CI 也要用 ——
       # 所以从 example 复制一份。example 里的 RELEASE_* 是空的，
       # 而签名配置已改成惰性求值（app/build.gradle.kts），
       # 所以**门禁与 debug 构建都不需要凭据**，只有 assembleRelease 才需要。
-      - name: 准备 gradle.properties
-        run: cp gradle.properties.example gradle.properties
-
       # ── 1. iOS target 的 klib 能否在 Linux 宿主上编出来（S1 的答案）──
       - name: 编译 iOS target 的 klib
         run: ./gradlew :shared:compileKotlinIosSimulatorArm64 -PenableAppleTargets=true --stacktrace
