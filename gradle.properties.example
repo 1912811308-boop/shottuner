@@ -13,6 +13,10 @@ org.gradle.caching=true
 android.useAndroidX=true
 android.nonTransitiveRClass=true
 kotlin.code.style=official
+
+# KMP 1.9.24 只官方测到 AGP 8.2，本工程用 8.6.1（compileSdk 35 的最低要求）。
+# KGP 版本必须与 Android 插件严格一致，否则报 "Kotlin Gradle plugin was loaded multiple times"。
+kotlin.mpp.androidGradlePluginCompatibility.nowarn=true
 android.overridePathCheck=true
 
 # ── 正式签名（release） ─────────────────────────────────────────────────────────

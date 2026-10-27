@@ -180,11 +180,19 @@ object TechniqueMatcher {
     /**
      * 返回 null 表示该条被硬性条件淘汰。
      *
-     * `internal` 而不是 `private`：单测要验 `minShadowClip` / `maxHighlightClip`
+     * 可见性说明（KMP 搬迁后改过）：
+     * 原本是 `internal` —— 单测要验 `minShadowClip` / `maxHighlightClip`
      * 这两个 v1.5 新条件的淘汰边界，而现在没有任何一条真实技法用到它们 ——
      * 只能拿合成条目直接打这个函数。为了可测放宽一档可见性，逻辑不动。
+     *
+     * ★ 搬迁到 `shared` 模块后**不能保持 internal**：Kotlin 的 `internal` 是
+     *   **模块级**可见性，而单测还在 `app` 模块里 —— 跨模块访问不到，
+     *   编译报 "Cannot access 'scoreOf': it is internal in 'TechniqueMatcher'"。
+     *   所以这里放宽为 public。
+     *   待办：T07 把这批单测迁进 `shared/src/commonTest/`（iOS 端复用同一份）之后，
+     *   可以改回 `internal`。见 `docs/IOS-ARCH-EXEC.md` 的 T07。
      */
-    internal fun scoreOf(tech: Technique, scene: SceneType, signals: TechSignals): Int? {
+    fun scoreOf(tech: Technique, scene: SceneType, signals: TechSignals): Int? {
         val trigger = tech.trigger
 
         if (trigger.requiresTele && !signals.hasTele) return null

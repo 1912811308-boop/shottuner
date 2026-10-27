@@ -79,22 +79,40 @@ object NumFmt {
         if (value.isNaN() || value.isInfinite()) return UNDEFINED
         val d = decimals.coerceIn(0, MAX_DECIMALS)
         val magnitude = abs(value)
-        val integerPart = floor(magnitude)
-        // 整数部分超出 Long 能精确承载的范围，退回科学计数法
+
+        // ★★ 顺序不能反：先整体放大到目标小数位 → 一次性舍入 → 再拆整数/小数 ★★
+        //
+        // 旧写法是 `(magnitude - integerPart) * 10^d` —— **先做一次减法**，
+        // 于是双精度的表示误差被保留下来、再放大 10^d 倍：
+        //     1.15   × 10   = 11.500000000000000      （精确：误差被乘法的舍入吃掉）
+        //     (1.15-1)× 10  = 1.4999999999999991      （误差被保留）
+        // 结果「1.15 档」被输出成「1.1 档」—— 与用户直觉不符，
+        // 而**档位差一位就是进光量差一档**。
+        //
+        // 现在的做法（先放大 → 整体舍入 → 再拆）与 java.util.Formatter 的 %.Nf
+        // **逐字一致**（实测，非推理）：
+        //     Double 1.15   ×10  = 11.5              → 12 → whole=1 frac=2 → "1.2"
+        //     Float  1.005f ×100 = 100.49999952316284 → 100 → whole=1 frac=0 → "1.00"
+        //     Float  1.15f  ×10  = 11.49999976158142  → 11  → whole=1 frac=1 → "1.1"
+        //     Float  0.125f ×100 = 12.5              → 13  → whole=0 frac=13 → "0.13"
+        //
+        // 减法不在关键路径上（放大后的值直接整体舍入），所以整个算法只依赖
+        // IEEE-754 基础运算，**Android 与 iOS 输出完全一样**。
+        val scaled = magnitude * POW10_DOUBLE[d]
+
+        // 放大后超出 Long 能精确承载的范围，退回科学计数法
         // ⚠️ 这里必须传**带符号的原值**，不能传 magnitude：科学计数法分支自己
         // 不处理符号（它只管量级），传绝对值会把负号吃掉 —— 大负数会输出成
         // "1.0E20" 而不是 "-1.0E20"。这正是 NumFmtTest.hugeNegativeValuesKeepTheirSign
         // 钉住的那个 bug。
-        if (integerPart >= TWO_POW_63) return scientific(value, d)
+        if (scaled >= TWO_POW_63) return scientific(value, d)
 
-        var whole = integerPart.toLong()
-        // 只放大小数部分：整数部分直接沿用，避免大数乘 10^d 时丢精度
-        var fraction = roundHalfAwayFromZero((magnitude - integerPart) * POW10_DOUBLE[d])
-        // 小数部分四舍五入后可能刚好等于 10^d，需要进位到整数部分
-        if (fraction >= POW10_LONG[d]) {
-            fraction -= POW10_LONG[d]
-            whole += 1
-        }
+        // 先整体舍入到「目标小数位」这个整数，再拆成整数部分与小数部分。
+        // 进位在这一步自然发生（9.999 → scaled=999.9 → 1000 → whole=10 frac=0），
+        // 不需要额外的进位分支。
+        val rounded = roundHalfAwayFromZero(scaled)
+        val whole = rounded / POW10_LONG[d]
+        val fraction = rounded % POW10_LONG[d]
         return render(whole, fraction, d, isNegative(value))
     }
 
@@ -126,11 +144,16 @@ object NumFmt {
         value < 0.0 || (value == 0.0 && 1.0 / value < 0.0)
 
     /**
-     * 显式四舍五入：余数 ≥ 0.5 进位（半值远离零）。
+     * 显式四舍五入：余数 ≥ 0.5 进位（半值向 +∞ 取整）。
      *
      * 不使用 `roundToInt`：不同平台对「恰好一半」的处理并不一致
      * （JVM 的 `Math.round` 与 Kotlin 的 `round` 语义不同），
      * 自己写死这条规则才能保证 Android / iOS 输出完全一样。
+     *
+     * ★ 入参是**已经放大到目标小数位**的值（[fixed] 里的 `scaled`），
+     *   所以这里就是「整体放大后按 0.5 进位」—— 与 java.util.Formatter 的 %.Nf 一致。
+     *   减法不在关键路径上，**不需要任何 epsilon 补偿**：
+     *   补偿反而会让 1.005f 错误地进位成 "1.01"（Formatter 给的是 "1.00"）。
      */
     private fun roundHalfAwayFromZero(value: Double): Long {
         val floorValue = floor(value)

@@ -64,6 +64,7 @@ import com.shottuner.app.coach.FramingCoach
 import com.shottuner.app.coach.SubjectBox
 import com.shottuner.app.databinding.ActivityMainBinding
 import com.shottuner.app.device.DeviceProfile
+import com.shottuner.app.device.unknown
 import com.shottuner.app.diag.Diag
 import com.shottuner.app.device.HardwareProbe
 import com.shottuner.app.device.OrientationTracker

@@ -4,9 +4,6 @@ import com.shottuner.app.analysis.ScoreDimension
 import com.shottuner.app.knowledge.PhotographyBook
 import com.shottuner.app.knowledge.Technique
 import com.shottuner.app.knowledge.TechniqueBookV15
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 技法图鉴（G3「未完成的册子」）——**纯 JVM**。
@@ -228,48 +225,6 @@ object TechniqueDex {
         "food_tele_compress" to ScoreDimension.COMPOSITION,
         "food_steam_backlight" to ScoreDimension.EXPOSURE
     )
-}
-
-/**
- * 图鉴的日期口径。**纯 JVM**，minSdk 24 兼容。
- *
- * 只产 `yyyyMMdd` 字符串，不产时间戳，理由有三：
- * 1. 「每天最多解锁一条」比的是**日期**，不是精确到毫秒的时长。时间戳还要再砍一道，
- *    多一道就多一处时区/取整口径的分歧。
- * 2. `java.time.LocalDate` 要 API 26+，本 App minSdk 24 且没开 desugaring，用了会
- *    `NoClassDefFoundError`。
- * 3. 字符串可以直接进单测，`"20250601"` 比 `1700000000000L` 可读得多，也能直接
- *    存进 SharedPreferences，不需要序列化。
- *
- * `SimpleDateFormat` 内部有可变日历状态，共享一个实例跨线程 `format()` 会抛怪异常
- * （`Diag` 踩过同一个坑），所以每个线程一份。
- */
-object DexClock {
-
-    /** 日期格式。对外暴露是为了让 `DexStore` 与单测共用同一套口径。 */
-    const val PATTERN = "yyyyMMdd"
-
-    private val stampLocal = object : ThreadLocal<SimpleDateFormat>() {
-        override fun initialValue(): SimpleDateFormat = SimpleDateFormat(PATTERN, Locale.US)
-    }
-
-    /**
-     * 格式化；取不到就返回空串，由调用方决定怎么兜底，绝不让日期代码抛异常。
-     *
-     * 不用 `get()!!`：`Diag` 里那么写是因为那里必须拿到时间戳，这里图鉴少了日期
-     * 只是少解锁一条，**宁可少解锁，也不让日期代码冒出一个 NPE**。
-     */
-    fun format(millis: Long): String {
-        val formatter = stampLocal.get() ?: return ""
-        return try {
-            formatter.format(Date(millis))
-        } catch (_: Throwable) {
-            ""
-        }
-    }
-
-    /** 今天。 */
-    fun today(): String = format(System.currentTimeMillis())
 }
 
 /** 解锁阈值。改口径只改这一个地方。 */

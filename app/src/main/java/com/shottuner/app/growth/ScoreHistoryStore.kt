@@ -60,7 +60,7 @@ object ScoreHistoryStore {
 
     /** 最近 [days] 天的记录，给折线图用。 */
     fun series(context: Context, days: Int): List<ShotRecord> =
-        synchronized(lock) { readLocked(context).recentSeries(days) }
+        synchronized(lock) { readLocked(context).recentSeries(days, System.currentTimeMillis()) }
 
     /** 清空（设置里的「清除我的拍摄历史」用）。 */
     fun clear(context: Context) {

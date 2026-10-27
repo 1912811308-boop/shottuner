@@ -77,6 +77,11 @@ android {
 }
 
 dependencies {
+    // KMP 公共模块：app → shared **单向**依赖，shared 不依赖 app。
+    // shared 里是与平台无关的算法内核（评分、构图、图鉴、技法文案），
+    // iOS 版会复用同一份 commonMain。
+    implementation(project(":shared"))
+
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")

@@ -29,6 +29,7 @@ import com.shottuner.app.analysis.SceneClassifier
 import com.shottuner.app.analysis.ScoreBoard
 import com.shottuner.app.diag.Diag
 import com.shottuner.app.device.DeviceProfile
+import com.shottuner.app.device.unknown
 import com.shottuner.app.device.HardwareProbe
 import com.shottuner.app.feature.AdviceKind
 import com.shottuner.app.feature.FeatureAdvisor

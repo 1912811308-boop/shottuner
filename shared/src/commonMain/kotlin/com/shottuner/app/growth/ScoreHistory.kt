@@ -147,10 +147,13 @@ class ScoreHistory private constructor(
      * 折线图 UI 不在本文件职责内，这里只保证数据口径：按墙上时钟切窗口，
      * 不补点、不插值 —— 没有拍照的那天就是没有，插值出来的点是假数据。
      */
-    fun recentSeries(days: Int): List<ShotRecord> {
+    fun recentSeries(days: Int, now: Long): List<ShotRecord> {
         // 上限 3650 天：再大 `days * DAY_MS` 会溢出 Long，窗口反而变成负数
         val span = days.coerceIn(1, 3650)
-        val from = System.currentTimeMillis() - span * DAY_MILLIS
+        // 「现在」由调用方注入：commonMain 里没有 System.currentTimeMillis()
+        // （kotlin.system.getTimeMillis 在本工程的 Kotlin 1.9.24 上还是实验 API，
+        //   且各端实现未必同刻）。注入之后单测可以传固定值，**结果可复现**。
+        val from = now - span * DAY_MILLIS
         return records.filter { it.timestamp >= from }
     }
 

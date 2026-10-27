@@ -257,16 +257,18 @@ class ScoreHistoryTest {
 
     @Test
     fun recentSeries_filtersByWindow() {
-        val now = System.currentTimeMillis()
+        // 固定时间戳：now 由调用方注入后，这个测试**完全可复现**，
+        // 不再依赖跑测试那一刻的墙上时钟。
+        val now = 1_700_000_000_000L
         val history = ScoreHistory.empty()
         history.add(record(now - 10L * 24 * 3600 * 1000)) // 10 天前
         history.add(record(now - 2L * 24 * 3600 * 1000)) // 2 天前
         history.add(record(now)) // 现在
 
-        assertEquals(3, history.recentSeries(30).size)
-        assertEquals(2, history.recentSeries(7).size)
-        assertEquals(1, history.recentSeries(1).size)
+        assertEquals(3, history.recentSeries(30, now).size)
+        assertEquals(2, history.recentSeries(7, now).size)
+        assertEquals(1, history.recentSeries(1, now).size)
         // 窗口为 0 / 负数时退化成 1 天，不能返回「未来」的空列表以外的怪结果
-        assertEquals(1, history.recentSeries(0).size)
+        assertEquals(1, history.recentSeries(0, now).size)
     }
 }
