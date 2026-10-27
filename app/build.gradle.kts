@@ -34,16 +34,39 @@ android {
      */
     signingConfigs {
         create("release") {
-            storeFile = file(
-                (project.findProperty("RELEASE_STORE_FILE") as String?)
-                    ?: throw GradleException("缺少 RELEASE_STORE_FILE：请检查 gradle.properties")
-            )
-            storePassword = (project.findProperty("RELEASE_STORE_PASSWORD") as String?)
-                ?: throw GradleException("缺少 RELEASE_STORE_PASSWORD：请检查 gradle.properties")
-            keyAlias = (project.findProperty("RELEASE_KEY_ALIAS") as String?)
-                ?: throw GradleException("缺少 RELEASE_KEY_ALIAS：请检查 gradle.properties")
-            keyPassword = (project.findProperty("RELEASE_KEY_PASSWORD") as String?)
-                ?: throw GradleException("缺少 RELEASE_KEY_PASSWORD：请检查 gradle.properties")
+            // ★ 惰性求值：四项凭据齐全才配置签名，缺任何一项**不在配置阶段抛**。
+            //
+            // 为什么：原来这里直接 `?: throw GradleException(...)`，
+            // 而 signingConfigs 是**配置阶段**执行的 —— 于是
+            // 「没有 gradle.properties」会让**所有** task 失败，
+            // 连 :app:assembleDebug 和 CI 门禁（它们根本不需要签名）也一起挂。
+            // CI 上 gradle.properties 被 .gitignore 排除（含明文口令），
+            // 所以那正是 CI 第一次跑就会踩到的坑。
+            //
+            // 现在的语义等价且更准确：
+            //   · 缺凭据 → 只有 assembleRelease 会失败（AGP 在那时报
+            //     "SigningConfig 'release' is missing required property storeFile"），
+            //     **依然是"宁可构建失败，也不要静默签出一个装不上去的包"**；
+            //   · debug 构建与 CI 门禁不再被签名凭据连累。
+            //
+            // ★ `takeIf { it.isNotBlank() }` 不能省：
+            //   gradle.properties.example 里那四项是**空字符串**（不是缺项），
+            //   `as String?` 对空串照样成功 → 直接 `file("")` 会报
+            //   "path may not be null or empty string" —— 那是配置阶段的错，
+            //   又把 debug 构建连累上了。空串必须当成"缺"。
+            fun prop(name: String): String? =
+                (project.findProperty(name) as String?)?.takeIf { it.isNotBlank() }
+
+            val storePath = prop("RELEASE_STORE_FILE")
+            val storePass = prop("RELEASE_STORE_PASSWORD")
+            val keyAliasValue = prop("RELEASE_KEY_ALIAS")
+            val keyPassValue = prop("RELEASE_KEY_PASSWORD")
+            if (storePath != null && storePass != null && keyAliasValue != null && keyPassValue != null) {
+                storeFile = file(storePath)
+                storePassword = storePass
+                keyAlias = keyAliasValue
+                keyPassword = keyPassValue
+            }
         }
     }
 

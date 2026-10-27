@@ -17,6 +17,13 @@ kotlin.code.style=official
 # KMP 1.9.24 只官方测到 AGP 8.2，本工程用 8.6.1（compileSdk 35 的最低要求）。
 # KGP 版本必须与 Android 插件严格一致，否则报 "Kotlin Gradle plugin was loaded multiple times"。
 kotlin.mpp.androidGradlePluginCompatibility.nowarn=true
+# Kotlin/Native 预编译的获取方式：从 maven central 下（而不是 download.jetbrains.com）。
+# 为什么必须这样：settings.gradle.kts 用的是 RepositoriesMode.PREFER_SETTINGS，
+# 它会**忽略 project 级仓库** —— 而 KGP 自动加的 native 仓库正是 project 级的，
+# 于是解析 kotlin-native-prebuilt-* 会失败。走 maven central 就落在 settings 的仓库里，
+# PREFER_SETTINGS 不会忽略它。
+# 这条只在 CI 开 Apple 目标时才会真正用到（本地 Windows 默认不开）。
+kotlin.native.distribution.downloadFromMaven=true
 android.overridePathCheck=true
 
 # ── 正式签名（release） ─────────────────────────────────────────────────────────

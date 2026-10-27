@@ -34,16 +34,50 @@ jobs:
       - name: G1-d Apple 凭据门禁
         run: bash tools/ci/check-apple-credentials.sh
 
-  # ── 待建：common-gate（第一批开工后启用）──────────────────────────────────
-  # 目的：commonMain 能编译 + commonTest 通过。**跑在 Linux runner 上**，
-  #   不占 macOS 配额（免费私有仓库每月只有约 200 macOS 分钟，而 macOS 是 10× 倍率）。
-  #   命令： ./gradlew :shared:compileKotlinIosSimulatorArm64 :shared:testDebugUnitTest
-  # 注意：`:shared:testDebugUnitTest` 会带上 commonTest 源集，不需要 macOS。
-  # common-gate:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-java@v4
-  #       with: { distribution: temurin, java-version: '17' }
-  #     - uses: gradle/actions/setup-gradle@v4
-  #     - run: ./gradlew :shared:compileKotlinIosSimulatorArm64 :shared:testDebugUnitTest
+  # ── common-gate：commonMain 能编 iOS target 吗？（整份 CI 设计的单点依赖）──
+  #
+  # ★ 为什么跑在 Linux runner 上：
+  #   免费私有仓库的 macOS 配额只有约 200 分钟/月，而 macOS 是 10× 倍率。
+  #   这一档要验的只是「Kotlin/Native 的 klib 能不能在 Linux 上编出来」
+  #   （不需要 Apple linker —— linker 只在产出 .framework 时才需要），
+  #   所以能放 Linux 就放 Linux，把 macOS 配额全留给 G4 出包。
+  #   ★ 这正是架构侧标为「悬置项 S1」的问题：若 Linux 编不出 klib，
+  #   G2 就必须降级到 macOS，配额从「充裕」变「瓶颈」。
+  #
+  # ★ `-PenableAppleTargets=true`：
+  #   Apple 目标默认关闭（否则 Windows 开发者改一行 commonMain 也得下载
+  #   几百 MB 的 Kotlin/Native 预编译，而那个包在 Windows 上根本用不上）。
+  common-gate:
+    name: commonMain 编译 + 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # gradle.properties 被 .gitignore 排除（里面有明文签名口令），
+      # 但其中的构建必需项（android.useAndroidX 等）CI 也要用 ——
+      # 所以从 example 复制一份。example 里的 RELEASE_* 是空的，
+      # 而签名配置已改成惰性求值（app/build.gradle.kts），
+      # 所以**门禁与 debug 构建都不需要凭据**，只有 assembleRelease 才需要。
+      - name: 准备 gradle.properties
+        run: cp gradle.properties.example gradle.properties
+
+      # ── 1. iOS target 的 klib 能否在 Linux 宿主上编出来（S1 的答案）──
+      - name: 编译 iOS target 的 klib
+        run: ./gradlew :shared:compileKotlinIosSimulatorArm64 -PenableAppleTargets=true --stacktrace
+
+      # ── 2. commonTest + Android 单测（JVM 上跑，不需要 macOS）──
+      - name: 单元测试
+        run: ./gradlew :shared:testDebugUnitTest :app:testDebugUnitTest
+
+      # ── 3. Android 侧零行为变化 ──
+      - name: 编译 Android
+        run: ./gradlew :app:assembleDebug
