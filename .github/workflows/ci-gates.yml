@@ -129,7 +129,14 @@ jobs:
   #   由 G4 出包 job 在 macOS 上做。
   ios-compile:
     name: iOS target 编译（macOS · 手动触发）
-    runs-on: macos-latest
+    # ★ 为什么不用 macos-latest：
+    #   实测 2026-10-27，免费私有仓库的 macOS runner **排队 15 分钟就被自动取消**
+    #   （GitHub 在分配不到 runner 时会 cancel 并报 failure）。
+    #   较老的 runner 版本供给更多、排队更短，所以固定用 macos-14。
+    #   排队被取消**不消耗 macOS 配额**（没跑就不计时），所以多试几个标签是安全的。
+    runs-on: macos-14
+    # 排队 + 编译的总时限；超了就明确失败，别让人以为跑过
+    timeout-minutes: 45
     # 只手动触发 + 允许手动跑分档；不做 push 触发 —— 保护 macOS 配额
     if: github.event_name == 'workflow_dispatch'
     steps:
