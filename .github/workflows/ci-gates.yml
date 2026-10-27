@@ -34,6 +34,11 @@ jobs:
       - name: G1-d Apple 凭据门禁
         run: bash tools/ci/check-apple-credentials.sh
 
+      # commonMain 纯度扫描（秒级）：Android 编译看不出来、iOS 上会挂的 JVM-only 用法。
+      # 权威检查是 common-gate 里的 compileCommonMainKotlinMetadata；这一道是快速反馈。
+      - name: commonMain 纯度扫描
+        run: bash tools/ci/check-common-purity.sh
+
   # ── common-gate：commonMain 能编 iOS target 吗？（整份 CI 设计的单点依赖）──
   #
   # ★ 为什么跑在 Linux runner 上：

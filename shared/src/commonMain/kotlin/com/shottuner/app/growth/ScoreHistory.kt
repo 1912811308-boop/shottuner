@@ -246,7 +246,14 @@ class ScoreHistory private constructor(
             } catch (t: Throwable) {
                 // 连 StackOverflowError 这种 Error 也接住：读历史的代码自己崩了，
                 // 会让「拍完照」这件主线任务失败，比丢掉历史严重得多
-                onError?.invoke("分数历史解析失败，按空历史处理：" + (t.message ?: t.javaClass.simpleName))
+                // ★ 用 `t::class.simpleName` 而不是 `t.javaClass.simpleName`：
+                //   `javaClass` 是 **JVM-only** 的 API（Kotlin/Native 的 commonMain
+                //   没有它），而 Android 侧编译**完全看不出来**（Android 有 javaClass）。
+                //   这个 bug 就是被 CI 的 common metadata 编译抓出来的 ——
+                //   metadata 编译只允许 common API，是「iOS 纯度」的唯一权威检查。
+                //   `t::class` 是 common API；Kotlin/Native 上匿名类的 simpleName
+                //   可能为 null，拼接出来是 "null"，可接受（这里只是错误提示文案）。
+                onError?.invoke("分数历史解析失败，按空历史处理：" + (t.message ?: t::class.simpleName))
                 empty()
             }
         }

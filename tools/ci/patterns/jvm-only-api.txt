@@ -1,0 +1,50 @@
+# L1 · JVM-only 用法（commonMain 里绝不能出现）
+# ─────────────────────────────────────────────────────────────────────────────
+# 消费者：tools/ci/check-common-purity.sh（秒级本地自查）
+# 权威检查：CI 的 :shared:compileCommonMainKotlinMetadata（metadata 编译只允许 common API）
+#
+# ★ 为什么必须有这一档：
+#   Android 有 javaClass、java.text.SimpleDateFormat、java.lang.Math、ThreadLocal …
+#   **commonMain 里用了它们，Android 侧编译是绿的，iOS 上直接编译失败。**
+#   真实发生过：ScoreHistory 用了 `t.javaClass.simpleName` —— Android 编译一路绿灯，
+#   是 CI 的 metadata 编译把它抓出来的。若没有那道门禁，
+#   这个 bug 要等到**第一次真机出包**才暴露 —— 那时整个编译周期已经浪费了。
+#
+# ★ 本清单**只是快速反馈，不完备**：没被模式覆盖的 API、签名/类型差异都抓不到。
+#   所以 CI 里两道都在。
+#
+# ★ 纪律：特征串只放在清单里，脚本不写字面量。
+#
+# 固定字符串匹配（grep -F），一行一条，'#' 之后为注释。
+
+# ── JVM 反射 / 类对象 ────────────────────────────────────────────────────────
+javaClass
+java.lang.reflect
+
+# ── JDK 类 ──────────────────────────────────────────────────────────────────
+java.lang.Math
+java.lang.String
+java.lang.System
+java.lang.Thread
+java.lang.ThreadLocal
+java.lang.Class
+java.util.Date
+java.util.Locale
+java.text.SimpleDateFormat
+java.text.DateFormat
+java.text.NumberFormat
+java.text.DecimalFormat
+java.util.TimeZone
+java.util.Calendar
+
+# ── JDK 包 import ───────────────────────────────────────────────────────────
+import java.
+import javax.
+
+# ── 平台相关的格式化 / 时间 ─────────────────────────────────────────────────
+String.format
+SimpleDateFormat
+ThreadLocal
+currentTimeMillis
+getTimeMillis
+nanoTime
