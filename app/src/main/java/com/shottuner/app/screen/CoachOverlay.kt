@@ -211,7 +211,7 @@ class CoachOverlay(
         val rootView: View = if (rotated) {
             RotationShell(context).apply {
                 contentWidthPx = cardWidth
-                contentRotationDegrees = contentDegrees
+                contentRotation = rotation
                 addView(
                     card.first,
                     FrameLayout.LayoutParams(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -580,15 +580,16 @@ class CoachOverlay(
  * - 壳的尺寸 = 旋转后的视觉外框（内容正好铺满，不裁也不溢出）；
  * - 壳里的卡片按**竖屏宽度**排版（文字断行与竖屏完全一致），再绕支点旋转。
  *
- * 支点取法（推导见 `OverlayOrientation.visual`）：让旋转后的外框左上角落在 (0,0)。
+ * 支点与外框的算法只有一处：[OverlayOrientation.visual] —— 这里直接调它，
+ * 不自己再写一遍，免得两处算法走偏（走偏的表现是内容被裁掉一截）。
  */
 private class RotationShell(context: Context) : FrameLayout(context) {
 
     /** 内容按多宽排版（= 卡片宽度） */
     var contentWidthPx: Int = 0
 
-    /** 内容预旋转角度（顺时针为正） */
-    var contentRotationDegrees: Float = 0f
+    /** 物理旋转（`Display.getRotation()` 的序号：0/1/2/3） */
+    var contentRotation: Int = OverlayOrientation.ROTATION_0
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val child = getChildAt(0)
@@ -601,22 +602,14 @@ private class RotationShell(context: Context) : FrameLayout(context) {
             MeasureSpec.makeMeasureSpec(contentWidthPx, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
         )
-        val w = contentWidthPx
-        val h = child.measuredHeight
-        val swap = contentRotationDegrees == 90f || contentRotationDegrees == 270f
-
-        child.rotation = contentRotationDegrees
-        child.pivotX = when (contentRotationDegrees) {
-            90f -> h / 2f
-            270f -> w / 2f
-            else -> w / 2f
-        }
-        child.pivotY = when (contentRotationDegrees) {
-            90f -> h / 2f
-            270f -> w / 2f
-            else -> h / 2f
-        }
-
-        setMeasuredDimension(if (swap) h else w, if (swap) w else h)
+        val visual = OverlayOrientation.visual(
+            cardWidthPx = contentWidthPx,
+            contentHeightPx = child.measuredHeight,
+            rotation = contentRotation
+        )
+        child.rotation = OverlayOrientation.contentRotationDegrees(contentRotation)
+        child.pivotX = visual.pivotX
+        child.pivotY = visual.pivotY
+        setMeasuredDimension(visual.widthPx, visual.heightPx)
     }
 }
