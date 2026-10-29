@@ -1,9 +1,21 @@
 // SPDX-License-Identifier: MIT
 //
-// 最小探测模块（Spike #0）。
+// shared —— 与平台无关的算法内核（KMP 公共模块）。
 //
-// 本文件只验证一件事：**commonMain 的 metadata 编译能否在本机跑通**。
-// 探测通过之前，不往 shared 里搬任何业务代码。
+// 这是 Spike #0 建立的模块。探测结论（2026-10-27）：
+//   · Windows 上  :shared:compileDebugKotlinAndroid            → BUILD SUCCESSFUL
+//   · Linux (CI)   :shared:compileCommonMainKotlinMetadata      → BUILD SUCCESSFUL
+//                    （**证明 commonMain 只用了 common API** —— 这是 iOS 移植最大的风险）
+//   · macOS (CI)   :shared:compileKotlinIosSimulatorArm64      → BUILD SUCCESSFUL
+//                    :shared:compileKotlinIosArm64               → BUILD SUCCESSFUL
+//
+// 目录约定：
+//   commonMain/  跨端共享（Android + iOS 同一份实现）
+//   androidMain/ 只在 Android 上编译（如 DexClock —— 用了 java.text / ThreadLocal）
+//   iosMain/     只在 iOS 上编译（Swift 侧的 actual 实现）
+//   commonTest/  跨端共享的单元测试（**iOS 端复用同一份**）
+//
+// ★ 依赖方向：**app → shared 单向**，shared 绝不依赖 app。
 
 plugins {
     id("com.android.library")
@@ -27,7 +39,7 @@ kotlin {
     //
     // 但"声明"本身有意义：
     //  1. 它让 commonMain 真正成为**多目标共享源码集**，
-    //     从而使 `compileKotlinMetadata` 不再被跳过 —— 单目标时 commonMain
+    //     从而使 `compileCommonMainKotlinMetadata` 不再被跳过 —— 单目标时 commonMain
     //     等价于 androidMain，metadata 编译会直接 SKIPPED，探测就是假的。
     //  2. 它把"未来在 macOS 上要编的产物"钉进构建脚本，
     //     避免日后有人以为 iOS 支持是拍脑袋加的。
@@ -45,6 +57,26 @@ kotlin {
     if (providers.gradleProperty("enableAppleTargets").orNull == "true") {
         iosArm64()
         iosSimulatorArm64()
+    }
+
+    // ── commonTest：跨端共享的单元测试 ────────────────────────────────────
+    //
+    // ★ 为什么测试要进 commonTest 而不是留在 app：
+    //   iOS 端要跑**同一份**测试 —— 否则 Android 绿了、iOS 红了，两边各写一套
+    //   测试，等于没有共享。commonTest 里的测试在 JVM 上跑（testDebugUnitTest），
+    //   也能在 iOS 模拟器上跑（iosSimulatorArm64Test）。
+    //
+    //   ★ kotlin("test") 不是"第三方依赖"：它是 Kotlin 官方的测试库，
+    //     在 JVM 上映射到 kotlin-test-junit，在 Native 上映射到 kotlin-test。
+    //     这是 KMP 官方推荐写法，不破坏"零第三方依赖"纪律。
+    //
+    //   ★ 迁到 commonTest 之后，`internal` 成员又可见了（internal 是**模块级**可见性，
+    //     commonTest 属于 shared 模块）—— 所以 TechniqueMatcher.scoreOf
+    //     当初为了留在 app 的测试而放宽成 public，现在可以改回 internal。
+    sourceSets {
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }
 
