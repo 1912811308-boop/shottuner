@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ios/ExportOptions.plist —— xcodebuild -exportArchive 的导出选项。
+
+  ★ 为什么要有这个文件：
+    出包 job（.github/workflows/ci-gates.yml 的 ios-package）要把 .xcarchive
+    导出一个 ipa。-exportArchive 必须给一份 ExportOptions.plist，
+    而这份文件是**「要签成什么样」的声明** —— 所以它必须进仓库、可评审。
+
+  ★ 为什么三个签名项全是空的（signingCertificate / teamID / provisioningProfiles）：
+    侧载链路是 **SideStore + 免费个人 Apple ID（7 天重签）** ——
+    **签名动作发生在 iPhone 上**，CI 只负责把二进制打包好。
+    所以 CI 产出的必须是**未签名**产物：
+      · signingCertificate 留空 → 不选任何证书
+      · teamID 留空            → 不绑定任何开发者团队
+      · provisioningProfiles 空 → 不带任何描述文件
+    ★ 空值在这里是**刻意的**，不是「还没填」。把它填上就等于让 CI 具备签名能力，
+      而 CI 一旦具备签名能力，凭据迟早会进 secrets —— 那是硬规则二要防的事。
+      tools/ci/check-ios-project-spec.sh 会盯着这三个字段，改成非空直接让门禁变红。
+
+  ★ method = release / signingStyle = manual：
+    manual 是必须的 —— automatic 会让 Xcode 自己去「找」一张证书，
+    那正是「CI 具备签名能力」的开始。写死 manual + 空证书 = 明确的「我不签」。
+
+  ★ destination = export：导出到本地目录（不是上传到 App Store Connect）——
+    我们不走 App Store，也没有开发者账号。
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>release</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string></string>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>

@@ -167,6 +167,33 @@ printf 'package com.shottuner.app.ios\n' > "$REPO/shared/src/iosMain/kotlin/Seed
 printf 'kotlin {\n    iosArm64().binaries.framework {\n        baseName = "Shared"\n    }\n}\n' \
   > "$REPO/shared/build.gradle.kts"
 
+# ── 导出选项（未签名口径）───────────────────────────────────────────────────
+# ★ 为什么要给它单独准备 fixture：
+#   ios/ExportOptions.plist 是「要签成什么样」的声明 —— 它是硬规则一
+#   （CI 一律不签名）在出包链路上的落点，所以必须被反向验证。
+# ★ 纪律：这里写的是**要被注入的坏值**，但它不是「凭据」——
+#   它是凭空捏造的占位串，仓库里任何地方都不该有真的证书名。
+write_export_opts() {
+  cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>release</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string></string>
+</dict>
+</plist>
+PLIST
+}
+write_export_opts
+
 expect pass "规格合规 → 规格门禁绿" "$SPEC" "$REPO"
 
 sed -i 's/CODE_SIGNING_ALLOWED: "NO"/CODE_SIGNING_ALLOWED: "YES"/' "$REPO/ios/project.yml"
@@ -191,6 +218,96 @@ expect fail "shared 没声明 framework 二进制 → 规格门禁红" "$SPEC" "
 printf '#!/bin/sh\nif [ 1 ; then\n' > "$REPO/ios/Scripts/Broken.sh"
 expect fail "iOS 的 shell 脚本语法错 → 规格门禁红" "$SPEC" "$REPO"
 rm -f "$REPO/ios/Scripts/Broken.sh"
+
+# ── 导出选项的反向验证（硬规则一在出包链路上的落点）────────────────────────
+ci_info ""
+ci_info "【导出选项必须恒为未签名】"
+
+# ① 非空的签名身份 → 必须红
+cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Fake Signing Identity For Test</string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string></string>
+</dict>
+</plist>
+PLIST
+expect fail "导出选项里有非空签名身份 → 规格门禁红" "$SPEC" "$REPO"
+
+# ② 非空的 teamID → 必须红
+cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string>FAKETEAM12</string>
+</dict>
+</plist>
+PLIST
+expect fail "导出选项里有非空 teamID → 规格门禁红" "$SPEC" "$REPO"
+
+# ③ 非空的 provisioningProfiles → 必须红
+cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.shottuner.app</key>
+		<string>FakeProfile</string>
+	</dict>
+	<key>teamID</key>
+	<string></string>
+</dict>
+</plist>
+PLIST
+expect fail "导出选项里有非空 provisioningProfiles → 规格门禁红" "$SPEC" "$REPO"
+
+# ④ signingStyle=automatic → 必须红（automatic 会让 Xcode 自己去「找」证书）
+cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string></string>
+</dict>
+</plist>
+PLIST
+expect fail "导出选项的 signingStyle 是 automatic → 规格门禁红" "$SPEC" "$REPO"
+
+# ⑤ 恢复合规状态 → 必须绿（证明上面 4 条不是「永远红」）
+#   ★ 注意：前面那几条用例为了制造违规，**故意破坏了 shared 的 fixture**
+#     （删了 iosMain 的 .kt、刮掉了 binaries.framework）且没有还原。
+#     所以这里必须先把它复原，否则这条「期望绿」会带着前面积累的违规一起红 ——
+#     那就不是在测导出选项了。
+printf 'package com.shottuner.app.ios\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
+printf 'kotlin {\n    iosArm64().binaries.framework {\n        baseName = "Shared"\n    }\n}\n' \
+  > "$REPO/shared/build.gradle.kts"
+write_export_opts
+expect pass "导出选项恢复未签名口径 → 规格门禁绿" "$SPEC" "$REPO"
 
 ci_log ""
 if [ "$FAIL" -gt 0 ]; then

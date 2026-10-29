@@ -45,6 +45,17 @@ setting_value() {
     | tr -d '[:space:]'
 }
 
+# plist_string <文件> <键> —— 取 plist 里 <key>K</key> 后面那个 <string> 的值。
+# ★ 为什么要自己解析而不用 plutil：
+#   这道门禁跑在 **Linux runner** 上（不占 macOS 配额），而 plutil 是 Apple 工具链。
+#   所以只能用 grep/sed —— 只认 <string>…</string> 这种最朴素的写法，够用且无歧义。
+plist_string() {
+  local file="$1" key="$2"
+  grep -A2 "<key>${key}</key>" "$file" 2>/dev/null \
+    | grep -m1 -oE '<string>[^<]*</string>' \
+    | sed -E 's|</?string>||g'
+}
+
 # ── 0) 文件必须存在 ────────────────────────────────────────────────────────
 if [ ! -f "$SPEC" ]; then
   ci_die "找不到 ios/project.yml —— iOS 工程的单一事实来源"
@@ -102,6 +113,38 @@ IDENTITY="$(setting_value "$SPEC" "CODE_SIGN_IDENTITY")"
   || violation "ios/project.yml" "CODE_SIGNING_REQUIRED 必须是 NO，实际为：${REQUIRED:-<未设置>}"
 [ -z "$IDENTITY" ] \
   || violation "ios/project.yml" "CODE_SIGN_IDENTITY 必须为空，实际为：$IDENTITY"
+
+# ── 3b) 导出选项：必须声明「未签名」────────────────────────────────────────
+# ★ 为什么这道断言不能少（实测踩过，2026-10-29）：
+#   ios/ExportOptions.plist 是 **xcodebuild -exportArchive 的「要签成什么样」的声明** ——
+#   它是硬规则一（CI 一律不签名）在**出包链路上**的唯一落点。
+#   project.yml 里三个签名开关恒为 NO，但如果 ExportOptions.plist 里写了证书名 / teamID，
+#   那道声明就等于在告诉 Xcode「去签」—— CI 就此具备签名能力，
+#   而「CI 一旦具备签名能力，凭据迟早会进 secrets」（硬规则二要防的正是这个）。
+#   ⇒ 三个字段必须是空值：**空值在这里是刻意的，不是「还没填」。**
+EXPORT_OPTS="$ROOT/ios/ExportOptions.plist"
+if [ ! -f "$EXPORT_OPTS" ]; then
+  violation "ios/ExportOptions.plist" "缺少导出选项（出包 job 要用它，且必须是未签名口径）"
+else
+  CERT="$(plist_string "$EXPORT_OPTS" "signingCertificate")"
+  TEAM="$(plist_string "$EXPORT_OPTS" "teamID")"
+  [ -z "$CERT" ] \
+    || violation "ios/ExportOptions.plist" "signingCertificate 必须为空（CI 一律不签名），实际为：$CERT"
+  [ -z "$TEAM" ] \
+    || violation "ios/ExportOptions.plist" "teamID 必须为空（不绑定任何开发者团队），实际为：$TEAM"
+  # provisioningProfiles 必须是空 dict —— 带了描述文件就意味着带了签名身份。
+  PP_BLOCK="$(grep -A3 '<key>provisioningProfiles</key>' "$EXPORT_OPTS" 2>/dev/null | tr -d ' \t\n')"
+  case "$PP_BLOCK" in
+    *"<dict/>"*) : ;;
+    *"<dict>"*)  violation "ios/ExportOptions.plist" "provisioningProfiles 必须为空 dict（CI 一律不签名）" ;;
+    *)           violation "ios/ExportOptions.plist" "读不出 provisioningProfiles —— 未签名导出必须显式声明空 dict" ;;
+  esac
+  # signingStyle 必须是 manual：automatic 会让 Xcode 自己去「找」一张证书，
+  # 那正是「CI 具备签名能力」的开始。
+  STYLE="$(plist_string "$EXPORT_OPTS" "signingStyle")"
+  [ "$STYLE" = "manual" ] \
+    || violation "ios/ExportOptions.plist" "signingStyle 必须是 manual（automatic 会让 Xcode 自己找证书），实际为：${STYLE:-<未设置>}"
+fi
 
 # ── 4) 零第三方依赖（D1 决策：Vision 是系统框架）─────────────────────────
 if grep -qE "^[[:space:]]*packages:[[:space:]]*$" "$SPEC"; then
