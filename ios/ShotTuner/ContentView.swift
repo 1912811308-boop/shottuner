@@ -80,7 +80,7 @@ struct ContentView: View {
             )
             LabeledRow(
                 label: "commonMain 直调",
-                value: SharedKernelBridge.commonIsLevel(roll: 0.4) ? "已平" : "还差一点"
+                value: "\(SharedKernelBridge.commonNormalizeDegrees(370))°"
             )
         }
     }

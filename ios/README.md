@@ -163,6 +163,17 @@ Kotlin 侧算完，Swift 侧只负责渲染。详见 `docs/IOS-ARCH.md` §3.4。
 > 所以同名重载在 Swift 侧会被加尾随下划线（`one(value:)` / `one(value_:)`），哪个被加无法预测。
 > 所以导出给 Swift 的函数必须**签名唯一** —— 这正是 `IosBridge` 这一层存在的理由。
 
+> 再一个坑：**可空**的原始类型过语言边界时会**装箱**：
+
+> | Kotlin | Swift |
+> |---|---|
+> | `Float` / `Double` / `Int` / `Long`（非可空） | `Float` / `Double` / `Int32` / `Int64` |
+> | `Float?` / `Int?` / `Double?`（可空） | `KotlinFloat?` / `KotlinInt?` / `KotlinDouble?` |
+
+> ⇒ **跨语言边界的参数尽量用非可空的原始类型**。
+> （实测踩过：2026-10-29 第一次编 iOS 就挂在 `Float?` → `KotlinFloat?` 上。）
+
+
 ### ④ shared 模块必须声明 framework 二进制
 
 ```kotlin

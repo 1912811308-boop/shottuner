@@ -86,13 +86,17 @@ enum SharedKernelBridge {
     /// 用来证明：commonMain 里的实现**原样**就能被 Swift 调到 —— 两端共用同一份代码，
     /// 不是「Android 一份、iOS 再抄一份」。
     ///
-    /// ★ 注意入参是 `Float?`（Kotlin 的 `Float?`）：Kotlin/Native 把可空原始类型
-    ///   桥接成 `NSNumber*`，Swift 侧看到的就是可选值。
-    ///   这里传 nil 表示「没有有效读数」——和 Android 侧把 null 当一等公民处理是对齐的。
+    /// ★ 陷阱：**可空**的原始类型过语言边界时，Kotlin/Native 走的是**装箱类型**：
+    ///   Kotlin `Float?` → Swift `KotlinFloat?`（**不是** `Float?`）。
+    ///   同理 `Int?` → `KotlinInt?`、`Double?` → `KotlinDouble?`。
+    ///   而**非可空**的原始类型是直接映射到 C 原语的：
+    ///   `Float` → `Float`、`Double` → `Double`、`Int` → `Int32`、`Long` → `Int64`。
+    ///   ⇒ 所以跨语言边界的参数**尽量用非可空的原始类型**。
+    ///   （实测踩过：2026-10-29 第一次编 iOS 就挂在 `Float?` → `KotlinFloat?` 上。）
     ///
-    /// - Parameter roll: 横滚角（度），nil 表示没有有效数据
-    /// - Returns: 在容差内返回 `true`
-    static func commonIsLevel(roll: Float?) -> Bool {
-        LevelMath.shared.isLevel(roll: roll)
+    /// - Parameter degrees: 角度（度）
+    /// - Returns: 夹到 [-180, 180] 之后的角度
+    static func commonNormalizeDegrees(_ degrees: Float) -> Float {
+        LevelMath.shared.normalizeDegrees(degrees: degrees)
     }
 }

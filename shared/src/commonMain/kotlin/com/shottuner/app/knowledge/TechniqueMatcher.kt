@@ -180,19 +180,24 @@ object TechniqueMatcher {
     /**
      * 返回 null 表示该条被硬性条件淘汰。
      *
-     * 可见性说明（KMP 搬迁后改过）：
+     * 可见性说明（KMP 搬迁期间改过一轮，现已改回）：
      * 原本是 `internal` —— 单测要验 `minShadowClip` / `maxHighlightClip`
      * 这两个 v1.5 新条件的淘汰边界，而现在没有任何一条真实技法用到它们 ——
-     * 只能拿合成条目直接打这个函数。为了可测放宽一档可见性，逻辑不动。
+     * 只能拿合成条目直接打这个函数。
      *
-     * ★ 搬迁到 `shared` 模块后**不能保持 internal**：Kotlin 的 `internal` 是
-     *   **模块级**可见性，而单测还在 `app` 模块里 —— 跨模块访问不到，
-     *   编译报 "Cannot access 'scoreOf': it is internal in 'TechniqueMatcher'"。
-     *   所以这里放宽为 public。
-     *   待办：T07 把这批单测迁进 `shared/src/commonTest/`（iOS 端复用同一份）之后，
-     *   可以改回 `internal`。见 `docs/IOS-ARCH-EXEC.md` 的 T07。
+     * ★ 搬迁到 `shared` 模块期间曾短暂放宽成 public：
+     *   Kotlin 的 `internal` 是**模块级**可见性，而单测当时还留在 `app` 模块里，
+     *   跨模块访问不到，编译报
+     *   "Cannot access 'scoreOf': it is internal in 'TechniqueMatcher'"。
+     *   所以当时放宽为 public，逻辑不动。
+     *
+     * ★ 现已改回 `internal`（T07 完成）：
+     *   单测已迁进 `shared/src/commonTest/` —— 同一个模块内，
+     *   `internal` 重新可见，**不需要为了测试而放宽生产代码的可见性**。
+     *   iOS 端复用同一份测试源码，因此这个可见性对两端都成立。
+     *   见 `docs/IOS-ARCH-EXEC.md` 的 T07。
      */
-    fun scoreOf(tech: Technique, scene: SceneType, signals: TechSignals): Int? {
+    internal fun scoreOf(tech: Technique, scene: SceneType, signals: TechSignals): Int? {
         val trigger = tech.trigger
 
         if (trigger.requiresTele && !signals.hasTele) return null
