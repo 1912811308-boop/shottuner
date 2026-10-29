@@ -43,7 +43,7 @@ class CoachOverlayOrientationTest {
     fun portraitCardWidthMatchesLegacyFormula() {
         for (width in listOf(720, 1080, 1200, 1440, 1600)) {
             val actual = OverlayOrientation.cardWidthPx(
-                shortSidePx = width,
+                spaceWidthPx = width,
                 density = density,
                 cardMaxDp = 340,
                 marginDp = 24
@@ -355,6 +355,107 @@ class CoachOverlayOrientationTest {
     fun maxOffsetNeverNegative() {
         assertEquals(0, OverlayOrientation.maxOffsetXPx(100, 900))
         assertEquals(0, OverlayOrientation.maxOffsetXPx(900, 900))
+    }
+
+    // ── 7. 两种窗口坐标系模型（真机判错时的降级路径） ───────────────────────
+
+    @Test
+    fun lockedPortraitSpaceIsPortraitSized() {
+        val (w, h) = OverlayOrientation.windowSpaceSize(
+            model = OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT,
+            realWidthPx = 2340,
+            realHeightPx = 1080,
+            shortSidePx = 1080,
+            longSidePx = 2340
+        )
+        assertEquals(1080, w)
+        assertEquals(2340, h)
+    }
+
+    @Test
+    fun followDisplaySpaceIsLogicalSized() {
+        val (w, h) = OverlayOrientation.windowSpaceSize(
+            model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY,
+            realWidthPx = 2340,
+            realHeightPx = 1080,
+            shortSidePx = 1080,
+            longSidePx = 2340
+        )
+        assertEquals(2340, w)
+        assertEquals(1080, h)
+    }
+
+    @Test
+    fun followDisplayModelNeedsNoContentRotation() {
+        // 窗口跟随 display ⇒ 框架不再替我们旋转 ⇒ 内容不用预旋转
+        for (rot in listOf(
+            OverlayOrientation.ROTATION_0,
+            OverlayOrientation.ROTATION_90,
+            OverlayOrientation.ROTATION_180,
+            OverlayOrientation.ROTATION_270
+        )) {
+            assertEquals(
+                "rotation=$rot 在 FOLLOW_DISPLAY 模型下不该预旋转",
+                0f,
+                OverlayOrientation.contentRotationDegrees(
+                    rot,
+                    OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+                ),
+                0.001f
+            )
+        }
+    }
+
+    @Test
+    fun lockedPortraitModelStillRotatesContent() {
+        assertEquals(
+            90f,
+            OverlayOrientation.contentRotationDegrees(
+                OverlayOrientation.ROTATION_90,
+                OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT
+            ),
+            0.001f
+        )
+    }
+
+    @Test
+    fun followDisplayModelDragDeltaIsIdentity() {
+        // 窗口坐标系 = 屏幕坐标系 ⇒ 不换算
+        for (rot in listOf(
+            OverlayOrientation.ROTATION_0,
+            OverlayOrientation.ROTATION_90,
+            OverlayOrientation.ROTATION_180,
+            OverlayOrientation.ROTATION_270
+        )) {
+            val d = OverlayOrientation.windowDelta(
+                screenDx = 77,
+                screenDy = -33,
+                rotation = rot,
+                model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+            )
+            assertEquals("rotation=$rot 增量 x 被换算了", 77, d.x)
+            assertEquals("rotation=$rot 增量 y 被换算了", -33, d.y)
+        }
+    }
+
+    @Test
+    fun portraitCardWidthIsIdenticalUnderBothModels() {
+        // 竖屏时两个模型的窗口坐标系宽度同为 1080 ⇒ 卡片宽度必须一致（旧行为零回归）
+        val locked = OverlayOrientation.cardWidthPx(1080, density, 340, 24)
+        val follow = OverlayOrientation.cardWidthPx(1080, density, 340, 24)
+        assertEquals(locked, follow)
+        assertEquals(legacyCardWidth(1080), locked)
+    }
+
+    @Test
+    fun landscapeCardWidthFollowsModelSpace() {
+        // 锁在竖屏坐标系 → 宽度受物理短边约束（1008）；
+        // 跟随 display → 宽度受逻辑宽约束，但仍是 dp(340) 上限（1020）
+        val locked = OverlayOrientation.cardWidthPx(1080, density, 340, 24)
+        val follow = OverlayOrientation.cardWidthPx(2340, density, 340, 24)
+        assertEquals(1008, locked)
+        assertEquals(dp(340), follow)
+        assertTrue("跟随 display 时卡片宽不能超过逻辑宽", follow <= 2340 - dp(24))
     }
 
     // ── 工具 ─────────────────────────────────────────────────────────────────

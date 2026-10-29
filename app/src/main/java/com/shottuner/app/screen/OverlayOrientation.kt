@@ -85,6 +85,31 @@ object OverlayOrientation {
         CENTER
     }
 
+    /**
+     * 悬浮窗**窗口坐标系**的两种模型。
+     *
+     * 之所以要区分：Android 的方向请求是 per-display 的，MainActivity 锁了 portrait，
+     * 于是同一个 display 上属于本 App 的悬浮窗窗口，它的坐标系到底是
+     * 「被一起锁成竖屏」还是「仍然跟随 display」，决定了整套几何怎么算。
+     *
+     * 这一条**只能真机确认**，所以做成可切换的两模型 —— 判错时改一个常量即可，
+     * 不用在三处几何公式里同时动刀（改漏一处的后果是卡片歪 90° 或拖不动）。
+     *
+     * - [LOCKED_PORTRAIT]（默认）：窗口坐标系被锁在竖屏那套
+     *   （宽 = 物理短边，高 = 物理长边）。横屏时框架把整个窗口旋转进 display 的
+     *   逻辑坐标系，所以内容必须**预旋转 R×90°** 才正立，拖动增量也要换算。
+     * - [FOLLOW_DISPLAY]：窗口坐标系跟随 display 的当前逻辑坐标系
+     *   （横屏时 2340×1080）。框架不再替我们旋转，所以内容**不用预旋转**、
+     *   拖动增量也**不用换算**，卡片宽度上限直接用逻辑宽。
+     *
+     * 真机判据：横屏时卡片**侧躺 90°**（文字横着）⇒ 窗口其实跟随了 display
+     * ⇒ 切到 [FOLLOW_DISPLAY]。
+     */
+    enum class WindowSpaceModel {
+        LOCKED_PORTRAIT,
+        FOLLOW_DISPLAY
+    }
+
     /** 拖动增量（窗口坐标系） */
     data class Delta(val x: Int, val y: Int)
 
@@ -119,8 +144,38 @@ object OverlayOrientation {
      * 内容需要预旋转的角度（顺时针为正，与 `View.rotation` 约定一致）。
      *
      * 推导见文件头的注释：R=90 ⇒ 设备逆时针转了 90° ⇒ 内容顺时针转 90° 才正立。
+     *
+     * @param model 窗口坐标系模型：窗口跟随 display 时框架不再替我们旋转，
+     *   也就不需要预旋转（详见 [WindowSpaceModel]）。
      */
-    fun contentRotationDegrees(rotation: Int): Float = normalizeRotation(rotation) * 90f
+    fun contentRotationDegrees(
+        rotation: Int,
+        model: WindowSpaceModel = WindowSpaceModel.LOCKED_PORTRAIT
+    ): Float =
+        if (model == WindowSpaceModel.FOLLOW_DISPLAY) {
+            0f
+        } else {
+            normalizeRotation(rotation) * 90f
+        }
+
+    /**
+     * 悬浮窗窗口坐标系的尺寸（宽、高）。
+     *
+     * @param realWidthPx / realHeightPx `Display.getRealSize()` 的值（已按当前旋转调换）
+     * @param shortSidePx / longSidePx 屏幕物理短边 / 长边
+     */
+    fun windowSpaceSize(
+        model: WindowSpaceModel,
+        realWidthPx: Int,
+        realHeightPx: Int,
+        shortSidePx: Int,
+        longSidePx: Int
+    ): Pair<Int, Int> = when (model) {
+        // 被锁在竖屏那套：窗口坐标系恒为「短边 × 长边」
+        WindowSpaceModel.LOCKED_PORTRAIT -> shortSidePx to longSidePx
+        // 跟随 display：就是 display 当前的逻辑尺寸（横屏时 2340×1080）
+        WindowSpaceModel.FOLLOW_DISPLAY -> realWidthPx to realHeightPx
+    }
 
     /** 该姿态下的落位方式 */
     fun anchorFor(rotation: Int): Anchor =
@@ -129,14 +184,17 @@ object OverlayOrientation {
     /**
      * 卡片宽度上限。
      *
-     * @param shortSidePx 屏幕物理短边（横竖屏都一样）
+     * 卡片的排版宽度必须装得下**窗口坐标系的宽** —— 窗口坐标系被锁住时是竖屏的宽
+     * （物理短边），跟随 display 时是逻辑宽（横屏时是长边）。
+     *
+     * @param spaceWidthPx 窗口坐标系的宽（像素）
      * @param density 屏幕密度
      * @param cardMaxDp 卡片最大宽度（dp）
      * @param marginDp 卡片与屏幕边缘的最小留白（dp）
      */
-    fun cardWidthPx(shortSidePx: Int, density: Float, cardMaxDp: Int, marginDp: Int): Int {
+    fun cardWidthPx(spaceWidthPx: Int, density: Float, cardMaxDp: Int, marginDp: Int): Int {
         val maxPx = (cardMaxDp * density).toInt()
-        val limitPx = shortSidePx - (marginDp * density).toInt()
+        val limitPx = spaceWidthPx - (marginDp * density).toInt()
         return min(maxPx, limitPx).coerceAtLeast(0)
     }
 
@@ -167,11 +225,21 @@ object OverlayOrientation {
      * 把「屏幕坐标系」里的拖动增量换算成「窗口坐标系」里的增量。
      *
      * 屏幕坐标系 = 物理画面（横屏时物理画面是横的）；
-     * 窗口坐标系 = 悬浮窗自己那套（被方向请求锁成竖屏）。
-     * 两者之间差一个 R×90° 的旋转，顺时针为正。
+     * 窗口坐标系 = 悬浮窗自己那套。
+     *
+     * - 窗口被锁在竖屏坐标系时（[WindowSpaceModel.LOCKED_PORTRAIT]），
+     *   两者差一个 R×90° 的旋转（顺时针为正）；
+     * - 窗口跟随 display 时（[WindowSpaceModel.FOLLOW_DISPLAY]），
+     *   两者就是同一个坐标系，不换算。
      */
-    fun windowDelta(screenDx: Int, screenDy: Int, rotation: Int): Delta =
-        when (normalizeRotation(rotation)) {
+    fun windowDelta(
+        screenDx: Int,
+        screenDy: Int,
+        rotation: Int,
+        model: WindowSpaceModel = WindowSpaceModel.LOCKED_PORTRAIT
+    ): Delta {
+        if (model == WindowSpaceModel.FOLLOW_DISPLAY) return Delta(screenDx, screenDy)
+        return when (normalizeRotation(rotation)) {
             // 顺时针 90°：(x, y) → (-y, x)
             ROTATION_90 -> Delta(x = -screenDy, y = screenDx)
             // 180°：(x, y) → (-x, -y)
@@ -180,6 +248,7 @@ object OverlayOrientation {
             ROTATION_270 -> Delta(x = screenDy, y = -screenDx)
             else -> Delta(x = screenDx, y = screenDy)
         }
+    }
 
     /** 顶部锚点下，x 的合法偏移范围是 ±maxOffset（相对水平居中） */
     fun maxOffsetXPx(spaceWidthPx: Int, cardWidthPx: Int): Int =

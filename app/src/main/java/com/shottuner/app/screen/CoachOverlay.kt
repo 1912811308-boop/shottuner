@@ -103,6 +103,22 @@ class CoachOverlay(
         const val DRAG_BOTTOM_RESERVE_DP = 120
     }
 
+    /**
+     * 悬浮窗**窗口坐标系模型** —— 真机第一件事要确认的就是这条。
+     *
+     * 默认 [OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT]：
+     * 方向请求是 per-display 的，MainActivity 的 portrait 锁会把本 App 的悬浮窗
+     * 窗口一起锁在竖屏坐标系里，横屏时框架再把整个窗口旋转进 display 的逻辑坐标系，
+     * 所以内容必须预旋转 R×90°、拖动增量也要换算。
+     *
+     * ⚠️ **如果真机发现「悬浮窗窗口其实跟随了 display」**（表现：横屏时卡片侧躺 90°，
+     * 文字横着）—— **只改这一行**改成
+     * [OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY] 即可：
+     * 卡片宽度上限、坐标夹取区间、拖动增量换算、内容预旋转会一起切过去，
+     * 旋转壳也会自动退化为不启用（不再需要预旋转）。
+     */
+    private val windowSpaceModel = OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT
+
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val displayManager =
         context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
@@ -144,21 +160,27 @@ class CoachOverlay(
         val shortSide = physicalShortSide(real)
         val longSide = max(real.x, real.y)
 
-        // 卡片宽度按**物理短边**算：横竖屏算出来一样，卡片不会超出屏幕的窄边
-        val cardWidth = OverlayOrientation.cardWidthPx(
+        // 窗口坐标系：LOCKED_PORTRAIT 时是竖屏那套（短边 × 长边），
+        // FOLLOW_DISPLAY 时是 display 当前的逻辑尺寸（横屏时 2340×1080）。
+        val (spaceWidth, spaceHeight) = OverlayOrientation.windowSpaceSize(
+            model = windowSpaceModel,
+            realWidthPx = real.x,
+            realHeightPx = real.y,
             shortSidePx = shortSide,
+            longSidePx = longSide
+        )
+
+        // 卡片宽度受**窗口坐标系的宽**约束：锁在竖屏时是物理短边，
+        // 跟随 display 时是逻辑宽（横屏时是长边）。竖屏两者同为 1080，零回归。
+        val cardWidth = OverlayOrientation.cardWidthPx(
+            spaceWidthPx = spaceWidth,
             density = density,
             cardMaxDp = CARD_MAX_DP,
             marginDp = CARD_MARGIN_DP
         )
 
-        // 方向请求是 per-display 的，悬浮窗的窗口坐标系在横屏时仍然是竖屏那套：
-        // 宽 = 物理短边，高 = 物理长边。
-        val spaceWidth = shortSide
-        val spaceHeight = longSide
-
         val anchor = OverlayOrientation.anchorFor(rotation)
-        val contentDegrees = OverlayOrientation.contentRotationDegrees(rotation)
+        val contentDegrees = OverlayOrientation.contentRotationDegrees(rotation, windowSpaceModel)
 
         val card = buildCard()
         val handle = card.second
@@ -254,7 +276,8 @@ class CoachOverlay(
                             val d = OverlayOrientation.windowDelta(
                                 screenDx = dx.roundToInt(),
                                 screenDy = dy.roundToInt(),
-                                rotation = rotation
+                                rotation = rotation,
+                                model = windowSpaceModel
                             )
                             val view = root
                             if (view != null) {
