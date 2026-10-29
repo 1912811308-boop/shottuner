@@ -15,8 +15,10 @@ android {
         // 1.8.0=18，1.9.0=19，2.0.0=20（悬浮卡重做），2.0.1=21（调透明/字号），2.1.0=22。
         // v3.0.0 是首个上架发布版（包名迁移到 com.shottuner.app + 正式签名），取 30。
         // v3.1.0 爆款化（G1 首屏任务卡 + G2 成绩水印 + G3 技法图鉴 + G4 分数历史），取 31。
-        versionCode = 31
-        versionName = "3.1.0"
+        // v3.2.0 横屏可用（悬浮教练卡跟随物理方向 + 录屏画布等比例）+ 数值口径修复
+        //（NumFmt 舍入顺序 / Locale 归一），取 32。
+        versionCode = 32
+        versionName = "3.2.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
