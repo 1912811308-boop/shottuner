@@ -136,6 +136,7 @@ mkdir -p "$REPO/ios/ShotTuner" "$REPO/ios/Scripts" "$REPO/shared/src/iosMain/kot
 cat > "$REPO/ios/project.yml" <<'YAML'
 name: ShotTuner
 options:
+  projectFormat: xcode15_0
   deploymentTarget:
     iOS: "16.0"
 targets:
@@ -173,6 +174,10 @@ sed -i 's/CODE_SIGNING_ALLOWED: "YES"/CODE_SIGNING_ALLOWED: "NO"/' "$REPO/ios/pr
 sed -i 's/iOS: "16.0"/iOS: "16.1"/' "$REPO/ios/project.yml"
 expect fail "部署目标不是 16.0 → 规格门禁红" "$SPEC" "$REPO"
 sed -i 's/iOS: "16.1"/iOS: "16.0"/' "$REPO/ios/project.yml"
+
+sed -i 's/projectFormat: xcode15_0/projectFormat: xcode16_0/' "$REPO/ios/project.yml"
+expect fail "工程格式不是 xcode15_0 → 规格门禁红" "$SPEC" "$REPO"
+sed -i 's/projectFormat: xcode16_0/projectFormat: xcode15_0/' "$REPO/ios/project.yml"
 
 printf 'val x = 1\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
 rm -f "$REPO/shared/src/iosMain/kotlin/Seed.kt"

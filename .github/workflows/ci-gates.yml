@@ -188,25 +188,41 @@ jobs:
       #   所以兜底路径是：从 GitHub Releases 直接拉官方 zip（几 MB，秒级）。
       - name: 安装 XcodeGen
         run: |
-          set -euo pipefail
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "runner 已自带 XcodeGen：$(xcodegen --version)"
-            exit 0
+          set -uo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            if brew install xcodegen; then
+              echo "brew 安装成功"
+            else
+              echo "::warning::brew install xcodegen 失败 → 回退到 GitHub Releases 的官方二进制"
+              ZIP_URL="$(curl -fsSL https://api.github.com/repos/yonaskolb/XcodeGen/releases/latest \
+                | grep -o 'https://[^"]*xcodegen\.zip' | head -1)"
+              [ -n "$ZIP_URL" ] || { echo "::error::拿不到 XcodeGen 的下载地址"; exit 1; }
+              echo "下载：$ZIP_URL"
+              curl -fsSL -o /tmp/xcodegen.zip "$ZIP_URL"
+              rm -rf /tmp/xcodegen && mkdir -p /tmp/xcodegen
+              unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+              sudo install -m 0755 /tmp/xcodegen/bin/xcodegen /usr/local/bin/xcodegen
+            fi
           fi
-          if brew install xcodegen; then
-            echo "brew 安装成功：$(xcodegen --version)"
-            exit 0
-          fi
-          echo "::warning::brew install xcodegen 失败 → 回退到 GitHub Releases 的官方二进制"
-          ZIP_URL="$(curl -fsSL https://api.github.com/repos/yonaskolb/XcodeGen/releases/latest \
-            | grep -o 'https://[^"]*xcodegen\.zip' | head -1)"
-          [ -n "$ZIP_URL" ] || { echo "::error::拿不到 XcodeGen 的下载地址"; exit 1; }
-          echo "下载：$ZIP_URL"
-          curl -fsSL -o /tmp/xcodegen.zip "$ZIP_URL"
-          rm -rf /tmp/xcodegen && mkdir -p /tmp/xcodegen
-          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
-          sudo install -m 0755 /tmp/xcodegen/bin/xcodegen /usr/local/bin/xcodegen
           xcodegen --version
+          # ★ 版本断言：projectFormat 选项是 XcodeGen **2.45.0** 才加的。
+          #   版本太旧 → project.yml 里的 projectFormat 被忽略 → 生成 objectVersion 77
+          #   → runner 上的 Xcode 15.4 打不开 → 门禁永远红，
+          #   而那个报错看起来像「工程文件坏了」，排查成本极高。
+          VER="$(xcodegen --version | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+          MAJ="${VER%%.*}"
+          MIN="$(printf '%s' "$VER" | cut -d. -f2)"
+          if [ -z "$MAJ" ] || [ -z "$MIN" ] || [ "$MAJ" -lt 2 ] || { [ "$MAJ" -eq 2 ] && [ "$MIN" -lt 45 ]; }; then
+            echo "::error::XcodeGen 版本过低（${VER:-未知}）—— projectFormat 选项需要 >= 2.45"
+            exit 1
+          fi
+          echo "XcodeGen 版本 OK：$VER"
+
+      - name: 记录 Xcode 版本
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcode-select -p
 
       - name: 生成 Xcode 工程（xcodegen generate）
         run: |

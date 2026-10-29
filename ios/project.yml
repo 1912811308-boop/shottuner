@@ -35,6 +35,27 @@ name: ShotTuner
 
 options:
   bundleIdPrefix: com.shottuner
+
+  # ★ projectFormat：把工程文件格式**锁在 Xcode 15**。
+  #
+  #   为什么必须锁：
+  #     XcodeGen 2.45+ 默认生成 objectVersion = 77（Xcode 16 的工程格式），
+  #     而 macos-14 runner 上的默认 Xcode 是 **15.4** —— 打开会直接报：
+  #       "The project cannot be opened because it is in a future Xcode project
+  #        file format (77)."
+  #     ★ 这个报错**看起来像工程文件坏了**，但它只是格式版本对不上；
+  #       而且它会让整个 iOS 编译门禁变成「每次都红」，红一次的门禁等于没有门禁。
+  #
+  #   为什么锁 15 而不是升 Xcode：
+  #     本项目的 Kotlin 是 **1.9.24**，官方只测到 Xcode 15.x；
+  #     升到 Xcode 16 会让 Kotlin/Native 的链接步骤失败 —— 那是另一个更大的坑。
+  #     锁 15.0 的好处是**双向兼容**：Xcode 15 与 16 都能打开 objectVersion 60。
+  #
+  #   ★ 需要 XcodeGen >= 2.45（projectFormat 选项是 2.45.0 才加的）。
+  #     CI 里会显式断言版本，太旧就直接报错而不是让它悄悄生成 77。
+  projectFormat: xcode15_0
+  xcodeVersion: "15.0"
+
   deploymentTarget:
     # ★ 必须加引号：YAML 里裸的 16.0 会被解析成数字（float），
     #   XcodeGen 期望的是字符串。加引号是刻意的，不是随手写的。

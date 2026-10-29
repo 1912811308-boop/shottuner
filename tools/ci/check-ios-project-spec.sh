@@ -80,6 +80,16 @@ if ! grep -qE "^[[:space:]]*iOS:[[:space:]]*\"?16\.0\"?[[:space:]]*$" "$SPEC"; t
   violation "ios/project.yml" "部署目标必须是 iOS 16.0"
 fi
 
+# ── 2b) 工程文件格式：锁在 Xcode 15 ──────────────────────────────────────
+# ★ 为什么必须锁：
+#   XcodeGen 2.45+ 默认生成 objectVersion = 77（Xcode 16 格式），
+#   而 macos-14 runner 的默认 Xcode 是 15.4 —— 打开会报
+#   "future Xcode project file format (77)"，整个 iOS 编译门禁永远红。
+#   （实测踩过：2026-10-29 第一次跑 iOS 编译门禁就死在这里。）
+if ! grep -qE "^[[:space:]]*projectFormat:[[:space:]]*xcode15_0[[:space:]]*$" "$SPEC"; then
+  violation "ios/project.yml" "projectFormat 必须是 xcode15_0（工程文件格式锁在 Xcode 15，否则 runner 上的 Xcode 15.4 打不开）"
+fi
+
 # ── 3) 签名：CI 一律不签名 ────────────────────────────────────────────────
 # ★ 硬规则一：签名在设备端用侧载工具完成，CI 只出未签名产物。
 ALLOWED="$(setting_value "$SPEC" "CODE_SIGNING_ALLOWED")"

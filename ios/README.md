@@ -27,7 +27,7 @@
 `.xcodeproj` 是**生成物，不入库**（pbxproj 是合并地狱，而且这样没有 Mac 的工程师也能改工程结构）。
 
 ```bash
-# 需要 macOS + XcodeGen
+# 需要 macOS + XcodeGen >= 2.45
 brew install xcodegen          # 或从 https://github.com/yonaskolb/XcodeGen/releases 直接下
 
 cd ios
@@ -43,6 +43,26 @@ xcodegen generate --spec ios/project.yml --project ios
 
 > `project.yml` 里的相对路径（`sources: [ShotTuner]` 等）都以 **spec 文件所在目录**为基准，
 > 所以 `sources: [ShotTuner]` 指的是 `ios/ShotTuner/`。
+
+### ⚠️ 为什么 `project.yml` 里锁了 `projectFormat: xcode15_0`
+
+XcodeGen **2.45+ 默认生成 objectVersion = 77**（Xcode 16 的工程格式），
+而 macos-14 runner 上的默认 Xcode 是 **15.4** —— 打开会直接报：
+
+```
+The project 'ShotTuner' cannot be opened because it is in a future Xcode
+project file format (77).
+```
+
+★ 这个报错**看起来像工程文件坏了**，但它只是格式版本对不上。
+而且它会让整个 iOS 编译门禁变成「每次都红」—— **红一次的门禁等于没有门禁**。
+
+所以 `project.yml` 里显式锁 `projectFormat: xcode15_0`（objectVersion 60）：
+Xcode 15 与 16 都能打开，而本项目的 Kotlin 1.9.24 官方只测到 Xcode 15.x，
+升 Xcode 16 会让 Kotlin/Native 的链接步骤失败 —— 那是另一个更大的坑。
+
+> 连带要求：**XcodeGen 必须 >= 2.45**（`projectFormat` 选项是 2.45.0 才加的）。
+> CI 里会显式断言版本，太旧直接报错，而不是让它悄悄生成 77。
 
 ---
 
