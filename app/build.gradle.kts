@@ -16,9 +16,13 @@ android {
         // v3.0.0 是首个上架发布版（包名迁移到 com.shottuner.app + 正式签名），取 30。
         // v3.1.0 爆款化（G1 首屏任务卡 + G2 成绩水印 + G3 技法图鉴 + G4 分数历史），取 31。
         // v3.2.0 横屏可用（悬浮教练卡跟随物理方向 + 录屏画布等比例）+ 数值口径修复
-        //（NumFmt 舍入顺序 / Locale 归一），取 32。
-        versionCode = 32
-        versionName = "3.2.0"
+        //（NumFmt 舍入顺序 / Locale 归一），取 32 —— ★ 那是**内部迭代号，从未对外发布**。
+        // 对外发布版本从 1.0.0 起（clover 2026-10-29 决定：iOS 是新产品，
+        // 不该沿用内部迭代号；两端统一从 1.0.0 重新对外计数）。
+        // ★ versionCode **不能回退** —— 系统靠它判断能否覆盖安装，
+        //   已装过 31/32 的设备装不上 versionCode 更小的包。故内部取 33。
+        versionCode = 33
+        versionName = "1.0.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
