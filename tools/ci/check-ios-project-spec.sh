@@ -180,6 +180,19 @@ else
   fi
 fi
 
+# ── 10) iOS 的 shell 脚本必须语法正确 ──────────────────────────────────────
+# ★ 为什么这道断言不能少（实测踩过，2026-10-29）：
+#   Xcode 的 Run Script 阶段是用 /bin/sh 跑的，**语法错不会在 Xcode 里报友好的错**，
+#   而是表现为「构建莫名失败」或「脚本根本没执行」——
+#   排查时第一反应是去查 Gradle / Xcode，而不是去看那个 .sh，方向一开始就错了。
+#   `bash -n` 只做语法检查、不执行，Linux runner 上是秒级的。
+for SCRIPT in "$ROOT"/ios/Scripts/*.sh; do
+  [ -f "$SCRIPT" ] || continue
+  SYNTAX_ERR="$(bash -n "$SCRIPT" 2>&1)" || {
+    violation "${SCRIPT#"$ROOT"/}" "shell 脚本语法错误：${SYNTAX_ERR:-（无输出）}"
+  }
+done
+
 if [ "$VIOLATIONS" -gt 0 ]; then
   ci_log ""
   ci_log "✗ iOS 工程规格自检未通过：$VIOLATIONS 处违规"

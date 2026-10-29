@@ -1,12 +1,12 @@
 package com.shottuner.app.knowledge
 
 import com.shottuner.app.model.SceneType
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * 匹配器的三条 v1.5 约束 + 新分类文案。
@@ -22,25 +22,25 @@ class TechniqueMatcherTest {
     @Test
     fun photoPoolExcludesCameraMove() {
         val pool = TechniqueMatcher.poolFor(PromptEngine.TAB_PHOTO)
-        assertTrue("拍照页候选池不能为空", pool.isNotEmpty())
+        assertTrue(pool.isNotEmpty(), "拍照页候选池不能为空")
         val moves = pool.filter { it.category == TechCategory.CAMERA_MOVE }
-        assertTrue("拍照页不该出现运镜条目：${moves.map { it.id }}", moves.isEmpty())
+        assertTrue(moves.isEmpty(), "拍照页不该出现运镜条目：${moves.map { it.id }}")
     }
 
     @Test
     fun videoPoolOnlyAllowsMoveOrUniversal() {
         val pool = TechniqueMatcher.poolFor(PromptEngine.TAB_VIDEO)
-        assertTrue("录像页候选池不能为空", pool.isNotEmpty())
+        assertTrue(pool.isNotEmpty(), "录像页候选池不能为空")
         val offenders = pool.filter { tech ->
             tech.category != TechCategory.CAMERA_MOVE && tech.trigger.scenes.isNotEmpty()
         }
         assertTrue(
-            "录像页只允许运镜 + 通用条目，这些是场景专用条：${offenders.map { it.id }}",
-            offenders.isEmpty()
+            offenders.isEmpty(),
+            "录像页只允许运镜 + 通用条目，这些是场景专用条：${offenders.map { it.id }}"
         )
         assertTrue(
-            "录像页必须包含运镜条目",
-            pool.any { it.category == TechCategory.CAMERA_MOVE }
+            pool.any { it.category == TechCategory.CAMERA_MOVE },
+            "录像页必须包含运镜条目"
         )
     }
 
@@ -56,15 +56,15 @@ class TechniqueMatcherTest {
         )
         val photo = TechniqueMatcher.suggest(SceneType.PORTRAIT, signals, tab = PromptEngine.TAB_PHOTO)
         assertFalse(
-            "拍照页建议里不能有运镜",
-            photo.any { it.category == TechCategory.CAMERA_MOVE }
+            photo.any { it.category == TechCategory.CAMERA_MOVE },
+            "拍照页建议里不能有运镜"
         )
 
         val video = TechniqueMatcher.suggest(SceneType.PORTRAIT, signals, tab = PromptEngine.TAB_VIDEO)
         for (tech in video) {
             assertTrue(
-                "录像页建议只能是运镜或通用条，拿到 ${tech.id}",
-                tech.category == TechCategory.CAMERA_MOVE || tech.trigger.scenes.isEmpty()
+                tech.category == TechCategory.CAMERA_MOVE || tech.trigger.scenes.isEmpty(),
+                "录像页建议只能是运镜或通用条，拿到 ${tech.id}"
             )
         }
     }
@@ -84,7 +84,7 @@ class TechniqueMatcherTest {
             for (scene in SceneType.values()) {
                 val picked = TechniqueMatcher.suggest(scene, signals, limit = 8, tab = tab)
                 for (tech in picked) {
-                    assertFalse("$tab/$scene 推了 ${tech.id}", tech.id in banned)
+                    assertFalse(tech.id in banned, "$tab/$scene 推了 ${tech.id}")
                 }
             }
         }
@@ -99,24 +99,24 @@ class TechniqueMatcherTest {
 
         val move = techniqueOf("move_elbow_tucked")
         val moveReason = TechniqueMatcher.reasonFor(move, noSignal)
-        assertEquals("运镜条的兜底文案", "运镜先解决稳，再谈好看", moveReason)
-        assertFalse("运镜条不能退化成通用提醒", moveReason == generic)
+        assertEquals("运镜先解决稳，再谈好看", moveReason, "运镜条的兜底文案")
+        assertFalse(moveReason == generic, "运镜条不能退化成通用提醒")
 
         val params = techniqueOf("params_white_balance_mood")
-        assertEquals("参数条的兜底文案", "按这套起手参数去拨", TechniqueMatcher.reasonFor(params, noSignal))
+        assertEquals("按这套起手参数去拨", TechniqueMatcher.reasonFor(params, noSignal), "参数条的兜底文案")
 
         val pitfall = techniqueOf("pitfall_grid_on")
         assertEquals(
-            "避坑条的兜底文案",
             "这条是习惯问题，改一次长期受益",
-            TechniqueMatcher.reasonFor(pitfall, noSignal)
+            TechniqueMatcher.reasonFor(pitfall, noSignal),
+            "避坑条的兜底文案"
         )
 
         val selfie = techniqueOf("selfie_arm_extended")
         assertEquals(
-            "自拍条在没肤色时给分类文案",
             "自拍专用的距离和机位",
-            TechniqueMatcher.reasonFor(selfie, noSignal)
+            TechniqueMatcher.reasonFor(selfie, noSignal),
+            "自拍条在没肤色时给分类文案"
         )
     }
 
@@ -131,8 +131,8 @@ class TechniqueMatcherTest {
         val nightTech = techniqueOf("night_protect_highlights")
         val blown = TechSignals(highlightClip = 0.25f, hasStats = true)
         val reason = TechniqueMatcher.reasonFor(nightTech, blown)
-        assertTrue("应包含高光溢出比例，实际：$reason", reason.contains("高光溢出"))
-        assertTrue("应包含具体百分比，实际：$reason", reason.contains("25%"))
+        assertTrue(reason.contains("高光溢出"), "应包含高光溢出比例，实际：$reason")
+        assertTrue(reason.contains("25%"), "应包含具体百分比，实际：$reason")
     }
 
     // ── v1.5 新增的两个触发条件 ────────────────────────────────────────────────
@@ -142,14 +142,14 @@ class TechniqueMatcherTest {
         val dark = synthetic(minShadowClip = 0.30f)
         val signals = TechSignals(meanLuma = 0.5f, shadowClip = 0.10f, hasStats = true)
         assertNull(
-            "暗部没死黑时不该命中",
-            TechniqueMatcher.scoreOf(dark, SceneType.GENERAL, signals)
+            TechniqueMatcher.scoreOf(dark, SceneType.GENERAL, signals),
+            "暗部没死黑时不该命中"
         )
 
         val veryDark = TechSignals(meanLuma = 0.5f, shadowClip = 0.45f, hasStats = true)
         val score = TechniqueMatcher.scoreOf(dark, SceneType.GENERAL, veryDark)
-        assertNotNull("暗部死黑时必须命中", score)
-        assertTrue("命中后要吃掉条件加分", score!! > dark.trigger.weight)
+        assertNotNull(score, "暗部死黑时必须命中")
+        assertTrue(score!! > dark.trigger.weight, "命中后要吃掉条件加分")
 
         // 反向：两个方向都要在文案里说得出来
         assertTrue(
@@ -163,14 +163,14 @@ class TechniqueMatcherTest {
 
         val tooBright = TechSignals(meanLuma = 0.6f, highlightClip = 0.30f, hasStats = true)
         assertNull(
-            "高光已经溢出时不该再谈「压得住高光」",
-            TechniqueMatcher.scoreOf(capped, SceneType.GENERAL, tooBright)
+            TechniqueMatcher.scoreOf(capped, SceneType.GENERAL, tooBright),
+            "高光已经溢出时不该再谈「压得住高光」"
         )
 
         val safe = TechSignals(meanLuma = 0.6f, highlightClip = 0.02f, hasStats = true)
         assertNotNull(
-            "高光还压得住时应该命中",
-            TechniqueMatcher.scoreOf(capped, SceneType.GENERAL, safe)
+            TechniqueMatcher.scoreOf(capped, SceneType.GENERAL, safe),
+            "高光还压得住时应该命中"
         )
         assertTrue(TechniqueMatcher.reasonFor(capped, safe).contains("高光还压得住"))
     }
@@ -181,9 +181,9 @@ class TechniqueMatcherTest {
         val inScene = TechniqueMatcher.scoreOf(universal, SceneType.NIGHT, TechSignals(hasStats = true))
         val outScene = TechniqueMatcher.scoreOf(universal, SceneType.GENERAL, TechSignals(hasStats = true))
         assertEquals(
-            "通用条在任何场景都应命中，且得分相同",
             inScene,
-            outScene
+            outScene,
+            "通用条在任何场景都应命中，且得分相同"
         )
 
         val nightOnly = techniqueOf("night_iso_ceiling")
@@ -192,14 +192,14 @@ class TechniqueMatcherTest {
         val plain = TechniqueMatcher.scoreOf(nightOnly, SceneType.GENERAL, nightSignals)
         assertNotNull(boosted)
         assertNotNull(plain)
-        assertTrue("命中场景要加分", boosted!! > plain!!)
+        assertTrue(boosted!! > plain!!, "命中场景要加分")
     }
 
     // ── 小工具 ─────────────────────────────────────────────────────────────────
 
     private fun techniqueOf(id: String): Technique {
         val tech = TechniqueBookV15.byId[id]
-        assertNotNull("技法库里没有 $id", tech)
+        assertNotNull(tech, "技法库里没有 $id")
         return tech!!
     }
 

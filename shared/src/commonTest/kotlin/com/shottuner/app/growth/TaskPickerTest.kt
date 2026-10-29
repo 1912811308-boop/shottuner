@@ -6,11 +6,11 @@ import com.shottuner.app.analysis.ScoreDimension
 import com.shottuner.app.model.CompositionHint
 import com.shottuner.app.model.FrameStats
 import com.shottuner.app.model.SceneType
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * 任务选择器测试。
@@ -146,8 +146,8 @@ class TaskPickerTest {
             Triple(0.6667f, 0.6667f, "右下")
         )
         for ((targetX, targetY, expected) in quadrants) {
-            assertEquals("$targetX,$targetY", expected, TaskPicker.whereLabel(targetX, targetY))
-            assertEquals("必须与 ScoreBoard 同一份实现", expected, ScoreBoard.whereLabel(targetX, targetY))
+            assertEquals(expected, TaskPicker.whereLabel(targetX, targetY), "$targetX,$targetY")
+            assertEquals(expected, ScoreBoard.whereLabel(targetX, targetY), "必须与 ScoreBoard 同一份实现")
 
             // 与 ScoreBoard.buildRecommendations 对同一 hint 产出的方位词一致（防两处走样）
             val result = ScoreBoard.score(
@@ -164,7 +164,7 @@ class TaskPickerTest {
                 scene = SceneType.LANDSCAPE
             )
             val rec = result.recommendations.first { it.tipId == "portrait_eyes_thirds" }
-            assertTrue("任务卡与建议的方位词必须一致：${rec.text}", rec.text.contains(expected))
+            assertTrue(rec.text.contains(expected), "任务卡与建议的方位词必须一致：${rec.text}")
         }
     }
 
@@ -173,8 +173,8 @@ class TaskPickerTest {
     @Test
     fun compositionBelowTriggerIsNotDispatched() {
         val s = sampleAtDistance(d = 0.10f)
-        assertTrue("d 必须真的低于 TRIGGER_D", TaskPicker.distToTarget(s.hint, s.aspect) < MissionThresholds.TRIGGER_D)
-        assertNull("主体本来就在圈附近，不值得出任务", TaskPicker.pick(s.recs, s, emptyMap()))
+        assertTrue(TaskPicker.distToTarget(s.hint, s.aspect) < MissionThresholds.TRIGGER_D, "d 必须真的低于 TRIGGER_D")
+        assertNull(TaskPicker.pick(s.recs, s, emptyMap()), "主体本来就在圈附近，不值得出任务")
     }
 
     @Test
@@ -185,14 +185,14 @@ class TaskPickerTest {
         assertEquals(TaskKind.COMPOSITION, task!!.kind)
         assertEquals("portrait_eyes_thirds", task.tipId)
         assertEquals(ScoreDimension.COMPOSITION, task.dimension)
-        assertTrue("主句要带方位：${task.title}", task.title.contains("右上"))
+        assertTrue(task.title.contains("右上"), "主句要带方位：${task.title}")
     }
 
     @Test
     fun compositionBeyondGiveupIsNotDispatched() {
         val s = sampleAtDistance(d = 0.60f)
-        assertTrue("d 必须真的高于 GIVEUP_D", TaskPicker.distToTarget(s.hint, s.aspect) > MissionThresholds.GIVEUP_D)
-        assertNull("主体在对角，15 秒内做不到", TaskPicker.pick(s.recs, s, emptyMap()))
+        assertTrue(TaskPicker.distToTarget(s.hint, s.aspect) > MissionThresholds.GIVEUP_D, "d 必须真的高于 GIVEUP_D")
+        assertNull(TaskPicker.pick(s.recs, s, emptyMap()), "主体在对角，15 秒内做不到")
     }
 
     @Test
@@ -202,7 +202,7 @@ class TaskPickerTest {
             subjectY = TARGET_Y + 0.20f / ASPECT,
             subjectConfidence = 0.20f
         )
-        assertNull("置信度低于 0.30 是在指挥噪声", TaskPicker.pick(s.recs, s, emptyMap()))
+        assertNull(TaskPicker.pick(s.recs, s, emptyMap()), "置信度低于 0.30 是在指挥噪声")
     }
 
     // ── 6~7. 白名单过滤 ────────────────────────────────────────────────────────
@@ -211,7 +211,7 @@ class TaskPickerTest {
     fun ineligibleFirstRecIsSkipped() {
         val s = sampleAtDistance(d = 0.20f, recs = listOf(REC_STEADY, REC_EYES))
         val task = TaskPicker.pick(s.recs, s, emptyMap())
-        assertNotNull("第一条不可完成 → 跳过选下一条", task)
+        assertNotNull(task, "第一条不可完成 → 跳过选下一条")
         assertEquals("portrait_eyes_thirds", task!!.tipId)
         assertEquals(TaskKind.COMPOSITION, task.kind)
     }
@@ -228,7 +228,7 @@ class TaskPickerTest {
     @Test
     fun headroomNeedsSkinRatio() {
         val lowSkin = sample(recs = listOf(REC_HEADROOM), skinRatio = 0.03f, subjectTop = 0.05f)
-        assertNull("没有肤色时不能把天空当头顶", TaskPicker.pick(lowSkin.recs, lowSkin, emptyMap()))
+        assertNull(TaskPicker.pick(lowSkin.recs, lowSkin, emptyMap()), "没有肤色时不能把天空当头顶")
 
         val withSkin = sample(recs = listOf(REC_HEADROOM), skinRatio = 0.10f, subjectTop = 0.05f)
         val task = TaskPicker.pick(withSkin.recs, withSkin, emptyMap())
@@ -243,16 +243,16 @@ class TaskPickerTest {
     fun coolingDownTipIsSkipped() {
         val recs = listOf(REC_EYES, REC_HEADROOM)
         val s = sample(recs = recs, skinRatio = 0.10f, subjectTop = 0.05f)   // 两条都可行
-        assertEquals("不冷却时取第一条", "portrait_eyes_thirds", TaskPicker.pick(s.recs, s, emptyMap())?.tipId)
+        assertEquals("portrait_eyes_thirds", TaskPicker.pick(s.recs, s, emptyMap())?.tipId, "不冷却时取第一条")
 
         val cooled = mapOf("portrait_eyes_thirds" to NOW + 10_000L)
-        assertEquals("冷却中的 tipId 必须被跳过", "portrait_headroom", TaskPicker.pick(s.recs, s, cooled)?.tipId)
+        assertEquals("portrait_headroom", TaskPicker.pick(s.recs, s, cooled)?.tipId, "冷却中的 tipId 必须被跳过")
 
         val bothCooled = mapOf(
             "portrait_eyes_thirds" to NOW + 10_000L,
             "portrait_headroom" to NOW + 10_000L
         )
-        assertNull("全在冷却 → 不派发", TaskPicker.pick(s.recs, s, bothCooled))
+        assertNull(TaskPicker.pick(s.recs, s, bothCooled), "全在冷却 → 不派发")
     }
 
     // ── 10. 文案长度 ───────────────────────────────────────────────────────────
@@ -272,12 +272,12 @@ class TaskPickerTest {
         )!!
 
         for (task in listOf(composition, level, headroom)) {
-            assertTrue("主句不能为空", task.title.isNotEmpty())
-            assertTrue("主句 ≤10 字：${task.title}(${task.title.length})", task.title.length <= 10)
-            assertTrue("副句不能为空", task.hint.isNotEmpty())
-            assertTrue("副句 ≤16 字：${task.hint}(${task.hint.length})", task.hint.length <= 16)
-            assertTrue("技法短名不能为空", task.skillName.isNotEmpty())
-            assertTrue("技法短名 ≤5 字：${task.skillName}", task.skillName.length <= 5)
+            assertTrue(task.title.isNotEmpty(), "主句不能为空")
+            assertTrue(task.title.length <= 10, "主句 ≤10 字：${task.title}(${task.title.length})")
+            assertTrue(task.hint.isNotEmpty(), "副句不能为空")
+            assertTrue(task.hint.length <= 16, "副句 ≤16 字：${task.hint}(${task.hint.length})")
+            assertTrue(task.skillName.isNotEmpty(), "技法短名不能为空")
+            assertTrue(task.skillName.length <= 5, "技法短名 ≤5 字：${task.skillName}")
         }
 
         assertEquals("把手机端平", level.title)

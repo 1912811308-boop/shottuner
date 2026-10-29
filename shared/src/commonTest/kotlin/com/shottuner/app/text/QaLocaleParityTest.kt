@@ -3,9 +3,9 @@ package com.shottuner.app.text
 import com.shottuner.app.model.Recommendation
 import com.shottuner.app.model.SceneType
 import com.shottuner.app.video.VideoRecommender
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.Test
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -153,7 +153,7 @@ class QaLocaleParityTest {
             val n = newFormatEv(v)
             if (o != n) mismatches += "ev=$v → 旧:$o 新:$n"
         }
-        assertEquals("曝光补偿文案逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "曝光补偿文案逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     // ── 2. 快门标签（Recommendation.shutterLabel）───────────────────────────
@@ -175,7 +175,7 @@ class QaLocaleParityTest {
             val n = newShutterLabel(ns)
             if (o != n) mismatches += "shutterNs=$ns → 旧:$o 新:$n"
         }
-        assertEquals("快门标签逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "快门标签逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     @Test
@@ -195,8 +195,8 @@ class QaLocaleParityTest {
             if (o != n) mismatches += "sec=$sec (ns=$ns) → 旧:$o 新:$n"
         }
         assertEquals(
-            "快门分母与 Math.round 不一致（1/x 半值边界）：\n" + mismatches.joinToString("\n"),
-            0, mismatches.size
+            0,
+            mismatches.size, "快门分母与 Math.round 不一致（1/x 半值边界）：\n" + mismatches.joinToString("\n")
         )
     }
 
@@ -209,10 +209,10 @@ class QaLocaleParityTest {
         )
         for (ns in probes) {
             val sec = ns / 1_000_000_000.0
-            assertTrue("sec 必须为正，ns=$ns sec=$sec", sec > 0.0)
+            assertTrue(sec > 0.0, "sec 必须为正，ns=$ns sec=$sec")
             val label = newShutterLabel(ns)
-            assertTrue("快门标签不该出现负号，ns=$ns → $label", !label.contains("-"))
-            assertTrue("快门标签格式异常，ns=$ns → $label", label == "--" || label.startsWith("1/") || label.endsWith("s"))
+            assertTrue(!label.contains("-"), "快门标签不该出现负号，ns=$ns → $label")
+            assertTrue(label == "--" || label.startsWith("1/") || label.endsWith("s"), "快门标签格式异常，ns=$ns → $label")
         }
         // shutterNs <= 0 的短路分支
         assertEquals("--", newShutterLabel(0L))
@@ -229,7 +229,7 @@ class QaLocaleParityTest {
             val n = VideoRecommender.shutterLabel(fps)
             if (o != n) mismatches += "fps=$fps → 旧:$o 新:$n"
         }
-        assertEquals("视频快门标签逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "视频快门标签逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     @Test
@@ -256,7 +256,7 @@ class QaLocaleParityTest {
             val n = newTiltTip(t)
             if (o != n) mismatches += "tilt=$t → 旧:$o 新:$n"
         }
-        assertEquals("倾斜角文案逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "倾斜角文案逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     @Test
@@ -271,7 +271,7 @@ class QaLocaleParityTest {
             val n = newPct(v)
             if (o != n) mismatches += "pct=$v → 旧:$o 新:$n"
         }
-        assertEquals("百分比逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "百分比逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     @Test
@@ -289,7 +289,7 @@ class QaLocaleParityTest {
             val n = newLensLabel(f, a, m)
             if (o != n) mismatches += "f=$f a=$a mp=$m → 旧:$o 新:$n"
         }
-        assertEquals("镜头标签逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "镜头标签逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     @Test
@@ -305,7 +305,7 @@ class QaLocaleParityTest {
             val n = newLevelReading(roll, pitch)
             if (o != n) mismatches += "roll=$roll pitch=$pitch → 旧:$o 新:$n"
         }
-        assertEquals("LevelReading.toString 逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "LevelReading.toString 逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     /**
@@ -325,8 +325,8 @@ class QaLocaleParityTest {
      */
     @Test
     fun negativeZeroIsNormalizedOnPurpose() {
-        assertEquals("旧实现应给负零（作为对照）", "LevelReading(roll=-0.00, pitch=0.00)", oldLevelReading(-0.0f, 0.0f))
-        assertEquals("新实现应把负零归一", "LevelReading(roll=0.00, pitch=0.00)", newLevelReading(-0.0f, 0.0f))
+        assertEquals("LevelReading(roll=-0.00, pitch=0.00)", oldLevelReading(-0.0f, 0.0f), "旧实现应给负零（作为对照）")
+        assertEquals("LevelReading(roll=0.00, pitch=0.00)", newLevelReading(-0.0f, 0.0f), "新实现应把负零归一")
     }
 
     @Test
@@ -342,7 +342,7 @@ class QaLocaleParityTest {
                 "同样亮度下噪点明显更多。宁可拍完再用主摄裁切"
             if (o != n) mismatches += "ratio=$ratio stops=$stops →\n  旧:$o\n  新:$n"
         }
-        assertEquals("长焦档位文案逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "长焦档位文案逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     @Test
@@ -357,7 +357,7 @@ class QaLocaleParityTest {
             val n = if (ns / 1e9 >= 1.0) NumFmt.fixed(ns / 1e9, 0) + "s" else "1/${(1.0 / (ns / 1e9)).roundToInt()}s"
             if (o != n) mismatches += "ns=$ns → 旧:$o 新:$n"
         }
-        assertEquals("长曝光秒数逐字不一致：\n" + mismatches.joinToString("\n"), 0, mismatches.size)
+        assertEquals(0, mismatches.size, "长曝光秒数逐字不一致：\n" + mismatches.joinToString("\n"))
     }
 
     // ── 4. 原 bug 确实被修掉了（德语区 / 法语区）────────────────────────────
@@ -369,10 +369,10 @@ class QaLocaleParityTest {
             for (loc in listOf(Locale.GERMANY, Locale.FRANCE)) {
                 Locale.setDefault(loc)
                 // 旧实现在这里会输出 "1,5"
-                assertEquals("德/法语区 EV 文案仍含逗号", "+1.5", newFormatEv(1.5f))
-                assertEquals("德/法语区 镜头文案仍含逗号", "24mm · 12.2MP", newLensLabel(24, 0f, 12.2f))
-                assertEquals("德/法语区 百分比仍含逗号", "50", newPct(0.5f))
-                assertEquals("德/法语区 快门标签仍含逗号", "1/60", newShutterLabel(16_666_667L))
+                assertEquals("+1.5", newFormatEv(1.5f), "德/法语区 EV 文案仍含逗号")
+                assertEquals("24mm · 12.2MP", newLensLabel(24, 0f, 12.2f), "德/法语区 镜头文案仍含逗号")
+                assertEquals("50", newPct(0.5f), "德/法语区 百分比仍含逗号")
+                assertEquals("1/60", newShutterLabel(16_666_667L), "德/法语区 快门标签仍含逗号")
             }
         } finally {
             Locale.setDefault(original)

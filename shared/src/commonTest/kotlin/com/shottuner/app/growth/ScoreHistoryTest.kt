@@ -1,11 +1,11 @@
 package com.shottuner.app.growth
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * 分数历史测试（G4）。
@@ -73,12 +73,12 @@ class ScoreHistoryTest {
     fun unmeasuredDimension_isStoredAsNull_notZero() {
         val r = record(timestamp = 1000L, composition = null)
 
-        assertNull("未测的构图必须是 null，不能是 0", r.composition)
+        assertNull(r.composition, "未测的构图必须是 null，不能是 0")
         assertEquals(20, r.level)
         assertEquals(24, r.exposure)
         assertEquals(14, r.clarity)
         // 任一维未测 → 总分 null（UI 口径「参考分 --」）
-        assertNull("有维度未测时 total 必须是 null", r.total)
+        assertNull(r.total, "有维度未测时 total 必须是 null")
     }
 
     @Test
@@ -115,7 +115,7 @@ class ScoreHistoryTest {
         val json = history.toJson()
         val restored = ScoreHistory.fromJson(json)
 
-        assertEquals("往返后条数必须一致", 3, restored.size())
+        assertEquals(3, restored.size(), "往返后条数必须一致")
         assertEquals(history.all(), restored.all())
         assertEquals(100, restored.all()[1].total)
         assertEquals(0, restored.all()[2].level)
@@ -131,7 +131,7 @@ class ScoreHistoryTest {
         assertTrue(json.startsWith("{"))
         assertTrue(json.contains("\"records\":["))
         assertTrue(json.contains("\"t\":1700000000000"))
-        assertFalse("null 字段必须整体省略，不能写成 0 或 null 字面量", json.contains("clarity"))
+        assertFalse(json.contains("clarity"), "null 字段必须整体省略，不能写成 0 或 null 字面量")
     }
 
     // 4. 损坏 JSON → 空列表，不抛异常
@@ -152,8 +152,8 @@ class ScoreHistoryTest {
         for (text in broken) {
             var error: String? = null
             val history = ScoreHistory.fromJson(text) { error = it }
-            assertEquals("损坏输入必须降级为空历史：$text", 0, history.size())
-            assertNotNull("损坏输入必须回调 onError 以便记 Diag.w：$text", error)
+            assertEquals(0, history.size(), "损坏输入必须降级为空历史：$text")
+            assertNotNull(error, "损坏输入必须回调 onError 以便记 Diag.w：$text")
         }
     }
 
@@ -172,11 +172,11 @@ class ScoreHistoryTest {
 
     @Test
     fun firstVsBest_returnsNullBelowTwoRecords() {
-        assertNull("0 条记录不能出成长摘要", ScoreHistory.empty().firstVsBest())
+        assertNull(ScoreHistory.empty().firstVsBest(), "0 条记录不能出成长摘要")
 
         val one = ScoreHistory.empty()
         one.add(record(1000L))
-        assertNull("1 条记录不能出成长摘要", one.firstVsBest())
+        assertNull(one.firstVsBest(), "1 条记录不能出成长摘要")
     }
 
     @Test
@@ -197,8 +197,8 @@ class ScoreHistoryTest {
 
         val summary = history.firstVsBest()
         assertNotNull(summary)
-        assertNull("首张未测时 firstTotal 必须是 null", summary!!.firstTotal)
-        assertNull("起点是「--」，delta 绝不能是数字", summary.delta)
+        assertNull(summary!!.firstTotal, "首张未测时 firstTotal 必须是 null")
+        assertNull(summary.delta, "起点是「--」，delta 绝不能是数字")
         assertEquals(20 + 24 + 18 + 14, summary.bestTotal)
         assertEquals(2, summary.shotCount)
     }
@@ -212,7 +212,7 @@ class ScoreHistoryTest {
         val summary = history.firstVsBest()
         assertNotNull(summary)
         assertNull(summary!!.firstTotal)
-        assertNull("一条有分记录都没有时 bestTotal 必须是 null", summary.bestTotal)
+        assertNull(summary.bestTotal, "一条有分记录都没有时 bestTotal 必须是 null")
         assertNull(summary.delta)
     }
 
@@ -229,7 +229,7 @@ class ScoreHistoryTest {
         assertNotNull(summary)
         assertEquals(61, summary!!.firstTotal)
         assertEquals(79, summary.bestTotal)
-        assertEquals("79 - 61 必须等于 18", 18, summary.delta)
+        assertEquals(18, summary.delta, "79 - 61 必须等于 18")
         assertEquals(3, summary.shotCount)
     }
 

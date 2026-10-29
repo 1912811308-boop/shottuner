@@ -1,10 +1,10 @@
 package com.shottuner.app.coach
 
 import com.shottuner.app.model.CompositionHint
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * 机位教练规则单测（纯 JVM，不依赖 Robolectric）。
@@ -47,8 +47,8 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             24
         )
-        assertTrue("全身照脸偏上时必须给建议", out.isNotEmpty())
-        assertTrue("应提示蹲下，实际：${titles(out)}", titles(out).contains("蹲下"))
+        assertTrue(out.isNotEmpty(), "全身照脸偏上时必须给建议")
+        assertTrue(titles(out).contains("蹲下"), "应提示蹲下，实际：${titles(out)}")
         assertEquals("T01", out.first().code)
     }
 
@@ -60,7 +60,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             24
         )
-        assertTrue("脚被裁掉时应提示退半步，实际：${titles(out)}", titles(out).contains("退半步"))
+        assertTrue(titles(out).contains("退半步"), "脚被裁掉时应提示退半步，实际：${titles(out)}")
     }
 
     @Test
@@ -71,7 +71,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             24
         )
-        assertTrue("脸在中心、脚在底边应确认，实际：${titles(out)}", titles(out).contains("对了"))
+        assertTrue(titles(out).contains("对了"), "脸在中心、脚在底边应确认，实际：${titles(out)}")
         assertEquals(0, out.first().severity)
     }
 
@@ -83,7 +83,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             24
         )
-        assertTrue("广角 + 脸贴边应提示往中间挪，实际：${titles(out)}", titles(out).contains("靠边"))
+        assertTrue(titles(out).contains("靠边"), "广角 + 脸贴边应提示往中间挪，实际：${titles(out)}")
         assertEquals(2, out.first().severity)
     }
 
@@ -95,7 +95,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             24
         )
-        assertFalse("脸在中间不该报贴边，实际：${titles(out)}", titles(out).contains("靠边"))
+        assertFalse(titles(out).contains("靠边"), "脸在中间不该报贴边，实际：${titles(out)}")
     }
 
     @Test
@@ -112,8 +112,8 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             24
         )
-        assertFalse("0.18 恰好是安全边界，不该触发", titles(inside).contains("靠边"))
-        assertTrue("0.17 已越过安全边界，应触发", titles(outside).contains("靠边"))
+        assertFalse(titles(inside).contains("靠边"), "0.18 恰好是安全边界，不该触发")
+        assertTrue(titles(outside).contains("靠边"), "0.17 已越过安全边界，应触发")
     }
 
     @Test
@@ -124,7 +124,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             50
         )
-        assertFalse("长焦不该报广角透视变形，实际：${titles(out)}", titles(out).contains("靠边"))
+        assertFalse(titles(out).contains("靠边"), "长焦不该报广角透视变形，实际：${titles(out)}")
     }
 
     @Test
@@ -135,7 +135,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             50
         )
-        assertTrue("底边 0.48 应提示切腰，实际：${titles(out)}", titles(out).contains("腰"))
+        assertTrue(titles(out).contains("腰"), "底边 0.48 应提示切腰，实际：${titles(out)}")
     }
 
     @Test
@@ -146,7 +146,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             50
         )
-        assertTrue("底边 0.67 应提示切膝，实际：${titles(out)}", titles(out).contains("膝盖"))
+        assertTrue(titles(out).contains("膝盖"), "底边 0.67 应提示切膝，实际：${titles(out)}")
     }
 
     @Test
@@ -158,8 +158,8 @@ class FramingCoachTest {
             50
         )
         assertFalse(
-            "底边 0.55 不在关节禁区，实际：${titles(out)}",
-            titles(out).contains("膝盖") || titles(out).contains("腰上")
+            titles(out).contains("膝盖") || titles(out).contains("腰上"),
+            "底边 0.55 不在关节禁区，实际：${titles(out)}"
         )
     }
 
@@ -171,7 +171,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             50
         )
-        assertTrue("朝右且人在右侧应建议左三分线，实际：${titles(out)}", titles(out).contains("左三分线"))
+        assertTrue(titles(out).contains("左三分线"), "朝右且人在右侧应建议左三分线，实际：${titles(out)}")
     }
 
     @Test
@@ -182,7 +182,7 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             50
         )
-        assertFalse("正对镜头不该建议三分线，实际：${titles(out)}", titles(out).contains("三分线"))
+        assertFalse(titles(out).contains("三分线"), "正对镜头不该建议三分线，实际：${titles(out)}")
     }
 
     @Test
@@ -208,6 +208,6 @@ class FramingCoachTest {
             CompositionHint.EMPTY,
             24
         )
-        assertTrue("最多两条，实际 ${out.size}", out.size <= 2)
+        assertTrue(out.size <= 2, "最多两条，实际 ${out.size}")
     }
 }

@@ -123,12 +123,22 @@ log "开始产出 framework（target=$KMP_TARGET variant=$KMP_VARIANT configurat
 #   （实测踩过：写死 embedAndSignAppleFrameworkForXcode → "task not found"，
 #     真实名字里带着 framework 名。）
 #   所以这里直接问 Gradle 要任务列表，取名字里含 AppleFrameworkForXcode 的那个。
-EMBED_TASKS="$(run_gradle ":shared:tasks" --all $GRADLE_FLAGS 2>/dev/null \
-    | grep -oE '[A-Za-z0-9_]*AppleFrameworkForXcode' \
+#
+#   ★ 优先挑 embedAndSign 那个（它既打包到 xcode-frameworks/ 又嵌入 .app）；
+#     没有才退化到 assemble 那个（只负责打包）——
+#     嵌入这一步由 kmp-embed-framework.sh 兜底，两条路都不会漏。
+TASK_LIST="$(run_gradle ":shared:tasks" --all $GRADLE_FLAGS 2>/dev/null)"
+EMBED_TASKS="$(printf '%s\n' "$TASK_LIST" \
+    | grep -oE '[A-Za-z0-9_]*embedAndSign[A-Za-z0-9_]*AppleFrameworkForXcode' \
     | sort -u)"
+if [ -z "$EMBED_TASKS" ]; then
+    EMBED_TASKS="$(printf '%s\n' "$TASK_LIST" \
+        | grep -oE '[A-Za-z0-9_]*assemble[A-Za-z0-9_]*AppleFrameworkForXcode' \
+        | sort -u)"
+fi
 
 if [ -z "$EMBED_TASKS" ]; then
-    fail "shared 模块没有 embedAndSign 任务 —— 检查 shared/build.gradle.kts 里有没有声明 binaries.framework { baseName = \"$FRAMEWORK_NAME\" }"
+    fail "shared 模块没有 Apple framework 任务 —— 检查 shared/build.gradle.kts 里有没有声明 binaries.framework { baseName = \"$FRAMEWORK_NAME\" }"
 fi
 
 EMBED_OK=0

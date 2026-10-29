@@ -3,11 +3,11 @@ package com.shottuner.app.analysis
 import com.shottuner.app.model.CompositionHint
 import com.shottuner.app.model.FrameStats
 import com.shottuner.app.model.SceneType
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * 四维参考分测试。
@@ -85,7 +85,7 @@ class ScoreBoardTest {
             roll = 0f,
             scene = SceneType.LANDSCAPE
         )
-        assertEquals("四个维度都满分应得 100", 100, result.total)
+        assertEquals(100, result.total, "四个维度都满分应得 100")
         assertEquals("优秀", result.grade)
         assertEquals(4, result.dimensions.size)
         assertEquals(
@@ -110,8 +110,8 @@ class ScoreBoardTest {
         assertEquals(result.dimensions.sumOf { it.score }, result.total)
         assertEquals(ScoreBoard.gradeOf(result.total), result.grade)
         for (dimension in result.dimensions) {
-            assertTrue("${dimension.label} 不能是负数", dimension.score >= 0)
-            assertTrue("${dimension.label} 不能超过上限", dimension.score <= dimension.max)
+            assertTrue(dimension.score >= 0, "${dimension.label} 不能是负数")
+            assertTrue(dimension.score <= dimension.max, "${dimension.label} 不能超过上限")
         }
     }
 
@@ -124,7 +124,7 @@ class ScoreBoardTest {
         assertEquals(25, ScoreBoard.level(null, hint(tiltDeg = 1f, horizonDetected = true)).score)
         // 3° → 25*(1-0.5) = 12.5，四舍五入 13，允许 ±1
         val three = ScoreBoard.level(null, hint(tiltDeg = 3f, horizonDetected = true)).score
-        assertTrue("3° 应落在 11..13，实际 $three", three in 11..13)
+        assertTrue(three in 11..13, "3° 应落在 11..13，实际 $three")
         assertEquals(0, ScoreBoard.level(null, hint(tiltDeg = 5f, horizonDetected = true)).score)
         assertEquals(0, ScoreBoard.level(null, hint(tiltDeg = 6f, horizonDetected = true)).score)
     }
@@ -132,8 +132,8 @@ class ScoreBoardTest {
     @Test
     fun levelUnmeasuredGivesFull() {
         val dimension = ScoreBoard.level(null, hint(horizonDetected = false))
-        assertEquals("两个数据源都没有 → 记满分", 25, dimension.score)
-        assertFalse("必须标未测，UI 不能显示 0", dimension.measured)
+        assertEquals(25, dimension.score, "两个数据源都没有 → 记满分")
+        assertFalse(dimension.measured, "必须标未测，UI 不能显示 0")
     }
 
     @Test
@@ -158,16 +158,16 @@ class ScoreBoardTest {
         val relaxed = ScoreBoard.exposure(dim, SceneType.NIGHT).score
         assertEquals(10, strict)
         assertEquals(30, relaxed)
-        assertTrue("夜间必须比白天宽容", relaxed > strict)
+        assertTrue(relaxed > strict, "夜间必须比白天宽容")
     }
 
     @Test
     fun exposureHardCap() {
         val blown = ScoreBoard.exposure(stats(meanLuma = 0.7f, highlightClip = 0.5f), SceneType.LANDSCAPE)
-        assertTrue("严重过曝必须落 10 分以内，实际 ${blown.score}", blown.score <= 10)
+        assertTrue(blown.score <= 10, "严重过曝必须落 10 分以内，实际 ${blown.score}")
 
         val pitchBlack = ScoreBoard.exposure(stats(meanLuma = 0.05f, shadowClip = 0.9f), SceneType.LANDSCAPE)
-        assertTrue("严重欠曝必须落 10 分以内", pitchBlack.score <= 10)
+        assertTrue(pitchBlack.score <= 10, "严重欠曝必须落 10 分以内")
     }
 
     @Test
@@ -177,8 +177,8 @@ class ScoreBoardTest {
         assertEquals(0.12f, ScoreBoard.CLIP_HIGH_CONVERTED, 0.0001f)
         assertEquals(0.35f, ScoreBoard.CLIP_LOW_PRD, 0.0001f)
         assertEquals(0.245f, ScoreBoard.CLIP_LOW_CONVERTED, 0.0001f)
-        assertTrue("换算后的过曝阈值必须比 PRD 更敏感", ScoreBoard.CLIP_HIGH_CONVERTED < ScoreBoard.CLIP_HIGH_PRD)
-        assertTrue("换算后的欠曝阈值必须比 PRD 更敏感", ScoreBoard.CLIP_LOW_CONVERTED < ScoreBoard.CLIP_LOW_PRD)
+        assertTrue(ScoreBoard.CLIP_HIGH_CONVERTED < ScoreBoard.CLIP_HIGH_PRD, "换算后的过曝阈值必须比 PRD 更敏感")
+        assertTrue(ScoreBoard.CLIP_LOW_CONVERTED < ScoreBoard.CLIP_LOW_PRD, "换算后的欠曝阈值必须比 PRD 更敏感")
     }
 
     // ── 构图 ───────────────────────────────────────────────────────────────────
@@ -203,11 +203,11 @@ class ScoreBoardTest {
     @Test
     fun clarityFromSharpness() {
         val unmeasured = ScoreBoard.clarity(stats(focusVar = 0f))
-        assertEquals("没算过就是 0 分", 0, unmeasured.score)
-        assertFalse("但必须标未测", unmeasured.measured)
+        assertEquals(0, unmeasured.score, "没算过就是 0 分")
+        assertFalse(unmeasured.measured, "但必须标未测")
 
         val mid = ScoreBoard.clarity(stats(focusVar = 41f))
-        assertTrue("中等清晰度应落在 5..15，实际 ${mid.score}", mid.score in 5..15)
+        assertTrue(mid.score in 5..15, "中等清晰度应落在 5..15，实际 ${mid.score}")
         assertTrue(mid.measured)
 
         val sharp = ScoreBoard.clarity(stats(focusVar = 5_000f))
@@ -226,8 +226,8 @@ class ScoreBoardTest {
             if ((x + y) % 2 == 0) 255f else 0f
         }
         val checkerVar = SharpnessMeter.laplacianVariance(checker, 16, 16)
-        assertTrue("棋盘格的拉普拉斯方差必须显著更大，实际 $checkerVar", checkerVar > 1_000f)
-        assertTrue("棋盘格应判为足够锐利", SharpnessMeter.normalize(checkerVar, 0.5f) > 0.5f)
+        assertTrue(checkerVar > 1_000f, "棋盘格的拉普拉斯方差必须显著更大，实际 $checkerVar")
+        assertTrue(SharpnessMeter.normalize(checkerVar, 0.5f) > 0.5f, "棋盘格应判为足够锐利")
     }
 
     @Test
@@ -243,12 +243,12 @@ class ScoreBoardTest {
         val variance = SharpnessMeter.laplacianVariance(pattern, 16, 16)
         val dark = SharpnessMeter.normalizedVariance(variance, 0.15f)
         val bright = SharpnessMeter.normalizedVariance(variance, 0.60f)
-        assertTrue("对比度归一化后，暗画面的归一化方差必须更大，dark=$dark bright=$bright", dark > bright)
+        assertTrue(dark > bright, "对比度归一化后，暗画面的归一化方差必须更大，dark=$dark bright=$bright")
 
         // 落到 0..1 判级时，暗画面也不能比亮画面更容易判糊（含封顶后相等）
         assertTrue(
-            "暗画面不能被判得更糊",
-            SharpnessMeter.normalize(variance, 0.15f) >= SharpnessMeter.normalize(variance, 0.60f)
+            SharpnessMeter.normalize(variance, 0.15f) >= SharpnessMeter.normalize(variance, 0.60f),
+            "暗画面不能被判得更糊"
         )
     }
 
@@ -262,12 +262,12 @@ class ScoreBoardTest {
             roll = 6f,
             scene = SceneType.LANDSCAPE
         )
-        assertTrue("最多 3 条，实际 ${result.recommendations.size}", result.recommendations.size <= 3)
-        assertEquals("三个维度都扣分 → 3 条", 3, result.recommendations.size)
+        assertTrue(result.recommendations.size <= 3, "最多 3 条，实际 ${result.recommendations.size}")
+        assertEquals(3, result.recommendations.size, "三个维度都扣分 → 3 条")
         val dimensions = result.recommendations.map { it.dimension }
-        assertEquals("每维度最多 1 条", dimensions.size, dimensions.distinct().size)
+        assertEquals(dimensions.size, dimensions.distinct().size, "每维度最多 1 条")
         for (recommendation in result.recommendations) {
-            assertTrue("建议文案不能为空", recommendation.text.isNotEmpty())
+            assertTrue(recommendation.text.isNotEmpty(), "建议文案不能为空")
         }
     }
 
@@ -279,7 +279,7 @@ class ScoreBoardTest {
             roll = 0f,
             scene = SceneType.LANDSCAPE
         )
-        assertEquals("满分只给一句话", 1, result.recommendations.size)
+        assertEquals(1, result.recommendations.size, "满分只给一句话")
         assertEquals(ScoreBoard.ALL_PERFECT_TEXT, result.recommendations[0].text)
     }
 
@@ -292,7 +292,7 @@ class ScoreBoardTest {
             scene = SceneType.LANDSCAPE
         )
         val exposure = result.recommendations.firstOrNull { it.dimension == ScoreDimension.EXPOSURE }
-        assertNotNull("过曝必须给一条曝光建议", exposure)
+        assertNotNull(exposure, "过曝必须给一条曝光建议")
         assertEquals("basic_protect_highlights", exposure!!.tipId)
     }
 
@@ -306,10 +306,10 @@ class ScoreBoardTest {
         )
         val level = result.recommendations.firstOrNull { it.dimension == ScoreDimension.LEVEL }
         assertNotNull(level)
-        assertTrue("建议要带角度", level!!.text.contains("4°"))
+        assertTrue(level!!.text.contains("4°"), "建议要带角度")
         assertTrue(
-            "建议要带方向",
-            level.text.contains("顺时针") || level.text.contains("逆时针")
+            level.text.contains("顺时针") || level.text.contains("逆时针"),
+            "建议要带方向"
         )
         assertEquals("landscape_horizon_level", level.tipId)
     }

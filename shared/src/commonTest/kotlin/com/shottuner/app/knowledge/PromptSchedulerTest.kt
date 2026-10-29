@@ -1,12 +1,12 @@
 package com.shottuner.app.knowledge
 
 import com.shottuner.app.model.SceneType
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * 调度器状态机测试（12+ 个用例）。
@@ -78,16 +78,15 @@ class PromptSchedulerTest {
             signals(),
             0L
         )
-        assertNotNull("必须有一条上屏", decision.prompt)
-        assertEquals("只允许一条可见", "a", decision.prompt!!.tipId)
+        assertNotNull(decision.prompt, "必须有一条上屏")
+        assertEquals("a", decision.prompt!!.tipId, "只允许一条可见")
         // 默认密度是 STANDARD，只放行 URGENT+CONTEXT（ARCH S8），GUIDE 那条被过滤
-        assertEquals("STANDARD 下候选数用于小圆点", 2, decision.visibleCount)
+        assertEquals(2, decision.visibleCount, "STANDARD 下候选数用于小圆点")
 
         // CHATTER 才三条全放
         val chatty = PromptScheduler()
         chatty.setDensity(PromptDensity.CHATTER)
         assertEquals(
-            "CHATTER 下三条全合规",
             3,
             chatty.tickWithCandidates(
                 listOf(
@@ -97,7 +96,8 @@ class PromptSchedulerTest {
                 ),
                 signals(),
                 0L
-            ).visibleCount
+            ).visibleCount,
+            "CHATTER 下三条全合规"
         )
     }
 
@@ -129,8 +129,8 @@ class PromptSchedulerTest {
         val scheduler = PromptScheduler()
         scheduler.tickWithCandidates(listOf(candidate("a")), signals(), 0L)
         val decision = scheduler.tickWithCandidates(listOf(candidate("b")), signals(), 1_000L)
-        assertEquals("A 必须还在屏上", "a", decision.prompt!!.tipId)
-        assertFalse("没换人就不该通知 UI 重绘", decision.changed)
+        assertEquals("a", decision.prompt!!.tipId, "A 必须还在屏上")
+        assertFalse(decision.changed, "没换人就不该通知 UI 重绘")
     }
 
     @Test
@@ -157,7 +157,7 @@ class PromptSchedulerTest {
             signals(),
             500L
         )
-        assertEquals("urgent 可以立即打断", "u", decision.prompt!!.tipId)
+        assertEquals("u", decision.prompt!!.tipId, "urgent 可以立即打断")
     }
 
     @Test
@@ -172,9 +172,9 @@ class PromptSchedulerTest {
         )
         // 5s：虽然驻留够了，但低优先级仍然不许把 urgent 顶掉
         assertEquals(
-            "低优先级不能反向打断",
             "u",
-            scheduler.tickWithCandidates(listOf(candidate("b")), signals(), 5_000L).prompt!!.tipId
+            scheduler.tickWithCandidates(listOf(candidate("b")), signals(), 5_000L).prompt!!.tipId,
+            "低优先级不能反向打断"
         )
     }
 
@@ -185,7 +185,7 @@ class PromptSchedulerTest {
         scheduler.tickWithCandidates(listOf(a), signals(), 0L)
         scheduler.onBlock(0L)
         assertTrue(scheduler.snapshot().blacklist.contains("a"))
-        assertNull("屏蔽后本会话永不再出现", scheduler.tickWithCandidates(listOf(a), signals(), 99_999L).prompt)
+        assertNull(scheduler.tickWithCandidates(listOf(a), signals(), 99_999L).prompt, "屏蔽后本会话永不再出现")
     }
 
     @Test
@@ -213,7 +213,7 @@ class PromptSchedulerTest {
 
         // 用户扶正了 → 立即撤下 + 正向反馈 + 永久拉黑
         val second = scheduler.tickWithCandidates(listOf(horizon), signals(roll = 0.5f), 500L)
-        assertNull("信号恢复后必须立即撤下", second.prompt)
+        assertNull(second.prompt, "信号恢复后必须立即撤下")
         assertEquals(PromptFeedback.LEVEL_OK, second.feedback)
         assertTrue(scheduler.snapshot().blacklist.contains("landscape_horizon_level"))
     }
@@ -223,15 +223,15 @@ class PromptSchedulerTest {
         val scheduler = PromptScheduler()
         scheduler.setDensity(PromptDensity.QUIET)
         assertNull(
-            "安静档不放场景提示",
-            scheduler.tickWithCandidates(listOf(candidate("c", PromptPriority.CONTEXT)), signals(), 0L).prompt
+            scheduler.tickWithCandidates(listOf(candidate("c", PromptPriority.CONTEXT)), signals(), 0L).prompt,
+            "安静档不放场景提示"
         )
         val decision = scheduler.tickWithCandidates(
             listOf(candidate("u", PromptPriority.URGENT, 30)),
             signals(),
             100L
         )
-        assertNotNull("安静档仍然要报硬伤", decision.prompt)
+        assertNotNull(decision.prompt, "安静档仍然要报硬伤")
     }
 
     @Test
@@ -243,17 +243,17 @@ class PromptSchedulerTest {
             signals(),
             0L
         )
-        assertNull("静音就是一句话都不说，urgent 也不说", decision.prompt)
-        assertTrue("但要告诉 UI 有话说", decision.visibleCount > 0)
+        assertNull(decision.prompt, "静音就是一句话都不说，urgent 也不说")
+        assertTrue(decision.visibleCount > 0, "但要告诉 UI 有话说")
     }
 
     @Test
     fun holdMsGate() {
         val scheduler = PromptScheduler()
         val gated = candidate("g", PromptPriority.URGENT, 30, holdMs = 800L)
-        assertNull("刚出现时不满 800ms", scheduler.tickWithCandidates(listOf(gated), signals(), 0L).prompt)
+        assertNull(scheduler.tickWithCandidates(listOf(gated), signals(), 0L).prompt, "刚出现时不满 800ms")
         assertNull(scheduler.tickWithCandidates(listOf(gated), signals(), 799L).prompt)
-        assertNotNull("满 800ms 才出牌", scheduler.tickWithCandidates(listOf(gated), signals(), 800L).prompt)
+        assertNotNull(scheduler.tickWithCandidates(listOf(gated), signals(), 800L).prompt, "满 800ms 才出牌")
     }
 
     @Test
@@ -265,8 +265,8 @@ class PromptSchedulerTest {
         scheduler.tickWithCandidates(emptyList(), signals(), 400L)
         // 再次为真 → 从 600ms 重新计时
         scheduler.tickWithCandidates(listOf(gated), signals(), 600L)
-        assertNull("第二次只持续了 500ms", scheduler.tickWithCandidates(listOf(gated), signals(), 1_100L).prompt)
-        assertNotNull("满 800ms（600→1400）才出牌", scheduler.tickWithCandidates(listOf(gated), signals(), 1_400L).prompt)
+        assertNull(scheduler.tickWithCandidates(listOf(gated), signals(), 1_100L).prompt, "第二次只持续了 500ms")
+        assertNotNull(scheduler.tickWithCandidates(listOf(gated), signals(), 1_400L).prompt, "满 800ms（600→1400）才出牌")
     }
 
     @Test
@@ -280,8 +280,8 @@ class PromptSchedulerTest {
 
         scheduler.resetSession(1_000L)
         assertTrue(scheduler.snapshot().blacklist.isEmpty())
-        assertEquals("密度属于用户设置，不能被会话重置清掉", PromptDensity.CHATTER, scheduler.snapshot().density)
-        assertNotNull("重置后可以再出", scheduler.tickWithCandidates(listOf(a), signals(), 1_100L).prompt)
+        assertEquals(PromptDensity.CHATTER, scheduler.snapshot().density, "密度属于用户设置，不能被会话重置清掉")
+        assertNotNull(scheduler.tickWithCandidates(listOf(a), signals(), 1_100L).prompt, "重置后可以再出")
     }
 
     @Test
@@ -291,7 +291,7 @@ class PromptSchedulerTest {
         scheduler.tickWithCandidates(listOf(a), signals(), 0L)
         scheduler.pause(true)
         val decision = scheduler.tickWithCandidates(listOf(candidate("b", PromptPriority.URGENT, 30)), signals(), 9_000L)
-        assertEquals("暂停期间不出新提示", "a", decision.prompt!!.tipId)
+        assertEquals("a", decision.prompt!!.tipId, "暂停期间不出新提示")
         scheduler.pause(false)
     }
 
@@ -330,9 +330,9 @@ class PromptSchedulerTest {
 
         // t=500 用户打开了网格 → 立刻撤下，并给正向反馈
         val resolved = scheduler.tickWithCandidates(listOf(grid), signals(gridOn = true), 500L)
-        assertNull("问题解决了必须自动撤卡", resolved.prompt)
-        assertTrue("撤卡要通知 UI 重绘", resolved.changed)
-        assertEquals("应给出曝光/水平类正向反馈", PromptFeedback.EXPOSURE_OK, resolved.feedback)
+        assertNull(resolved.prompt, "问题解决了必须自动撤卡")
+        assertTrue(resolved.changed, "撤卡要通知 UI 重绘")
+        assertEquals(PromptFeedback.EXPOSURE_OK, resolved.feedback, "应给出曝光/水平类正向反馈")
 
         // 之后再怎么久，也不许再出现（markExecuted 会同时写 blacklist）
         val later = scheduler.tickWithCandidates(
@@ -340,10 +340,10 @@ class PromptSchedulerTest {
             signals(gridOn = false),
             99_999L
         )
-        assertNull("已标记执行的条目必须永久拉黑", later.prompt)
+        assertNull(later.prompt, "已标记执行的条目必须永久拉黑")
         assertTrue(
-            "快照里应能看到它进了黑名单",
-            "pitfall_grid_on" in scheduler.snapshot().blacklist
+            "pitfall_grid_on" in scheduler.snapshot().blacklist,
+            "快照里应能看到它进了黑名单"
         )
     }
 
@@ -365,8 +365,8 @@ class PromptSchedulerTest {
         assertEquals("pitfall_grid_on", still.prompt!!.tipId)
         assertNull(still.feedback)
         assertFalse(
-            "问题没解决不能进黑名单",
-            "pitfall_grid_on" in scheduler.snapshot().blacklist
+            "pitfall_grid_on" in scheduler.snapshot().blacklist,
+            "问题没解决不能进黑名单"
         )
     }
 
@@ -375,12 +375,12 @@ class PromptSchedulerTest {
     @Test
     fun pacedCandidateAdvancesTheBeat() {
         val scheduler = PromptScheduler()
-        assertEquals("初始值必须是 -1", -1L, scheduler.snapshot().lastGuideAt)
+        assertEquals(-1L, scheduler.snapshot().lastGuideAt, "初始值必须是 -1")
         scheduler.tickWithCandidates(listOf(candidate("move_a", paced = true)), signals(), 4_000L)
         assertEquals(
-            "节奏类候选出牌必须推进 lastGuideAt，否则 8 秒节拍门形同不存在",
             4_000L,
-            scheduler.snapshot().lastGuideAt
+            scheduler.snapshot().lastGuideAt,
+            "节奏类候选出牌必须推进 lastGuideAt，否则 8 秒节拍门形同不存在"
         )
     }
 
@@ -393,9 +393,9 @@ class PromptSchedulerTest {
             4_000L
         )
         assertEquals(
-            "硬伤提示不该推进节拍，否则运镜会被无关提示饿死",
             -1L,
-            scheduler.snapshot().lastGuideAt
+            scheduler.snapshot().lastGuideAt,
+            "硬伤提示不该推进节拍，否则运镜会被无关提示饿死"
         )
     }
 
@@ -412,34 +412,34 @@ class PromptSchedulerTest {
         val video = signals(tab = PromptEngine.TAB_VIDEO, videoIntentOrdinal = 0)
         val decision = scheduler.tick(video, 16_000L)
         assertEquals(
-            "录像页必须能出运镜卡",
             VideoMovePlanner.nextMove(0, (16_000L / SchedulerConfig.GUIDE_INTERVAL_MS).toInt()),
-            decision.prompt!!.tipId
+            decision.prompt!!.tipId,
+            "录像页必须能出运镜卡"
         )
         assertEquals(
-            "R09 出牌后 lastGuideAt 必须被回填",
             16_000L,
-            scheduler.snapshot().lastGuideAt
+            scheduler.snapshot().lastGuideAt,
+            "R09 出牌后 lastGuideAt 必须被回填"
         )
         // 卡片本身要继续留在屏上（不是被撤），只是不允许立刻换下一条
         val immediate = scheduler.tick(video, 16_500L)
         assertEquals(
-            "500ms 后还是同一条运镜，不许换",
             decision.prompt!!.tipId,
-            immediate.prompt!!.tipId
+            immediate.prompt!!.tipId,
+            "500ms 后还是同一条运镜，不许换"
         )
-        assertFalse("同一条不算变化，别让 UI 重绘", immediate.changed)
+        assertFalse(immediate.changed, "同一条不算变化，别让 UI 重绘")
 
         // 真正的节拍门：把回填后的 lastGuideAt 喂回引擎，R09 必须闭嘴
         val gated = PromptEngine.evaluate(video, 16_500L, lastGuideAt = 16_000L)
         assertTrue(
-            "8 秒节拍门必须真的挡住 R09（这正是 QA P1-1 说的死逻辑）",
-            gated.none { it.ruleId == "R09_move_guide" }
+            gated.none { it.ruleId == "R09_move_guide" },
+            "8 秒节拍门必须真的挡住 R09（这正是 QA P1-1 说的死逻辑）"
         )
         val openAgain = PromptEngine.evaluate(video, 24_001L, lastGuideAt = 16_000L)
         assertTrue(
-            "过了 8 秒必须重新开口",
-            openAgain.any { it.ruleId == "R09_move_guide" }
+            openAgain.any { it.ruleId == "R09_move_guide" },
+            "过了 8 秒必须重新开口"
         )
     }
 
@@ -455,10 +455,10 @@ class PromptSchedulerTest {
         // 用户把档位调低 → GUIDE 不再合规，current 被内部置空
         scheduler.setDensity(PromptDensity.STANDARD)
         val after = scheduler.tickWithCandidates(listOf(guide), signals(), 500L)
-        assertNull("档位调低后这张卡必须下掉", after.prompt)
+        assertNull(after.prompt, "档位调低后这张卡必须下掉")
         assertTrue(
-            "撤卡必须通知 UI 重绘，否则槽位停在上一句（QA P2-4）",
-            after.changed
+            after.changed,
+            "撤卡必须通知 UI 重绘，否则槽位停在上一句（QA P2-4）"
         )
     }
 
@@ -472,9 +472,9 @@ class PromptSchedulerTest {
         scheduler.setMuted(true)
         // b 还没进过冷却，所以静音时它是「还有 1 条」的那一条
         val after = scheduler.tickWithCandidates(listOf(a, b), signals(), 500L)
-        assertNull("静音后不许再显示", after.prompt)
-        assertTrue("静音撤卡同样要通知 UI", after.changed)
-        assertEquals("静音时小圆点仍要显示还有几条", 1, after.visibleCount)
+        assertNull(after.prompt, "静音后不许再显示")
+        assertTrue(after.changed, "静音撤卡同样要通知 UI")
+        assertEquals(1, after.visibleCount, "静音时小圆点仍要显示还有几条")
     }
 
     @Test
@@ -483,8 +483,8 @@ class PromptSchedulerTest {
         val a = candidate("a")
         assertTrue(scheduler.tickWithCandidates(listOf(a), signals(), 0L).changed)
         assertFalse(
-            "同一条连续 tick 不许重复报 changed，否则 2Hz 重刷会闪",
-            scheduler.tickWithCandidates(listOf(a), signals(), 500L).changed
+            scheduler.tickWithCandidates(listOf(a), signals(), 500L).changed,
+            "同一条连续 tick 不许重复报 changed，否则 2Hz 重刷会闪"
         )
     }
 
@@ -504,27 +504,27 @@ class PromptSchedulerTest {
 
         // STANDARD：R10 是 GUIDE，被密度整条过滤 → 一动不动
         val standard = PromptScheduler()
-        assertNull("STANDARD 下不该有提示", standard.tick(calm, 0L).prompt)
+        assertNull(standard.tick(calm, 0L).prompt, "STANDARD 下不该有提示")
         assertNull(
-            "STANDARD 下 R10 必须被挡掉（这正是 QA P1-2 的事实链）",
-            standard.tick(calm, 6_000L).prompt
+            standard.tick(calm, 6_000L).prompt,
+            "STANDARD 下 R10 必须被挡掉（这正是 QA P1-2 的事实链）"
         )
 
         // CHATTER：R10 放行。holdMs = 6s，所以第 6 秒才出得来
         val chatter = PromptScheduler()
         chatter.setDensity(PromptDensity.CHATTER)
-        assertNull("holdMs 未满足前不许出", chatter.tick(calm, 0L).prompt)
+        assertNull(chatter.tick(calm, 0L).prompt, "holdMs 未满足前不许出")
         val shown = chatter.tick(calm, 6_000L)
-        assertNotNull("CHATTER 档位下 R10 兜底轮播必须出得来", shown.prompt)
+        assertNotNull(shown.prompt, "CHATTER 档位下 R10 兜底轮播必须出得来")
         assertEquals(
-            "GENERAL 场景兜底池第一条是「白加黑减」",
             "light_white_add_black_minus",
-            shown.prompt!!.tipId
+            shown.prompt!!.tipId,
+            "GENERAL 场景兜底池第一条是「白加黑减」"
         )
         assertEquals(
-            "兜底轮播是节奏类，出牌后必须推进 lastGuideAt",
             6_000L,
-            chatter.snapshot().lastGuideAt
+            chatter.snapshot().lastGuideAt,
+            "兜底轮播是节奏类，出牌后必须推进 lastGuideAt"
         )
     }
 }

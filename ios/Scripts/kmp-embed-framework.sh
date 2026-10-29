@@ -23,18 +23,30 @@ fail() {
     exit 1
 }
 
-SRC="$SRCROOT/../shared/build/xcode-frameworks/${CONFIGURATION:-Debug}/${PLATFORM_NAME:-iphonesimulator}/$FRAMEWORK_NAME.framework"
+# ★ framework 的落盘目录名用的是 **SDK_NAME**（如 iphonesimulator17.5），
+#   不是 PLATFORM_NAME（iphonesimulator）—— KGP 的 frameworkSearchDir = File(CONFIGURATION, SDK_NAME)。
+#   实测踩过：用 PLATFORM_NAME 找 → 明明编出来了却说"找不到"，跳过嵌入，
+#   结果真机上 "Library not loaded"。所以两条都试。
+SRC=""
+for PLATFORM_KEY in "${SDK_NAME:-}" "${PLATFORM_NAME:-iphonesimulator}"; do
+    [ -n "$PLATFORM_KEY" ] || continue
+    CANDIDATE="$SRCROOT/../shared/build/xcode-frameworks/${CONFIGURATION:-Debug}/$PLATFORM_KEY/$FRAMEWORK_NAME.framework"
+    if [ -d "$CANDIDATE" ]; then
+        SRC="$CANDIDATE"
+        break
+    fi
+done
 
-if [ ! -d "$SRC" ]; then
+if [ -z "$SRC" ]; then
     # 不在这里失败：App 的编译与链接不依赖嵌入（链接用的是 FRAMEWORK_SEARCH_PATHS）。
     # 但一定要喊出来 —— 否则真机装上去会报「Library not loaded」。
-    warn "找不到 $SRC —— 跳过嵌入。真机运行时会出现「Library not loaded」"
+    warn "找不到 $FRAMEWORK_NAME.framework（试过 SDK_NAME=${SDK_NAME:-未设置} 与 PLATFORM_NAME=${PLATFORM_NAME:-未设置}）—— 跳过嵌入。真机运行时会出现「Library not loaded」"
     log "KMP_FRAMEWORK_EMBEDDED=0"
     exit 0
 fi
 
 # .app 的位置：$BUILT_PRODUCTS_DIR/<Product>.app/<FRAMEWORKS_FOLDER_PATH>
-APP_BUNDLE="${BUILT_PRODUCTS_DIR:-}/$(FULL_PRODUCT_NAME:-ShotTuner.app}"
+APP_BUNDLE="${BUILT_PRODUCTS_DIR:-}/$(FULL_PRODUCT_NAME:-ShotTuner.app)"
 DEST_DIR="$APP_BUNDLE/${FRAMEWORKS_FOLDER_PATH:-Frameworks}"
 DEST="$DEST_DIR/$FRAMEWORK_NAME.framework"
 

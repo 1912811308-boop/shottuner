@@ -1,10 +1,10 @@
 package com.shottuner.app.knowledge
 
 import com.shottuner.app.model.SceneType
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * 44 条新技法的数据体检。
@@ -31,7 +31,7 @@ class TechniqueBookV15Test {
 
     @Test
     fun hasExactlyFortyFourEntries() {
-        assertEquals("v1.5 新增必须是 44 条", 44, TechniqueBookV15.list.size)
+        assertEquals(44, TechniqueBookV15.list.size, "v1.5 新增必须是 44 条")
         assertEquals(TechniqueBookV15.EXPECTED_COUNT, TechniqueBookV15.list.size)
         assertTrue(TechniqueBookV15.isReady())
     }
@@ -39,39 +39,39 @@ class TechniqueBookV15Test {
     @Test
     fun categoryDistributionMatchesProductSpec() {
         val actual = TechniqueBookV15.categoryCounts()
-        assertEquals("分类集合必须与产品口径一致", expectedCounts.keys, actual.keys)
+        assertEquals(expectedCounts.keys, actual.keys, "分类集合必须与产品口径一致")
         for ((category, expected) in expectedCounts) {
-            assertEquals("${category.label} 条数不对", expected, actual[category])
+            assertEquals(expected, actual[category], "${category.label} 条数不对")
         }
-        assertEquals("分布合计必须等于 44", 44, actual.values.sum())
+        assertEquals(44, actual.values.sum(), "分布合计必须等于 44")
     }
 
     @Test
     fun idsAreUniqueAndDisjointFromLegacyBook() {
         val ids = TechniqueBookV15.list.map { it.id }
-        assertEquals("新库内 id 必须唯一", ids.size, ids.distinct().size)
+        assertEquals(ids.size, ids.distinct().size, "新库内 id 必须唯一")
 
         // 用 legacy（1.4 及以前那 39 条）比对，不能用 all —— all 从 1.5 起已经包含这 44 条
         val legacy = PhotographyBook.legacy.map { it.id }.toSet()
-        assertEquals("老库应该是 39 条", 39, legacy.size)
+        assertEquals(39, legacy.size, "老库应该是 39 条")
         val overlap = ids.filter { it in legacy }
-        assertTrue("新 44 条不能与老 39 条撞 id，撞了这些：$overlap", overlap.isEmpty())
+        assertTrue(overlap.isEmpty(), "新 44 条不能与老 39 条撞 id，撞了这些：$overlap")
 
-        assertEquals("老库 + 新库 = 83", 83, PhotographyBook.all.size)
+        assertEquals(83, PhotographyBook.all.size, "老库 + 新库 = 83")
         assertEquals(
-            "PhotographyBook.all 必须包含这 44 条",
             44,
-            PhotographyBook.all.count { it.id in ids }
+            PhotographyBook.all.count { it.id in ids },
+            "PhotographyBook.all 必须包含这 44 条"
         )
         assertEquals(
-            "合并库 id 必须全局唯一",
             PhotographyBook.all.size,
-            PhotographyBook.all.map { it.id }.distinct().size
+            PhotographyBook.all.map { it.id }.distinct().size,
+            "合并库 id 必须全局唯一"
         )
         assertEquals(
-            "byId 必须覆盖全库",
             PhotographyBook.all.size,
-            TechniqueBookV15.byId.size
+            TechniqueBookV15.byId.size,
+            "byId 必须覆盖全库"
         )
     }
 
@@ -97,15 +97,15 @@ class TechniqueBookV15Test {
             check(!tech.title.contains("字）"), "title 里残留了字数标注")
             check(!tech.why.contains("字）"), "why 里残留了字数标注")
         }
-        assertTrue(problems.joinToString("\n"), problems.isEmpty())
+        assertTrue(problems.isEmpty(), problems.joinToString("\n"))
     }
 
     @Test
     fun noNewEntryRequiresTeleWithoutBeingUniversal() {
         for (tech in TechniqueBookV15.list) {
             assertFalse(
-                "${tech.id} 不能既是通用条目又要求长焦",
-                tech.trigger.scenes.isEmpty() && tech.trigger.requiresTele
+                tech.trigger.scenes.isEmpty() && tech.trigger.requiresTele,
+                "${tech.id} 不能既是通用条目又要求长焦"
             )
         }
     }
@@ -115,23 +115,23 @@ class TechniqueBookV15Test {
     @Test
     fun browseOnlyEntriesStayOutOfEveryPushPool() {
         val browseOnly = TechniqueBookV15.BROWSE_ONLY_IDS
-        assertEquals("仅浏览的三条必须齐全", 3, browseOnly.size)
+        assertEquals(3, browseOnly.size, "仅浏览的三条必须齐全")
         for (id in browseOnly) {
             assertTrue(
-                "$id 必须在技法库里（否则它不是「仅浏览」而是「不存在」）",
-                id in TechniqueBookV15.byId
+                id in TechniqueBookV15.byId,
+                "$id 必须在技法库里（否则它不是「仅浏览」而是「不存在」）"
             )
             assertFalse(
-                "$id 不能出现在运镜池里",
-                id in VideoMovePlanner.allMoveIds()
+                id in VideoMovePlanner.allMoveIds(),
+                "$id 不能出现在运镜池里"
             )
             assertFalse(
-                "$id 不能出现在拍照页推荐池里",
-                TechniqueMatcher.poolFor(PromptEngine.TAB_PHOTO).any { it.id == id }
+                TechniqueMatcher.poolFor(PromptEngine.TAB_PHOTO).any { it.id == id },
+                "$id 不能出现在拍照页推荐池里"
             )
             assertFalse(
-                "$id 不能出现在录像页推荐池里",
-                TechniqueMatcher.poolFor(PromptEngine.TAB_VIDEO).any { it.id == id }
+                TechniqueMatcher.poolFor(PromptEngine.TAB_VIDEO).any { it.id == id },
+                "$id 不能出现在录像页推荐池里"
             )
         }
     }
@@ -141,13 +141,13 @@ class TechniqueBookV15Test {
         assertEquals(5, TechniqueBookV15.SELFIE_IDS.size)
         for (id in TechniqueBookV15.SELFIE_IDS) {
             val tech = TechniqueBookV15.byId[id]
-            assertTrue("$id 必须存在于技法库", tech != null)
-            assertEquals("$id 分类必须是 SELFIE", TechCategory.SELFIE, tech!!.category)
-            assertFalse("$id 不能出现在运镜池", id in VideoMovePlanner.allMoveIds())
+            assertTrue(tech != null, "$id 必须存在于技法库")
+            assertEquals(TechCategory.SELFIE, tech!!.category, "$id 分类必须是 SELFIE")
+            assertFalse(id in VideoMovePlanner.allMoveIds(), "$id 不能出现在运镜池")
             assertFalse(
-                "$id 不能出现在推荐池",
                 TechniqueMatcher.poolFor(PromptEngine.TAB_PHOTO).any { it.id == id } ||
-                    TechniqueMatcher.poolFor(PromptEngine.TAB_VIDEO).any { it.id == id }
+                    TechniqueMatcher.poolFor(PromptEngine.TAB_VIDEO).any { it.id == id },
+                "$id 不能出现在推荐池"
             )
         }
     }
@@ -170,21 +170,21 @@ class TechniqueBookV15Test {
         val banned = TechniqueBookV15.SELFIE_IDS + TechniqueBookV15.BROWSE_ONLY_IDS
         val leaked = PromptEngine.allEmittableTipIds() intersect banned
         assertTrue(
-            "引擎可发射面里出现了禁推条目：$leaked（自拍与仅浏览条目不得进入任何推送池）",
-            leaked.isEmpty()
+            leaked.isEmpty(),
+            "引擎可发射面里出现了禁推条目：$leaked（自拍与仅浏览条目不得进入任何推送池）"
         )
         // 清单不能是空的，否则上面那条断言恒真
-        assertTrue("可发射清单为空，说明断言失效", PromptEngine.allEmittableTipIds().size >= 11)
+        assertTrue(PromptEngine.allEmittableTipIds().size >= 11, "可发射清单为空，说明断言失效")
     }
 
     @Test
     fun declaredEmittableIdsAreReallyInTheBook() {
         for (id in PromptEngine.allEmittableTipIds()) {
             val tech = TechniqueBookV15.byId[id]
-            assertTrue("PromptEngine 声明可发射「$id」，但技法库里没有这条", tech != null)
+            assertTrue(tech != null, "PromptEngine 声明可发射「$id」，但技法库里没有这条")
             assertTrue(
-                "「$id」不在可推送白名单里，生产环境会被静默过滤，等于规则白写",
-                id in TechniqueBookV15.pushEligibleIds
+                id in TechniqueBookV15.pushEligibleIds,
+                "「$id」不在可推送白名单里，生产环境会被静默过滤，等于规则白写"
             )
         }
     }
@@ -193,16 +193,16 @@ class TechniqueBookV15Test {
     fun pushEligibleIdsIsTheBookMinusBanned() {
         val banned = TechniqueBookV15.SELFIE_IDS + TechniqueBookV15.BROWSE_ONLY_IDS
         assertEquals(
-            "可推送白名单 = 全库 − 自拍 − 仅浏览",
             TechniqueBookV15.byId.keys - banned,
-            TechniqueBookV15.pushEligibleIds
+            TechniqueBookV15.pushEligibleIds,
+            "可推送白名单 = 全库 − 自拍 − 仅浏览"
         )
         assertEquals(
-            "白名单条数 = 83 − 8",
             PhotographyBook.all.size - banned.size,
-            TechniqueBookV15.pushEligibleIds.size
+            TechniqueBookV15.pushEligibleIds.size,
+            "白名单条数 = 83 − 8"
         )
-        assertTrue("禁推条目不得出现在白名单里", (TechniqueBookV15.pushEligibleIds intersect banned).isEmpty())
+        assertTrue((TechniqueBookV15.pushEligibleIds intersect banned).isEmpty(), "禁推条目不得出现在白名单里")
     }
 
     /**
@@ -275,10 +275,10 @@ class TechniqueBookV15Test {
                 }
             }
         }
-        assertTrue("网格一个候选都没产出来，说明用例本身失效了", emitted > 0)
+        assertTrue(emitted > 0, "网格一个候选都没产出来，说明用例本身失效了")
         assertTrue(
-            "引擎发射了 allEmittableTipIds() 里没登记的 id：$undeclared（新增规则请同步登记清单）",
-            undeclared.isEmpty()
+            undeclared.isEmpty(),
+            "引擎发射了 allEmittableTipIds() 里没登记的 id：$undeclared（新增规则请同步登记清单）"
         )
     }
 
@@ -307,21 +307,21 @@ class TechniqueBookV15Test {
                 if (candidate.tipId !in TechniqueBookV15.byId) missing.add(candidate.tipId)
             }
         }
-        assertTrue("这些 tipId 在技法库里不存在：$missing", missing.isEmpty())
+        assertTrue(missing.isEmpty(), "这些 tipId 在技法库里不存在：$missing")
     }
 
     @Test
     fun movePoolsOnlyReferenceRealCameraMoveEntries() {
         val pool = VideoMovePlanner.allMoveIds()
-        assertTrue("运镜池不能为空", pool.isNotEmpty())
+        assertTrue(pool.isNotEmpty(), "运镜池不能为空")
         for (id in pool) {
             val tech = TechniqueBookV15.byId[id]
-            assertTrue("运镜池引用了不存在的 id：$id", tech != null)
-            assertEquals("$id 分类必须是 CAMERA_MOVE", TechCategory.CAMERA_MOVE, tech!!.category)
+            assertTrue(tech != null, "运镜池引用了不存在的 id：$id")
+            assertEquals(TechCategory.CAMERA_MOVE, tech!!.category, "$id 分类必须是 CAMERA_MOVE")
         }
-        assertEquals("8 个录像意图各一个池", 8, VideoMovePlanner.intentCount)
+        assertEquals(8, VideoMovePlanner.intentCount, "8 个录像意图各一个池")
         for (ordinal in 0 until VideoMovePlanner.intentCount) {
-            assertTrue("意图 $ordinal 的运镜池不能为空", VideoMovePlanner.poolFor(ordinal).isNotEmpty())
+            assertTrue(VideoMovePlanner.poolFor(ordinal).isNotEmpty(), "意图 $ordinal 的运镜池不能为空")
         }
     }
 

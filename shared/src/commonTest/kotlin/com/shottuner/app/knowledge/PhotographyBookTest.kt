@@ -1,18 +1,18 @@
 package com.shottuner.app.knowledge
 
 import com.shottuner.app.model.SceneType
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 class PhotographyBookTest {
 
     @Test
     fun entriesAreEnoughAndIdsUnique() {
         val all = PhotographyBook.all
-        assertTrue("技法条目至少 26 条，实际 ${all.size}", all.size >= 26)
-        assertEquals("id 必须唯一", all.size, all.map { it.id }.distinct().size)
+        assertTrue(all.size >= 26, "技法条目至少 26 条，实际 ${all.size}")
+        assertEquals(all.size, all.map { it.id }.distinct().size, "id 必须唯一")
     }
 
     @Test
@@ -22,8 +22,8 @@ class PhotographyBookTest {
         // 不需要在这里加任何分支。
         for (category in TechCategory.values()) {
             assertTrue(
-                "分类 ${category.label} 至少要有 1 条",
-                PhotographyBook.all.any { it.category == category }
+                PhotographyBook.all.any { it.category == category },
+                "分类 ${category.label} 至少要有 1 条"
             )
         }
     }
@@ -45,7 +45,7 @@ class PhotographyBookTest {
             check(tech.check.length in 20..70, "check 长度 ${tech.check.length}")
             check(tech.params.isNotEmpty(), "params 不能为空")
         }
-        assertTrue(problems.joinToString("\n"), problems.isEmpty())
+        assertTrue(problems.isEmpty(), problems.joinToString("\n"))
     }
 
     @Test
@@ -53,8 +53,8 @@ class PhotographyBookTest {
         for (tech in PhotographyBook.all) {
             val universal = tech.trigger.scenes.isEmpty()
             assertFalse(
-                "${tech.id} 不能既是通用条目又要求长焦",
-                universal && tech.trigger.requiresTele
+                universal && tech.trigger.requiresTele,
+                "${tech.id} 不能既是通用条目又要求长焦"
             )
         }
     }

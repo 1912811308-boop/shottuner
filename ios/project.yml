@@ -94,11 +94,15 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
 
     # ── KMP framework 的搜索路径 ──
-    # embedAndSignAppleFrameworkForXcode 把 framework 落到
-    #   shared/build/xcode-frameworks/$(CONFIGURATION)/$(PLATFORM_NAME)/
-    # 链接器与 Swift 的模块搜索都靠这条路径找到 Shared.framework。
+    # ★ 目录名用的是 **SDK_NAME**（如 iphonesimulator17.5），不是 PLATFORM_NAME（iphonesimulator）。
+    #   KGP 的 XcodeEnvironment.frameworkSearchDir = File(CONFIGURATION, SDK_NAME)，
+    #   所以 framework 落在 shared/build/xcode-frameworks/<配置>/<SDK_NAME>/ 下。
+    #   ★ 实测踩过：用 PLATFORM_NAME 写死 → swiftc 报 "no such module 'Shared'"，
+    #     而 framework 明明就在隔壁目录（差一个版本号后缀）—— 看起来像「没产出」，其实只是路径不对。
+    #   两条都写上：SDK_NAME 是权威的，PLATFORM_NAME 兜底（老版本 KGP 的行为）。
     FRAMEWORK_SEARCH_PATHS:
       - "$(inherited)"
+      - "$(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
       - "$(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(PLATFORM_NAME)"
     LD_RUNPATH_SEARCH_PATHS:
       - "$(inherited)"
@@ -122,6 +126,11 @@ targets:
         PRODUCT_NAME: ShotTuner
         INFOPLIST_FILE: ShotTuner/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"
+        # ★ 模拟器只编 arm64。
+        #   ① Apple Silicon 的模拟器本来就是 arm64，x86_64 slice 纯属浪费；
+        #   ② KMP 侧只声明了 iosSimulatorArm64（没有 iosX64），
+        #      编 x86_64 会在**链接**阶段因为找不到 x86_64 的 Shared.framework 而失败。
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
         # 第一批没有 App Icon（资产与商店素材是第二批的事）；
         # 显式置空，避免 Xcode 去找一个不存在的 AppIcon 资源集。
         ASSETCATALOG_COMPILER_APPICON_NAME: ""

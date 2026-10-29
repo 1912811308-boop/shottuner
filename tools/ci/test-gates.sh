@@ -188,6 +188,10 @@ expect fail "iosMain 源集是空的 → 规格门禁红" "$SPEC" "$REPO"
 sed -i 's/binaries\.framework {//' "$REPO/shared/build.gradle.kts"
 expect fail "shared 没声明 framework 二进制 → 规格门禁红" "$SPEC" "$REPO"
 
+printf '#!/bin/sh\nif [ 1 ; then\n' > "$REPO/ios/Scripts/Broken.sh"
+expect fail "iOS 的 shell 脚本语法错 → 规格门禁红" "$SPEC" "$REPO"
+rm -f "$REPO/ios/Scripts/Broken.sh"
+
 ci_log ""
 if [ "$FAIL" -gt 0 ]; then
   ci_log "✗ 反向验证未通过：$PASS 项符合预期，$FAIL 项不符"

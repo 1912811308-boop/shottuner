@@ -1,9 +1,9 @@
 package com.shottuner.app.text
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.Test
 import java.util.Locale
 
 /**
@@ -61,16 +61,16 @@ class NumFmtTest {
         assertEquals(NumFmt.UNDEFINED, NumFmt.fixed(Float.NaN, 2))
         // 占位串要短、要能直接显示
         assertEquals("--", NumFmt.UNDEFINED)
-        assertTrue("占位串不该含逗号", !NumFmt.UNDEFINED.contains(","))
+        assertTrue(!NumFmt.UNDEFINED.contains(","), "占位串不该含逗号")
     }
 
     @Test
     fun hugeValuesDoNotOverflow() {
         // 1e20f 超出 Long 精确范围，不能抛异常、不能溢出成乱码
         val huge = NumFmt.fixed(1e20f, 1)
-        assertTrue("大数也要产出可读文本，实际=$huge", huge.isNotEmpty())
-        assertTrue("大数不该出现 NaN，实际=$huge", !huge.contains("NaN"))
-        assertTrue("大数不该出现 Infinity，实际=$huge", !huge.contains("Infinity"))
+        assertTrue(huge.isNotEmpty(), "大数也要产出可读文本，实际=$huge")
+        assertTrue(!huge.contains("NaN"), "大数不该出现 NaN，实际=$huge")
+        assertTrue(!huge.contains("Infinity"), "大数不该出现 Infinity，实际=$huge")
         // Float 上限也不能崩
         assertTrue(NumFmt.fixed(Float.MAX_VALUE, 2).isNotEmpty())
         assertTrue(NumFmt.fixed(-Float.MAX_VALUE, 2).isNotEmpty())
@@ -81,12 +81,12 @@ class NumFmtTest {
         // 走科学计数法兜底时也不能把负号弄丢：
         // scientific() 只吃绝对值，负号必须在 fixed() 里补回去
         val negative = NumFmt.fixed(-1e20f, 1)
-        assertTrue("大负数必须带负号，实际=$negative", negative.startsWith("-"))
-        assertTrue("大负数不该出现 NaN，实际=$negative", !negative.contains("NaN"))
-        assertTrue("大负数不该出现 Infinity，实际=$negative", !negative.contains("Infinity"))
+        assertTrue(negative.startsWith("-"), "大负数必须带负号，实际=$negative")
+        assertTrue(!negative.contains("NaN"), "大负数不该出现 NaN，实际=$negative")
+        assertTrue(!negative.contains("Infinity"), "大负数不该出现 Infinity，实际=$negative")
         assertTrue(
-            "大负数的绝对值部分应与正数一致，实际=$negative vs ${NumFmt.fixed(1e20f, 1)}",
-            negative.removePrefix("-") == NumFmt.fixed(1e20f, 1)
+            negative.removePrefix("-") == NumFmt.fixed(1e20f, 1),
+            "大负数的绝对值部分应与正数一致，实际=$negative vs ${NumFmt.fixed(1e20f, 1)}"
         )
     }
 
@@ -95,7 +95,7 @@ class NumFmtTest {
         val original = Locale.getDefault()
         try {
             Locale.setDefault(Locale.GERMANY)
-            assertEquals("切换到德语区后生效", Locale.GERMANY, Locale.getDefault())
+            assertEquals(Locale.GERMANY, Locale.getDefault(), "切换到德语区后生效")
 
             assertEquals("1.5", NumFmt.one(1.5f))
             assertEquals("1.50", NumFmt.fixed(1.5f, 2))
@@ -116,7 +116,7 @@ class NumFmtTest {
         val original = Locale.getDefault()
         try {
             Locale.setDefault(Locale.FRANCE)
-            assertEquals("切换到法语区后生效", Locale.FRANCE, Locale.getDefault())
+            assertEquals(Locale.FRANCE, Locale.getDefault(), "切换到法语区后生效")
 
             assertEquals("1.5", NumFmt.one(1.5f))
             assertEquals("1.50", NumFmt.fixed(1.5f, 2))
@@ -144,8 +144,8 @@ class NumFmtTest {
             val de = NumFmt.fixed(12.34f, 2)
             Locale.setDefault(Locale.FRANCE)
             val fr = NumFmt.fixed(12.34f, 2)
-            assertEquals("同一数值在不同 Locale 下必须完全一致", us, de)
-            assertEquals("同一数值在不同 Locale 下必须完全一致", us, fr)
+            assertEquals(us, de, "同一数值在不同 Locale 下必须完全一致")
+            assertEquals(us, fr, "同一数值在不同 Locale 下必须完全一致")
         } finally {
             Locale.setDefault(original)
         }
@@ -188,10 +188,10 @@ class NumFmtTest {
      * 窄不换行空格 U+202F（法语千分位分隔符）。
      */
     private fun assertLocaleFree(context: String, text: String) {
-        assertFalse("$context：输出不该含逗号，实际=$text", text.contains(","))
-        assertFalse("$context：输出不该含普通空格，实际=$text", text.contains(" "))
-        assertFalse("$context：输出不该含不换行空格，实际=$text", text.contains("\u00A0"))
-        assertFalse("$context：输出不该含窄不换行空格，实际=$text", text.contains("\u202F"))
-        assertFalse("$context：输出不该含任意空白字符，实际=$text", text.any { it.isWhitespace() })
+        assertFalse(text.contains(","), "$context：输出不该含逗号，实际=$text")
+        assertFalse(text.contains(" "), "$context：输出不该含普通空格，实际=$text")
+        assertFalse(text.contains("\u00A0"), "$context：输出不该含不换行空格，实际=$text")
+        assertFalse(text.contains("\u202F"), "$context：输出不该含窄不换行空格，实际=$text")
+        assertFalse(text.any { it.isWhitespace() }, "$context：输出不该含任意空白字符，实际=$text")
     }
 }

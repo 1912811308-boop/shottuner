@@ -4,12 +4,12 @@ import com.shottuner.app.analysis.Recommendation
 import com.shottuner.app.analysis.ScoreDimension
 import com.shottuner.app.model.CompositionHint
 import com.shottuner.app.model.FrameStats
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.Test
 
 /**
  * 任务状态机测试。
@@ -132,7 +132,7 @@ class MissionEngineTest {
             event = engine.onSample(sample(now = now, atTarget = true))
             ticks++
         }
-        assertEquals("必须能达成", MissionEvent.ACHIEVED, event)
+        assertEquals(MissionEvent.ACHIEVED, event, "必须能达成")
         return ticks
     }
 
@@ -163,7 +163,7 @@ class MissionEngineTest {
         val engine = dispatchComposition(now = 1_000L)
 
         val duringBuffer = engine.onSample(sample(now = 1_400L, atTarget = true))
-        assertNotEquals("缓冲期内不能达成", MissionEvent.ACHIEVED, duringBuffer)
+        assertNotEquals(MissionEvent.ACHIEVED, duringBuffer, "缓冲期内不能达成")
         assertEquals(MissionState.TASK_SHOWN, engine.state)
 
         val stillBuffer = engine.onSample(sample(now = 1_799L, atTarget = true))
@@ -171,7 +171,7 @@ class MissionEngineTest {
         assertEquals(MissionState.TASK_SHOWN, engine.state)
 
         engine.onSample(sample(now = 1_800L, atTarget = true))
-        assertEquals("800ms 后才进 IN_PROGRESS", MissionState.IN_PROGRESS, engine.state)
+        assertEquals(MissionState.IN_PROGRESS, engine.state, "800ms 后才进 IN_PROGRESS")
     }
 
     // ── 4~5. 连续达标 ──────────────────────────────────────────────────────────
@@ -184,7 +184,7 @@ class MissionEngineTest {
         assertEquals(MissionState.IN_PROGRESS, engine.state)
 
         val second = engine.onSample(sample(now = 2_200L, atTarget = true))
-        assertNotEquals("2 次达标不能达成（REQUIRED_HITS = 3）", MissionEvent.ACHIEVED, second)
+        assertNotEquals(MissionEvent.ACHIEVED, second, "2 次达标不能达成（REQUIRED_HITS = 3）")
         assertEquals(MissionState.IN_PROGRESS, engine.state)
     }
 
@@ -202,8 +202,8 @@ class MissionEngineTest {
         assertEquals(MissionEvent.ACHIEVED, event)
         assertEquals(MissionState.ACHIEVED, engine.state)
         // EMA 预热会吃掉前面几帧：从 d=0.34 出发，smoothed 要衰减到 0.075 以下才开始计 hit
-        assertTrue("不允许少于 3 帧就绿：实际 $ticks 帧", ticks >= MissionThresholds.REQUIRED_HITS)
-        assertTrue("必须在 20s 超时前达成：实际 $ticks 帧", ticks * TICK < MissionThresholds.TASK_TIMEOUT_MS)
+        assertTrue(ticks >= MissionThresholds.REQUIRED_HITS, "不允许少于 3 帧就绿：实际 $ticks 帧")
+        assertTrue(ticks * TICK < MissionThresholds.TASK_TIMEOUT_MS, "必须在 20s 超时前达成：实际 $ticks 帧")
     }
 
     // ── 6. 归零 ────────────────────────────────────────────────────────────────
@@ -211,7 +211,7 @@ class MissionEngineTest {
     @Test
     fun aSingleMissResetsHits() {
         val needed = ticksNeededToAchieve()
-        assertTrue("从派发到达成至少要 3 帧，实际 $needed", needed >= MissionThresholds.REQUIRED_HITS)
+        assertTrue(needed >= MissionThresholds.REQUIRED_HITS, "从派发到达成至少要 3 帧，实际 $needed")
 
         val engine = dispatchComposition(now = 1_000L)
         var now = 1_000L
@@ -219,7 +219,7 @@ class MissionEngineTest {
             now += TICK
             engine.onSample(sample(now = now, atTarget = true))
         }
-        assertEquals("差一帧就达成", MissionState.IN_PROGRESS, engine.state)
+        assertEquals(MissionState.IN_PROGRESS, engine.state, "差一帧就达成")
 
         // 中间夹一次不达标（主体回到中心）→ hits 归零
         now += TICK
@@ -231,7 +231,7 @@ class MissionEngineTest {
         repeat(3) {
             now += TICK
             val event = engine.onSample(sample(now = now, atTarget = true))
-            assertNotEquals("hits 归零生效：不达标后不能靠 1~3 帧达成", MissionEvent.ACHIEVED, event)
+            assertNotEquals(MissionEvent.ACHIEVED, event, "hits 归零生效：不达标后不能靠 1~3 帧达成")
         }
         assertEquals(MissionState.IN_PROGRESS, engine.state)
     }
@@ -247,12 +247,12 @@ class MissionEngineTest {
 
         // 第一个 IN_PROGRESS 帧：subjectX/Y 直接跳到目标点（显著度质心的典型跳变）
         val event = engine.onSample(sample(now = 1_800L, atTarget = true))
-        assertNotEquals("单帧跳变不能达成", MissionEvent.ACHIEVED, event)
+        assertNotEquals(MissionEvent.ACHIEVED, event, "单帧跳变不能达成")
         assertEquals(MissionState.IN_PROGRESS, engine.state)
         // ringProgress < 1 ⟺ smoothed > RING_RADIUS（构图进度的定义），即仍在圈外
         assertTrue(
-            "EMA 后 smoothed 必须仍在达标圈外：ringProgress=${engine.ringProgress()}",
-            engine.ringProgress() < 1f
+            engine.ringProgress() < 1f,
+            "EMA 后 smoothed 必须仍在达标圈外：ringProgress=${engine.ringProgress()}"
         )
     }
 
@@ -301,14 +301,14 @@ class MissionEngineTest {
             event = engine.onSample(sample(now = now, atTarget = false))     // 一直不达标
         }
         assertEquals(MissionEvent.TIMEOUT, event)
-        assertTrue("超时必须发生在 20s 之后：now=$now", now - 1_000L > MissionThresholds.TASK_TIMEOUT_MS)
-        assertEquals("挑不到新任务 → 回 IDLE", MissionState.IDLE, engine.state)
+        assertTrue(now - 1_000L > MissionThresholds.TASK_TIMEOUT_MS, "超时必须发生在 20s 之后：now=$now")
+        assertEquals(MissionState.IDLE, engine.state, "挑不到新任务 → 回 IDLE")
         val timeoutAt = now
 
         // 12s 冷却期内不能重新派发同一条
         var probe = timeoutAt + TICK
         while (probe < timeoutAt + MissionThresholds.TIMEOUT_COOLDOWN_MS) {
-            assertEquals("冷却期内不能派发：t=$probe", MissionEvent.NONE, engine.onSample(sample(now = probe)))
+            assertEquals(MissionEvent.NONE, engine.onSample(sample(now = probe)), "冷却期内不能派发：t=$probe")
             probe += TICK
         }
 
@@ -319,7 +319,7 @@ class MissionEngineTest {
             shown = engine.onSample(sample(now = late))
             late += TICK
         }
-        assertEquals("冷却结束后应重新派发", MissionEvent.SHOW, shown)
+        assertEquals(MissionEvent.SHOW, shown, "冷却结束后应重新派发")
     }
 
     @Test
@@ -337,7 +337,7 @@ class MissionEngineTest {
             event = engine.onSample(sample(now = now, recs = recs, roll = 5f))
         }
         assertEquals(MissionEvent.TIMEOUT, event)
-        assertEquals("第一条冷却中 → 换到水平任务", TaskKind.LEVEL, engine.current!!.kind)
+        assertEquals(TaskKind.LEVEL, engine.current!!.kind, "第一条冷却中 → 换到水平任务")
         assertEquals(MissionState.TASK_SHOWN, engine.state)
 
         event = MissionEvent.NONE
@@ -352,9 +352,9 @@ class MissionEngineTest {
         // 之后 60s 内一律 NONE（不派发、不进任何状态）
         repeat(20) { index ->
             assertEquals(
-                "静默期内必须完全沉默：t=${quietAt + (index + 1) * TICK}",
                 MissionEvent.NONE,
-                engine.onSample(sample(now = quietAt + (index + 1) * TICK, recs = recs, roll = 5f))
+                engine.onSample(sample(now = quietAt + (index + 1) * TICK, recs = recs, roll = 5f)),
+                "静默期内必须完全沉默：t=${quietAt + (index + 1) * TICK}"
             )
         }
         assertEquals(MissionState.IDLE, engine.state)
@@ -380,7 +380,7 @@ class MissionEngineTest {
         repeat(6) {
             now += TICK
             val event = engine.onSample(sample(now = now, atTarget = true))
-            assertNotEquals("abort 之后不可能达成", MissionEvent.ACHIEVED, event)
+            assertNotEquals(MissionEvent.ACHIEVED, event, "abort 之后不可能达成")
             assertEquals(MissionState.IDLE, engine.state)
         }
 
@@ -396,12 +396,12 @@ class MissionEngineTest {
         val engine = MissionEngine()
         val recs = listOf(REC_LEVEL)
         assertEquals(
-            "|θ| = 4.5° 必须派发",
             MissionEvent.SHOW,
-            engine.onSample(sample(now = 1_000L, recs = recs, roll = 4.5f))
+            engine.onSample(sample(now = 1_000L, recs = recs, roll = 4.5f)),
+            "|θ| = 4.5° 必须派发"
         )
         assertEquals(TaskKind.LEVEL, engine.current!!.kind)
-        assertEquals("派发瞬间环是全灰的", 0f, engine.ringProgress(), 0.0001f)
+        assertEquals(0f, engine.ringProgress(), 0.0001f, "派发瞬间环是全灰的")
 
         // 用户把手机端平到 2.4°
         var now = 1_000L
@@ -414,7 +414,7 @@ class MissionEngineTest {
         }
         assertEquals(MissionEvent.ACHIEVED, event)
         assertEquals(MissionState.ACHIEVED, engine.state)
-        assertTrue("不允许第一帧就绿：实际 $ticks 帧", ticks >= MissionThresholds.REQUIRED_HITS)
+        assertTrue(ticks >= MissionThresholds.REQUIRED_HITS, "不允许第一帧就绿：实际 $ticks 帧")
     }
 
     @Test
