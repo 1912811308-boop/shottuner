@@ -4,18 +4,17 @@
 # ★ 挂在 Xcode 的 **preBuild** 阶段（早于 Compile Sources）：
 #   链接器要在链接前就找得到 Shared.framework，所以产出必须发生在这里。
 #
-# ★ 为什么首选 embedAndSignAppleFrameworkForXcode（KMP 集成方案 B）：
-#   它是 KGP 的官方入口，会按 Xcode 当前的环境变量（CONFIGURATION / PLATFORM_NAME / ARCHS）
-#   自动挑对应的 Kotlin 目标，并把 framework 放到约定目录。
+# ★ 为什么首选 embedAndSign…AppleFrameworkForXcode（KMP 集成方案 B）：
+#   它是 KGP 的官方入口，会按 Xcode 当前的环境变量（CONFIGURATION / PLATFORM_NAME /
+#   SDK_NAME / ARCHS / TARGET_BUILD_DIR / FRAMEWORKS_FOLDER_PATH）自动挑对应的
+#   Kotlin 目标，并把 framework 拷进 .app/Frameworks。
 #   方案 B 的好处：整条依赖管理链路**只有 Gradle 一条**（D1 之后没有 CocoaPods、没有 SPM），
 #   出问题在 xcodebuild 日志里能直接看到 gradle 输出，好定位。
 #
 # ★ 为什么它失败不直接报错（而是回退到显式 link 任务）：
-#   **CI 一律不签名**（硬规则一：CODE_SIGNING_ALLOWED=NO），此时展开的签名身份是空串，
-#   embedAndSign 内部那一步签名会失败。若因此让整个 Xcode 构建挂掉，
-#   就等于「CI 不签名」这条硬规则把 iOS 编译门禁也一起废掉了。
-#   所以这里：失败 → 记警告 → 回退到显式 link 任务（产出同一个 framework，只是不签名），
-#   再由 kmp-embed-framework.sh 把**未签名**的 framework 嵌进 .app。
+#   回退路径产出的是同一个 framework（只是不签名），
+#   再由 kmp-embed-framework.sh 负责嵌入。这样「embedAndSign 在某种环境下失败」
+#   不会让整个 iOS 编译门禁变红 —— **红一次的门禁等于没有门禁**。
 #
 # 用法：由 Xcode 的 Run Script 阶段调用（见 ios/project.yml 的 preBuildScripts）。
 #      也可手工执行做本地排查： sh ios/Scripts/kmp-build-framework.sh
@@ -111,23 +110,58 @@ run_gradle() {
     if [ -x "$REPO_ROOT/gradlew" ]; then
         "$REPO_ROOT/gradlew" "$@" --console=plain
     else
-        # gradlew 在 Windows 上 checkout 出来可能是 644，Linux/macOS 上没有执行位
+        # gradlew 在 Windows 上 checkout 出来可能是 644，Linux/macOS 上没有执行权限
         sh "$REPO_ROOT/gradlew" "$@" --console=plain
     fi
 }
 
 log "开始产出 framework（target=$KMP_TARGET variant=$KMP_VARIANT configuration=${CONFIGURATION:-Debug} platform=${PLATFORM_NAME:-iphonesimulator}）"
 
-if run_gradle ":shared:embedAndSignAppleFrameworkForXcode" $GRADLE_FLAGS; then
-    log "embedAndSignAppleFrameworkForXcode 成功"
-else
-    log "embedAndSignAppleFrameworkForXcode 失败（CI 不签名时它的签名步骤会失败）→ 回退到显式 link 任务"
+# ★ embedAndSign 的任务名**不能写死**：
+#   KGP 用 lowerCamelCaseName("embedAndSign", <framework 名>, "AppleFrameworkForXcode")
+#   拼出来的，<framework 名> 来自 baseName —— 改了 baseName，任务名就跟着变。
+#   （实测踩过：写死 embedAndSignAppleFrameworkForXcode → "task not found"，
+#     真实名字里带着 framework 名。）
+#   所以这里直接问 Gradle 要任务列表，取名字里含 AppleFrameworkForXcode 的那个。
+EMBED_TASKS="$(run_gradle ":shared:tasks" --all $GRADLE_FLAGS 2>/dev/null \
+    | grep -oE '[A-Za-z0-9_]*AppleFrameworkForXcode' \
+    | sort -u)"
+
+if [ -z "$EMBED_TASKS" ]; then
+    fail "shared 模块没有 embedAndSign 任务 —— 检查 shared/build.gradle.kts 里有没有声明 binaries.framework { baseName = \"$FRAMEWORK_NAME\" }"
+fi
+
+EMBED_OK=0
+for CANDIDATE in $EMBED_TASKS; do
+    log "尝试 embedAndSign 任务：$CANDIDATE"
+    if run_gradle ":shared:$CANDIDATE" $GRADLE_FLAGS; then
+        log "embedAndSign 任务 $CANDIDATE 执行成功"
+        EMBED_OK=1
+        break
+    fi
+    log "embedAndSign 任务 $CANDIDATE 失败"
+done
+
+if [ "$EMBED_OK" -ne 1 ]; then
+    # 回退：显式 link 任务产出的是同一个 framework，只是不做嵌入/签名那一步。
+    #   嵌入由 kmp-embed-framework.sh 负责（那里会按「有没有签名身份」决定要不要 codesign）。
+    log "embedAndSign 全部失败 → 回退到显式 link 任务 $LINK_TASK"
     run_gradle ":shared:$LINK_TASK" $GRADLE_FLAGS || fail "link 任务 $LINK_TASK 失败"
 fi
 
 # ── 5) 确保 framework 在约定的位置 ─────────────────────────────────────────
 #   链接器与 Swift 的模块搜索都靠 FRAMEWORK_SEARCH_PATHS 指向这个目录。
-CANONICAL_DIR="$REPO_ROOT/shared/build/xcode-frameworks/${CONFIGURATION:-Debug}/${PLATFORM_NAME:-iphonesimulator}"
+#   ★ KGP 那边用的是 SDK_NAME，这里两个都试（真机/模拟器上它们取值相同）。
+CANONICAL_DIR=""
+for PLATFORM_KEY in "${PLATFORM_NAME:-iphonesimulator}" "${SDK_NAME:-iphonesimulator}"; do
+    if [ -d "$REPO_ROOT/shared/build/xcode-frameworks/${CONFIGURATION:-Debug}/$PLATFORM_KEY/$FRAMEWORK_NAME.framework" ]; then
+        CANONICAL_DIR="$REPO_ROOT/shared/build/xcode-frameworks/${CONFIGURATION:-Debug}/$PLATFORM_KEY"
+        break
+    fi
+done
+if [ -z "$CANONICAL_DIR" ]; then
+    CANONICAL_DIR="$REPO_ROOT/shared/build/xcode-frameworks/${CONFIGURATION:-Debug}/${PLATFORM_NAME:-iphonesimulator}"
+fi
 CANONICAL="$CANONICAL_DIR/$FRAMEWORK_NAME.framework"
 
 if [ ! -d "$CANONICAL" ]; then

@@ -160,6 +160,26 @@ else
   violation "shared/src/iosMain" "缺少 iosMain 源集目录"
 fi
 
+# ── 9) shared 模块必须声明 framework 二进制 ────────────────────────────────
+# ★ 为什么这道断言不能少（实测踩过，2026-10-29）：
+#   **只声明 iOS target 是不够的** —— KGP 不会自动给 native target 建 framework。
+#   没有 binaries.framework，下面两个任务**根本不存在**：
+#     :shared:linkDebugFrameworkIosSimulatorArm64
+#     :shared:embedAndSign…AppleFrameworkForXcode
+#   症状是 Xcode 的 Run Script 报 "Cannot locate tasks that match …"，
+#   而报错里没有任何线索指向「少声明了一个二进制」。
+GRADLE_BUILD="$ROOT/shared/build.gradle.kts"
+if [ ! -f "$GRADLE_BUILD" ]; then
+  violation "shared/build.gradle.kts" "文件不存在"
+else
+  if ! grep -q "binaries\.framework" "$GRADLE_BUILD"; then
+    violation "shared/build.gradle.kts" "没有声明 framework 二进制（binaries.framework）—— iOS 侧链接不到共享内核"
+  fi
+  if ! grep -qE 'baseName[[:space:]]*=[[:space:]]*"Shared"' "$GRADLE_BUILD"; then
+    violation "shared/build.gradle.kts" "framework 的 baseName 必须是 \"Shared\"（与 Swift 侧的 import Shared 对齐）"
+  fi
+fi
+
 if [ "$VIOLATIONS" -gt 0 ]; then
   ci_log ""
   ci_log "✗ iOS 工程规格自检未通过：$VIOLATIONS 处违规"

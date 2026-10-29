@@ -164,6 +164,8 @@ PLIST
 printf '#!/bin/sh\n./gradlew :shared:embedAndSignAppleFrameworkForXcode\n' \
   > "$REPO/ios/Scripts/kmp-build-framework.sh"
 printf 'package com.shottuner.app.ios\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
+printf 'kotlin {\n    iosArm64().binaries.framework {\n        baseName = "Shared"\n    }\n}\n' \
+  > "$REPO/shared/build.gradle.kts"
 
 expect pass "规格合规 → 规格门禁绿" "$SPEC" "$REPO"
 
@@ -182,6 +184,9 @@ sed -i 's/projectFormat: xcode16_0/projectFormat: xcode15_0/' "$REPO/ios/project
 printf 'val x = 1\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
 rm -f "$REPO/shared/src/iosMain/kotlin/Seed.kt"
 expect fail "iosMain 源集是空的 → 规格门禁红" "$SPEC" "$REPO"
+
+sed -i 's/binaries\.framework {//' "$REPO/shared/build.gradle.kts"
+expect fail "shared 没声明 framework 二进制 → 规格门禁红" "$SPEC" "$REPO"
 
 ci_log ""
 if [ "$FAIL" -gt 0 ]; then

@@ -55,8 +55,36 @@ kotlin {
     //   所以：**默认关**（Windows / 普通 Linux 本地开发零负担），
     //   **CI 上用 -PenableAppleTargets=true 打开**（那里本来就要编 iOS 产物）。
     if (providers.gradleProperty("enableAppleTargets").orNull == "true") {
-        iosArm64()
-        iosSimulatorArm64()
+        val appleTargets = listOf(iosArm64(), iosSimulatorArm64())
+
+        // ── framework 二进制：iOS 端链接的就是它 ──────────────────────────
+        //
+        // ★ 为什么必须显式声明（实测踩坑，2026-10-29）：
+        //   **只声明 target 是不够的** —— KGP 不会自动给 native target 建 framework。
+        //   没有这个二进制，下面两个任务**根本不存在**：
+        //     · :shared:linkDebugFrameworkIosSimulatorArm64（编出 Shared.framework）
+        //     · :shared:embedAndSign…AppleFrameworkForXcode（Xcode 的集成入口）
+        //   症状是 Xcode 的 Run Script 报
+        //     "Cannot locate tasks that match ':shared:embedAndSign…'"
+        //   —— 而报错里没有任何线索指向「少声明了一个二进制」，排查成本极高。
+        //
+        // ★ baseName = "Shared" 必须与 Swift 侧对齐：
+        //   · Swift：`import Shared`
+        //   · 链接：ios/project.yml 里的 OTHER_LDFLAGS = "-framework Shared"
+        //   · 产物：Shared.framework
+        //   改 baseName 就得把这三处一起改（ios/Scripts/kmp-build-framework.sh
+        //   会自动发现 embedAndSign 任务名，不受影响）。
+        //
+        // ★ isStatic = false（动态 framework）：
+        //   动态 framework 需要嵌进 .app/Frameworks（SideStore 侧载时会连带签名），
+        //   但 Objective-C 互操作更完整 —— Kotlin/Native 出的是 ObjC 头文件，
+        //   Swift 侧 `import Shared` 依赖的正是它。
+        appleTargets.forEach { target ->
+            target.binaries.framework {
+                baseName = "Shared"
+                isStatic = false
+            }
+        }
     }
 
     // ── commonTest：跨端共享的单元测试 ────────────────────────────────────

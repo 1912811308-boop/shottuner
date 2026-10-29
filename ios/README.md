@@ -163,6 +163,35 @@ Kotlin 侧算完，Swift 侧只负责渲染。详见 `docs/IOS-ARCH.md` §3.4。
 > 所以同名重载在 Swift 侧会被加尾随下划线（`one(value:)` / `one(value_:)`），哪个被加无法预测。
 > 所以导出给 Swift 的函数必须**签名唯一** —— 这正是 `IosBridge` 这一层存在的理由。
 
+### ④ shared 模块必须声明 framework 二进制
+
+```kotlin
+// shared/build.gradle.kts（只在 -PenableAppleTargets=true 时声明）
+val appleTargets = listOf(iosArm64(), iosSimulatorArm64())
+appleTargets.forEach { target ->
+    target.binaries.framework {
+        baseName = "Shared"   // → Shared.framework；Swift 侧 import Shared
+        isStatic = false      // 动态 framework：需要嵌进 .app/Frameworks
+    }
+}
+```
+
+★ **只声明 iOS target 是不够的** —— KGP 不会自动给 native target 建 framework。
+没有它，下面两个 Gradle 任务**根本不存在**：
+
+| 任务 | 作用 |
+|---|---|
+| `:shared:linkDebugFrameworkIosSimulatorArm64` | 编出 `Shared.framework` |
+| `:shared:embedAndSign<Name>AppleFrameworkForXcode` | Xcode 的集成入口（产出 + 嵌入 + 按需签名） |
+
+症状是 Xcode 的 Run Script 报 `Cannot locate tasks that match ':shared:embedAndSign…'` ——
+而报错里**没有任何线索指向「少声明了一个二进制」**，排查成本极高。
+
+★ **embedAndSign 的任务名不能写死**：KGP 用
+`lowerCamelCaseName("embedAndSign", <framework 名>, "AppleFrameworkForXcode")` 拼出来，
+`<framework 名>` 来自 `baseName` —— 改了 `baseName`，任务名就跟着变。
+所以 `ios/Scripts/kmp-build-framework.sh` 是**问 Gradle 要任务列表**再调用的，不靠猜。
+
 ---
 
 ## 5. iOS 侧与 Android 侧的对应关系
