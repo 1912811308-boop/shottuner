@@ -117,12 +117,11 @@ run_gradle() {
 
 log "开始产出 framework（target=$KMP_TARGET variant=$KMP_VARIANT configuration=${CONFIGURATION:-Debug} platform=${PLATFORM_NAME:-iphonesimulator}）"
 
-# ★ embedAndSign 的任务名**不能写死**：
+# ★ embedAndSign 的任务名**不写死**，而是问 Gradle 要任务列表：
 #   KGP 用 lowerCamelCaseName("embedAndSign", <framework 名>, "AppleFrameworkForXcode")
-#   拼出来的，<framework 名> 来自 baseName —— 改了 baseName，任务名就跟着变。
-#   （实测踩过：写死 embedAndSignAppleFrameworkForXcode → "task not found"，
-#     真实名字里带着 framework 名。）
-#   所以这里直接问 Gradle 要任务列表，取名字里含 AppleFrameworkForXcode 的那个。
+#   拼出来的 —— 本工程实测拿到的名字是 `embedAndSignAppleFrameworkForXcode`
+#   （<framework 名> 那段是空的），但它**依赖 baseName**，改名就会变。
+#   问 Gradle 比猜靠谱：找不到就是真的没有（比如没声明 binaries.framework）。
 #
 #   ★ 优先挑 embedAndSign 那个（它既打包到 xcode-frameworks/ 又嵌入 .app）；
 #     没有才退化到 assemble 那个（只负责打包）——

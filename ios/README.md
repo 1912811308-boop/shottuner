@@ -198,10 +198,11 @@ appleTargets.forEach { target ->
 症状是 Xcode 的 Run Script 报 `Cannot locate tasks that match ':shared:embedAndSign…'` ——
 而报错里**没有任何线索指向「少声明了一个二进制」**，排查成本极高。
 
-★ **embedAndSign 的任务名不能写死**：KGP 用
+★ **embedAndSign 的任务名不写死**：KGP 用
 `lowerCamelCaseName("embedAndSign", <framework 名>, "AppleFrameworkForXcode")` 拼出来，
-`<framework 名>` 来自 `baseName` —— 改了 `baseName`，任务名就跟着变。
-所以 `ios/Scripts/kmp-build-framework.sh` 是**问 Gradle 要任务列表**再调用的，不靠猜。
+依赖 `baseName`。本工程实测拿到的名字是 `embedAndSignAppleFrameworkForXcode`，
+但改名就会变 —— 所以 `ios/Scripts/kmp-build-framework.sh` 是**问 Gradle 要任务列表**再调用的，不靠猜。
+（找不到就是真的没有：没声明 `binaries.framework` 时，这两个任务**根本不存在**。）
 
 ---
 

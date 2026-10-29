@@ -8,7 +8,7 @@
 
 同理，零网络承诺如果只靠人自觉，迟早有人为了图方便加一行网络调用。所以两道门禁都做成**可执行的检查**，命中即构建失败。
 
-## 三道门禁
+## 五道门禁
 
 | 门禁 | 脚本 | 拦什么 | 跑在哪 |
 |---|---|---|---|
@@ -16,6 +16,7 @@
 | **L2 配置层** | `tools/ci/check-no-network-config.sh` | iOS 工程配置里的联网放行 / 第三方 SDK / 非 NO 的签名开关 | Linux runner |
 | **G1-d 凭据** | `tools/ci/check-apple-credentials.sh` | Apple 账号凭据、真私钥、非空的签名身份 | Linux runner |
 | **common 纯度** | `tools/ci/check-common-purity.sh` | `commonMain` 里的 JVM-only 用法（`javaClass` / `SimpleDateFormat` 之类） | Linux runner |
+| **iOS 工程规格** | `tools/ci/check-ios-project-spec.sh` | `project.yml` / `Info.plist` 的硬规则：部署目标、工程格式、签名开关、零第三方依赖、ATS、权限清单、只有一个 target、framework 二进制、shell 脚本语法 | Linux runner |
 
 > **common 纯度这一道是秒级的本地自查，不是权威检查。**
 > 权威检查是 CI 里的 `:shared:compileCommonMainKotlinMetadata`（metadata 编译只允许 common API）。
@@ -57,6 +58,9 @@ Foundation 永远链着系统自带的网络符号，任何用到 Foundation 的
 | 签名变量为空 | 绿 |
 | 签名开关非 `NO` | 红 |
 | 签名开关为 `NO` | 绿 |
+| iOS 工程规格不合规（签名开关 / 部署目标 / 工程格式 / 权限 / ATS / framework 二进制） | 红 |
+| iOS 的 shell 脚本语法错 | 红 |
+| `shared/src/iosMain` 是空的 | 红 |
 
 **它抓到过一个真 bug**：`lib/common.sh` 里 `local root="$1" pattern="$2" dir="$root/$3"` 写成了一行 —— bash 的 `local` 同行多变量会**先把这个语句里所有名字都声明成 unset、再依次赋值**，所以 `dir` 求值时 `root` 还没赋值。开了 `set -u` 会报 `root: unbound variable`，而这个报错在管道里被吞掉，表现为「这个目录下一个文件都没扫到」→ **门禁显示"通过"**。一道永远绿的门禁等于没有门禁。
 
@@ -77,9 +81,15 @@ Foundation 永远链着系统自带的网络符号，任何用到 Foundation 的
 
 | job | runner | 触发 | 验什么 |
 |---|---|---|---|
-| `gates` | `ubuntu-latest` | **每次 push** | 四道门禁 + 门禁反向验证 13 项 |
+| `gates` | `ubuntu-latest` | **每次 push** | 五道门禁 + 门禁反向验证 20 项 |
 | `common-gate` | `ubuntu-latest` | **每次 push** | `compileCommonMainKotlinMetadata`（**唯一权威的 common 纯度检查**）+ 单元测试 + Android 编译 |
-| `ios-compile` | `macos-14` | **仅 `workflow_dispatch` 手动** | 真编 `iosSimulatorArm64` + `iosArm64` + XcodeGen + xcodebuild |
+| `ios-compile` | `macos-14` | **仅 `workflow_dispatch` 手动** | 真编 `iosSimulatorArm64` + `iosArm64` + **XcodeGen 生成工程 + xcodebuild 编译 + 产物留档** |
+
+> `ios-compile` 的最后三步是 **T10（iOS 工程骨架）** 加的：`xcodegen generate` → `xcodebuild build`
+> → 产物留档（并断言 `.app/Frameworks/Shared.framework` 在）。
+> ★ 这三步各自带**反「什么都没做」断言**：日志里必须出现 `KMP_FRAMEWORK_READY=1`、
+>   `KMP_FRAMEWORK_EMBEDDED=1`、`SwiftCompile`、`** BUILD SUCCEEDED **`，
+>   否则 `exit 1` —— 因为「step 显示 success」不等于「真的编了东西」。
 
 **为什么 iOS 编译要手动触发**：免费私有仓库的 macOS 配额约 200 分钟/月，
 且 `macos-latest` 排队 15 分钟会被自动取消（换 `macos-14` 后 5 分钟内能排到）。
@@ -101,14 +111,31 @@ Foundation 永远链着系统自带的网络符号，任何用到 Foundation 的
 3. **DNS 把 `github.com` 解析到亚洲节点 `20.205.243.166` 时可能不通**（而 `api.github.com` 通）。
    备用 IP 段 `140.82.112/113/114/116.3` 与 `20.27.177.113` 都通。
 
+## iOS 编译门禁首跑踩过的四个坑（2026-10-29，全部已修）
+
+**这四个坑的共同点：报错信息完全指不到真正的原因**，每一个都让人先怀疑错方向：
+
+| # | 现象 | 真正的原因 | 修法 |
+|---|---|---|---|
+| 1 | `xcodebuild: Unable to read project ... future Xcode project file format (77)` | XcodeGen 2.45+ 默认生成 objectVersion 77（Xcode 16 格式），而 runner 的默认 Xcode 是 **15.4** | `project.yml` 里锁 `options.projectFormat: xcode15_0`（objectVersion 60，Xcode 15/16 都能开）；CI 断言 XcodeGen ≥ 2.45（该选项 2.45.0 才有） |
+| 2 | `Cannot locate tasks that match ':shared:embedAndSignAppleFrameworkForXcode'` | **只声明 iOS target 是不够的** —— KGP 不会自动给 native target 建 framework，没声明 `binaries.framework` 时这些任务**根本不存在** | `shared/build.gradle.kts` 里补 `binaries.framework { baseName = "Shared" }` |
+| 3 | `error: no such module 'Shared'`（而 framework 明明编出来了） | framework 落在 `xcode-frameworks/<配置>/<SDK_NAME>/`（如 `iphonesimulator17.5`），不是 `<PLATFORM_NAME>`（`iphonesimulator`）—— **差一个版本号后缀** | `FRAMEWORK_SEARCH_PATHS` 用 `$(SDK_NAME)` |
+| 4 | 链接阶段找不到 framework | `generic/platform=iOS Simulator` 会同时编 x86_64 与 arm64，而 KMP 侧只有 `iosSimulatorArm64` | `EXCLUDED_ARCHS[sdk=iphonesimulator*] = x86_64` |
+
+> ★ 还有一个**不是 CI 的坑**：Kotlin/Native 里**可空**的原始类型过 ObjC 边界时会**装箱**
+> （`Float?` → Swift `KotlinFloat?`，不是 `Float?`）——
+> 而**非可空**的才直接映射到 C 原语（`Float` → `Float`、`Int` → `Int32`、`Double` → `Double`）。
+> ⇒ **跨语言边界的参数尽量用非可空的原始类型。**
+
 ## 本地怎么跑
 
 ```bash
-bash tools/ci/test-gates.sh                    # 门禁自检（13 项）
+bash tools/ci/test-gates.sh                    # 门禁自检（20 项）
 bash tools/ci/check-no-network.sh              # L1
 bash tools/ci/check-no-network-config.sh       # L2
 bash tools/ci/check-apple-credentials.sh       # G1-d
-bash tools/ci/check-common-purity.sh          # commonMain 纯度（秒级自查）
+bash tools/ci/check-common-purity.sh           # commonMain 纯度（秒级自查）
+bash tools/ci/check-ios-project-spec.sh        # iOS 工程规格自检（秒级，只读文本）
 ```
 
 脚本接受可选的仓库根目录参数，省略时按脚本位置推导 —— 所以 `test-gates.sh` 能在临时目录里构造一个最小仓库来跑注入测试。
