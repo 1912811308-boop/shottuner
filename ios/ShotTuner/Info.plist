@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ios/ShotTuner/Info.plist —— iOS 端的信息清单。
+
+  ★ 这份文件**手工维护、不由 XcodeGen 生成**（project.yml 里只设 INFOPLIST_FILE 指向它）。
+    理由：① 权限文案是产品口径，必须在 PR 里可审；
+          ② CI 的 L2 配置层门禁直接扫 ios/**/Info.plist —— 文件不在仓库里，这道门禁就是空的。
+
+  ★ ATS（App Transport Security）保持**系统默认的严格模式**：
+    整个文件里刻意**不出现**任何放宽开关的键 —— 零网络承诺靠"没写"来保证，
+    而不是靠"写成 false"（写 false 也算一个被门禁盯着的字面量）。
+    App 不发起任何网络请求，所以不需要例外。
+
+  ★ 权限清单刻意只有相机：
+    · Android 侧本来就没有视频录制，所以**不加麦克风权限**（少一个权限少一份审核问询）；
+    · 照片只在本机分析、不上传，所以**不加相册读取权限**；
+    · 「保存到相册」等写入相册的能力属于后续批次，用到时再加 NSPhotoLibraryAddUsageDescription。
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>光影调参</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+	</array>
+	<!--
+	  相机权限文案。
+	  ★ 口径铁律：**教用户怎么调，不是替用户调**。
+	    所以这里写的是"参考分 / 照拨建议"，不是"自动拍照 / 自动调参"。
+	  ★ 隐私口径：**照片只在本机分析、不上传**（零网络承诺）。
+	-->
+	<key>NSCameraUsageDescription</key>
+	<string>用于实时取景，并按水平、曝光、构图、清晰度给出参考分与「照拨」建议，帮你自己把参数调准。照片只在这台设备上分析，不会上传，也不会离开你的设备。</string>
+</dict>
+</plist>

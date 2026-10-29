@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ios/ShotTuner/PrivacyInfo.xcprivacy —— 隐私清单（Privacy Manifest）。
+
+  ★ 为什么需要：iOS 17+ 要求 App 声明隐私实践，缺失会被 App Store Connect 拦下。
+  ★ 为什么这份是空的：**我们零数据采集、零网络**。
+    · NSPrivacyTracking = false        —— 没有跨 App 追踪
+    · NSPrivacyCollectedDataTypes = [] —— 不采集任何用户数据（照片只在本机分析）
+    · NSPrivacyAccessedAPITypes = []    —— 未使用需要声明的「必需理由 API」
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

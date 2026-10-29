@@ -23,6 +23,17 @@ work/
 *.iml
 .DS_Store
 
+# ── iOS：XcodeGen 的生成物与 Xcode 的构建产物 ────────────────────────────────
+# ★ .xcodeproj **不入库**：ios/project.yml 是单一事实来源，
+#   工程由 `xcodegen generate --spec ios/project.yml` 生成。
+#   理由：pbxproj 是合并地狱，而且这样没有 Mac 的工程师也能改工程结构。
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+ios/build/
+ios/DerivedData/
+xcuserdata/
+*.xcuserstate
+
 # ── 其他 ────────────────────────────────────────────────────────────────────────
 captures/
 .externalNativeBuild/

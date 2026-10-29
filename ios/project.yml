@@ -1,0 +1,154 @@
+# ios/project.yml —— ShotTuner iOS 工程的**单一事实来源**。
+#
+# ★ 为什么不提交 .xcodeproj：
+#   .xcodeproj 是**生成物**。PR 冲突是它最典型的痛点（pbxproj 是合并地狱），
+#   而且**没有 Mac 的工程师也能改工程结构** —— 改 YAML 不需要 Xcode。
+#   这是本项目最关键的一条工程约定。
+#   生成方式： xcodegen generate --spec ios/project.yml
+#
+# ★ 为什么只有一个 target：
+#   第一批（iOS v1）**不含任何 App Extension** ——
+#   Live Activity / Widget / Share Extension / Watch / Action Button 全部推到第二批。
+#   （架构决策 D3。）
+#
+# ★ 为什么签名开关写死：
+#   硬规则一：**CI 一律不签名**。签名在设备端用 SideStore 侧载时完成。
+#   所以 CODE_SIGNING_ALLOWED / CODE_SIGNING_REQUIRED 恒为 NO，
+#   CODE_SIGN_IDENTITY 恒为空 —— 这三条都有机器门禁盯着：
+#     · tools/ci/check-no-network-config.sh  → 签名开关必须为 NO
+#     · tools/ci/check-apple-credentials.sh  → 签名身份必须为空
+#
+# ★ 为什么依赖集是空的：
+#   D1 决策：AI 场景识别改用 **Apple Vision**（系统框架），不再用 ML Kit
+#   （ML Kit iOS 只能走 CocoaPods）。于是工程里**不出现 CocoaPods，
+#   也不出现 Swift Package Manager 的第三方依赖**。
+#   所以这里既没有 `packages:` 段（连空的都不写 —— 写了非空就违反零第三方依赖纪律），
+#   也没有 Podfile。
+#
+# ★ 部署目标为什么是 16.0 而不是 16.1：
+#   PRD 的下界由**锁屏小组件**（需 16.0+）决定；Live Activity 需 16.1，
+#   但它属于第二批（Widget / Live Activity 一起做），第一批用
+#   `@available(iOS 16.1, *)` 单独开闸即可。
+#   （D1 改用 Vision 之后，原先 ML Kit 带来的 15.5+ 约束已解除。）
+
+name: ShotTuner
+
+options:
+  bundleIdPrefix: com.shottuner
+  deploymentTarget:
+    # ★ 必须加引号：YAML 里裸的 16.0 会被解析成数字（float），
+    #   XcodeGen 期望的是字符串。加引号是刻意的，不是随手写的。
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  # 不生成空目录（.xcodeproj 是生成物，仓库里保持干净）
+  generateEmptyDirectories: false
+
+configs:
+  Debug: debug
+  Release: release
+
+# ── 工程级构建设置（对所有 target 生效）────────────────────────────────────
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+
+    # ── 版本号 ──
+    # MARKETING_VERSION 与 Android 侧同源（app/build.gradle.kts 的 versionName = 3.1.0）。
+    # CURRENT_PROJECT_VERSION 是 iOS 侧的**独立递增**（从 1 起算），与 Android 的 versionCode 无关。
+    MARKETING_VERSION: "3.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+    # ── 签名：CI 一律不签名（硬规则一）──
+    # ★ 加引号是刻意的：YAML 1.1 会把裸的 NO 解析成布尔 false，
+    #   而 Xcode 的构建设置要的是字面量 "NO"。加引号后两处都拿到 "NO"。
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGN_IDENTITY: ""
+    DEVELOPMENT_TEAM: ""
+
+    # ── Run Script 沙箱 ──
+    # Xcode 15+ 默认开启用户脚本沙箱，会**挡住脚本写 xcconfig / 写工程目录**，
+    #   KMP 集成与本项目的嵌入脚本都会被它静默打断。
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+
+    # ── KMP framework 的搜索路径 ──
+    # embedAndSignAppleFrameworkForXcode 把 framework 落到
+    #   shared/build/xcode-frameworks/$(CONFIGURATION)/$(PLATFORM_NAME)/
+    # 链接器与 Swift 的模块搜索都靠这条路径找到 Shared.framework。
+    FRAMEWORK_SEARCH_PATHS:
+      - "$(inherited)"
+      - "$(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(PLATFORM_NAME)"
+    LD_RUNPATH_SEARCH_PATHS:
+      - "$(inherited)"
+      - "@executable_path/Frameworks"
+
+    ALWAYS_SEARCH_USER_PATHS: "NO"
+    CLANG_ENABLE_MODULES: "YES"
+    ENABLE_BITCODE: "NO"
+
+targets:
+  ShotTuner:
+    type: application
+    platform: iOS
+    sources:
+      - path: ShotTuner
+        excludes:
+          # Info.plist 由 INFOPLIST_FILE 指定，不进 Resources（否则会被当成资源重复拷贝）
+          - "Info.plist"
+    settings:
+      base:
+        PRODUCT_NAME: ShotTuner
+        INFOPLIST_FILE: ShotTuner/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # 第一批没有 App Icon（资产与商店素材是第二批的事）；
+        # 显式置空，避免 Xcode 去找一个不存在的 AppIcon 资源集。
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # 链接 Kotlin 共享内核产出的 framework。
+        # ★ 走 OTHER_LDFLAGS + FRAMEWORK_SEARCH_PATHS，而不是 "Link Binary With Libraries"
+        #   里的文件引用 —— 文件引用路径里带 $(CONFIGURATION)/$(PLATFORM_NAME) 这类
+        #   构建变量并不可靠，而 FRAMEWORK_SEARCH_PATHS 是 Xcode 官方支持展开变量的地方。
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-framework"
+          - "Shared"
+      configs:
+        # 与 Android 侧的 applicationIdSuffix = ".debug" 对齐：调试包与正式包可并存
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.shottuner.app.debug
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.shottuner.app
+
+    # ── 共享内核集成：KMP 方案 B（Run Script + embedAndSignAppleFrameworkForXcode）──
+    #
+    # 为什么不用官方 cocoapods 插件：
+    #   D1 之后工程里根本不出现 CocoaPods（Vision 是系统框架），
+    #   KMP 集成链路只剩 Gradle 一条，没有第二套依赖管理，出问题好定位。
+    #
+    # 脚本分成两段：
+    #   ① preBuild  —— 产出 framework（链接器需要它存在才能链上）
+    #   ② postCompile —— 把 framework 嵌进 .app/Frameworks
+    #   拆成两段是因为：嵌入必须发生在 **App 本体签名之前**，
+    #   否则往已签名的 .app 里塞东西会让签名失效。
+    preBuildScripts:
+      - name: "KMP 共享内核 · 产出 framework"
+        path: Scripts/kmp-build-framework.sh
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+    postCompileScripts:
+      - name: "KMP 共享内核 · 嵌入 framework"
+        path: Scripts/kmp-embed-framework.sh
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+
+# ── Scheme：显式声明，避免依赖 XcodeGen 的自动生成 ──────────────────────────
+schemes:
+  ShotTuner:
+    build:
+      targets:
+        ShotTuner: all
+    run:
+      config: Debug
+    archive:
+      config: Release

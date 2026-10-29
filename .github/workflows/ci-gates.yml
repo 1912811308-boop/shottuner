@@ -39,6 +39,13 @@ jobs:
       - name: commonMain 纯度扫描
         run: bash tools/ci/check-common-purity.sh
 
+      # iOS 工程规格自检：project.yml / Info.plist 是纯文本，
+      # 没有 Mac 也能改 —— 所以必须有机器替人盯着那些硬规则
+      # （部署目标、签名开关、零第三方依赖、ATS 不放宽、权限清单、只有一个 target）。
+      # 只需要读文本，Linux runner 就够，不占 macOS 配额。
+      - name: iOS 工程规格自检
+        run: bash tools/ci/check-ios-project-spec.sh
+
   # ── common-gate：commonMain 能编 iOS target 吗？（整份 CI 设计的单点依赖）──
   #
   # ★ 为什么跑在 Linux runner 上：
@@ -165,3 +172,81 @@ jobs:
             echo "::error::iOS 编译被 SKIPPED —— 什么都没验，必须让它红"
             exit 1
           fi
+
+      # ── T10：真正把 iOS 工程编出来（xcodegen generate + xcodebuild）──
+      #
+      # ★ 为什么必须有这一步：
+      #   上面那个 gradle 步骤只证明「Kotlin 侧能编出 iOS 的 klib」，
+      #   **完全没有验证 Xcode 工程本身**（SwiftUI 代码能不能编、
+      #   project.yml 能不能生成出工程、共享内核的 framework 能不能链上）。
+      #   ios/project.yml + ios/ShotTuner/**.swift 是纯文本，Windows 上也能改 ——
+      #   那就更需要一个机器来兜底，否则「改了但编不过」会一路漏到出包那一步。
+      #
+      # ★ 为什么装 XcodeGen 用「brew 优先 + release 二进制兜底」：
+      #   brew 装 XcodeGen 一般只要几十秒，但它依赖 Homebrew 的索引状态，
+      #   偶尔会卡住或限流。**不能因为装不上就跳过这一步** —— 跳过就等于没验。
+      #   所以兜底路径是：从 GitHub Releases 直接拉官方 zip（几 MB，秒级）。
+      - name: 安装 XcodeGen
+        run: |
+          set -euo pipefail
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "runner 已自带 XcodeGen：$(xcodegen --version)"
+            exit 0
+          fi
+          if brew install xcodegen; then
+            echo "brew 安装成功：$(xcodegen --version)"
+            exit 0
+          fi
+          echo "::warning::brew install xcodegen 失败 → 回退到 GitHub Releases 的官方二进制"
+          ZIP_URL="$(curl -fsSL https://api.github.com/repos/yonaskolb/XcodeGen/releases/latest \
+            | grep -o 'https://[^"]*xcodegen\.zip' | head -1)"
+          [ -n "$ZIP_URL" ] || { echo "::error::拿不到 XcodeGen 的下载地址"; exit 1; }
+          echo "下载：$ZIP_URL"
+          curl -fsSL -o /tmp/xcodegen.zip "$ZIP_URL"
+          rm -rf /tmp/xcodegen && mkdir -p /tmp/xcodegen
+          unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
+          sudo install -m 0755 /tmp/xcodegen/bin/xcodegen /usr/local/bin/xcodegen
+          xcodegen --version
+
+      - name: 生成 Xcode 工程（xcodegen generate）
+        run: |
+          set -euo pipefail
+          xcodegen generate --spec ios/project.yml --project ios
+          # 反「没真生成」断言：工程目录必须存在
+          test -d ios/ShotTuner.xcodeproj || { echo "::error::xcodegen 没有生成 .xcodeproj"; exit 1; }
+          echo "::notice::xcodegen generate 完成"
+
+      - name: 编译 iOS App（xcodebuild · 模拟器 · 不签名）
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios/ShotTuner.xcodeproj \
+            -scheme ShotTuner \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ios/build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee /tmp/xcodebuild.log
+          # ★ 反 SKIPPED / 反「什么都没编」断言：
+          #   xcodebuild 成功但一个源文件都没编（工程生成坏了）也等于没验。
+          grep -q "KMP_FRAMEWORK_READY=1" /tmp/xcodebuild.log \
+            || { echo "::error::KMP 共享内核的 framework 没有产出 —— Run Script 没跑或跑失败了"; exit 1; }
+          grep -q "SwiftCompile\|CompileSwiftSources" /tmp/xcodebuild.log \
+            || { echo "::error::没有看到 Swift 编译记录 —— 工程可能没真正编译"; exit 1; }
+          grep -q "BUILD SUCCEEDED" /tmp/xcodebuild.log \
+            || { echo "::error::xcodebuild 没有 BUILD SUCCEEDED"; exit 1; }
+          echo "::notice::xcodebuild 编译通过"
+
+      - name: 产物留档（.app 目录清单）
+        run: |
+          set -euo pipefail
+          APP=$(find ios/build/DerivedData -maxdepth 5 -name 'ShotTuner.app' -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::找不到构建出来的 ShotTuner.app"
+            exit 1
+          fi
+          echo "产物：$APP"
+          ls -la "$APP"
+          # 共享内核的 framework 必须被嵌进去（动态 framework 少了它，真机装上去会崩）
+          test -d "$APP/Frameworks/Shared.framework" \
+            || { echo "::error::产物里没有 Frameworks/Shared.framework"; exit 1; }

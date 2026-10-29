@@ -54,7 +54,8 @@ REPO="$WORK/repo"
 mkdir -p "$REPO/ios" "$REPO/shared/src" "$REPO/docs" "$REPO/tools/ci"
 cp -r "$SCRIPT_DIR/lib" "$SCRIPT_DIR/patterns" "$REPO/tools/ci/"
 cp "$SCRIPT_DIR/check-no-network.sh" "$SCRIPT_DIR/check-no-network-config.sh" \
-   "$SCRIPT_DIR/check-apple-credentials.sh" "$REPO/tools/ci/"
+   "$SCRIPT_DIR/check-apple-credentials.sh" "$SCRIPT_DIR/check-ios-project-spec.sh" \
+   "$REPO/tools/ci/"
 chmod +x "$REPO/tools/ci/"*.sh
 
 printf '// 初始内容\nval a = 1\n' > "$REPO/shared/src/Seed.kt"
@@ -122,6 +123,60 @@ rm -f "$REPO/ios/project.yml"
 printf 'targets:\n  App:\n    settings:\n      %s: NO\n' "$(ci_load_patterns 'ios-config-must-be-no.txt' | head -1)" > "$REPO/ios/project.yml"
 expect pass "签名开关为 NO → L2 绿" "$L2" "$REPO"
 rm -f "$REPO/ios/project.yml"
+
+# ── iOS 工程规格门禁（T10 新增）──────────────────────────────────────────
+# ★ 这道门禁也必须被反向验证：它检查的是**纯文本**，
+#   一旦规则写反（例如把签名开关的判断写反），就会变成「永远绿」的假门禁。
+ci_info ""
+ci_info "【iOS 工程规格门禁】"
+SPEC="$REPO/tools/ci/check-ios-project-spec.sh"
+
+mkdir -p "$REPO/ios/ShotTuner" "$REPO/ios/Scripts" "$REPO/shared/src/iosMain/kotlin"
+
+cat > "$REPO/ios/project.yml" <<'YAML'
+name: ShotTuner
+options:
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  ShotTuner:
+    type: application
+    platform: iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shottuner.app
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+YAML
+
+cat > "$REPO/ios/ShotTuner/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>测试用的相机权限文案</string>
+</dict>
+</plist>
+PLIST
+
+printf '#!/bin/sh\n./gradlew :shared:embedAndSignAppleFrameworkForXcode\n' \
+  > "$REPO/ios/Scripts/kmp-build-framework.sh"
+printf 'package com.shottuner.app.ios\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
+
+expect pass "规格合规 → 规格门禁绿" "$SPEC" "$REPO"
+
+sed -i 's/CODE_SIGNING_ALLOWED: "NO"/CODE_SIGNING_ALLOWED: "YES"/' "$REPO/ios/project.yml"
+expect fail "签名开关不是 NO → 规格门禁红" "$SPEC" "$REPO"
+sed -i 's/CODE_SIGNING_ALLOWED: "YES"/CODE_SIGNING_ALLOWED: "NO"/' "$REPO/ios/project.yml"
+
+sed -i 's/iOS: "16.0"/iOS: "16.1"/' "$REPO/ios/project.yml"
+expect fail "部署目标不是 16.0 → 规格门禁红" "$SPEC" "$REPO"
+sed -i 's/iOS: "16.1"/iOS: "16.0"/' "$REPO/ios/project.yml"
+
+printf 'val x = 1\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
+rm -f "$REPO/shared/src/iosMain/kotlin/Seed.kt"
+expect fail "iosMain 源集是空的 → 规格门禁红" "$SPEC" "$REPO"
 
 ci_log ""
 if [ "$FAIL" -gt 0 ]; then
