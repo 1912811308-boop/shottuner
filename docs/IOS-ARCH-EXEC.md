@@ -48,9 +48,9 @@
 
 | 行 | 当前（损坏） | 应为 | 判定依据 |
 |---|---|---|---|
-| `:512` | `任务痕���（高亮交点 + 环）` | **`任务痕迹`** | 同句下文「只 `abort()` 不清 Mission…画面上却还挂着一个没有任务在管的灰环」 |
-| `:765` | `与 [formatScore] 的第���行同口径` | **`第一行`** | `formatScore` 返回 `"$head\n$dims"`，`head` 正是第一行（`参考分 N · 等级` / `参考分 -- · 有一项未测`） |
-| `:2969` | `以前它被归进"沉��档看不懂的数字"` | **`"沉浸档看不懂的数字"`** | 上下文讲「G1 改动：`tvScoreDetail` 不再跟着档位隐藏」，指的是「沉浸/专业」两档里的沉浸档 |
+| `:512` | `任务痕迹（高亮交点 + 环）` | **`任务痕迹`** | 同句下文「只 `abort()` 不清 Mission…画面上却还挂着一个没有任务在管的灰环」 |
+| `:765` | `与 [formatScore] 的第一行同口径` | **`第一行`** | `formatScore` 返回 `"$head\n$dims"`，`head` 正是第一行（`参考分 N · 等级` / `参考分 -- · 有一项未测`） |
+| `:2969` | `以前它被归进"沉浸档看不懂的数字"` | **`"沉浸档看不懂的数字"`** | 上下文讲「G1 改动：`tvScoreDetail` 不再跟着档位隐藏」，指的是「沉浸/专业」两档里的沉浸档 |
 
 **⇒ 建议作为独立小改动修掉（3 行、零功能影响、零风险）**：按上表逐字替换。**不要用「容错」方式重写整个文件去「修复」它** —— 那正是下面纪律要禁止的动作。
 
@@ -798,18 +798,61 @@ jobs:
             app/build/reports/tests/**
 ```
 
-> ### ⚠️ 悬置项 S1：「G2 能否留在 Linux runner」（依赖 architect-2 的预研结论）
+> ### ✅ 悬置项 S1：**已实测解答（2026-10-27）—— 情形 B，但配额担忧大幅缓解**
 >
-> **这是整份 CI 设计唯一的单点依赖。** Kotlin/Native 的 **klib 编译**（`compileKotlinIosSimulatorArm64`）通常可在 Linux 上完成（不需要 Apple linker），但 **framework 链接**（`linkDebugFrameworkIosSimulatorArm64` / `embedAndSignAppleFrameworkForXcode`）**必须 macOS**。
+> **这是整份 CI 设计唯一的单点依赖，现已由实测关闭。**
 >
-> | 情形 | G2 跑在哪 | macOS 配额压力 | 后果 |
+> **实测结论**：`compileKotlinIosSimulatorArm64` 在 **Linux runner 上是 `SKIPPED`** ——
+> Kotlin/Native 的硬宿主限制：**Apple 目标只能从 macOS 宿主编译**（不是 linker 的问题，是整个 target 的问题）。
+>
+> | 情形 | 是否成立 | G2 跑在哪 | macOS 配额压力 |
 > |---|---|---|---|
-> | **A（预期）** | Linux | 只有 G4 用 ≈ 40–160 分钟/月 | **配额充裕**，迭代不受限 |
-> | **B（翻盘）** | macOS | G2+G3+G4 全部吃 macOS ≈ 200 分钟/月 | **配额立刻变瓶颈**：按 10–20 分钟/次算，**每月只有 10–20 次**。G2/G3 原本 3–8 分钟一轮的快速反馈变成 10–20 分钟，且每次都要排队 |
+> | **A（预期）** | ❌ 不成立 | — | — |
+> | **B（翻盘）** | ✅ **成立** | macOS | 见下 —— **比原估乐观得多** |
 >
-> **翻盘后的处置（不必重新设计，但要改触发策略）**：① G2/G3 改为**只在 push 到 main 与 PR 手动触发**时跑，日常靠本地 `git push` 前的本地脚本；② 把 macOS 配额集中给 G4，G2/G3 降频到每天 1 次；③ **若 architect-2 确认"无 Mac 且 Linux 不可行"这一组合成立，则 iOS 线整体不具备可持续性 → 触发 T00 的可证伪判据**（立刻重评 KMP vs 纯 Swift 重写内核）。
+> #### ⚠️⚠️ 本次最贵的教训：Gradle 的 SKIPPED 任务，GitHub 上显示的 conclusion 也是 `success`！
+> 第一次跑 CI 时，`:shared:compileKotlinIosSimulatorArm64` 在 Linux 上是 SKIPPED，
+> 而 GitHub 的 job conclusion 是 **success** —— **只看结论会误判成「iOS 编译通过」**。
+> 是靠翻日志才发现的。**现在所有关键任务都带「反 SKIPPED 断言」**：
+> 日志里出现 `SKIPPED` 就 `exit 1`。**以后看 CI 结果，一律要进日志确认关键任务不是 SKIPPED / NO-SOURCE。**
 >
-> **结论一旦到达，本节按 A 或 B 直接改即可，不影响其它任何设计。**
+> #### ★ 但配额担忧**大幅缓解**（实测，与原估的「10–20 次/月」相反）
+>
+> | 项 | 原预研估计 | **实测（2026-10-27）** |
+> |---|---|---|
+> | iOS 编译耗时 | 冷 12–20 分 / 热 3–6 分 | **热 1 分 17 秒**（缓存命中） |
+> | runner 供给 | 未考虑 | `macos-latest` 排队 **15 分钟被自动取消**；换 **`macos-14`** 后 **5 分钟内跑完** ✅ |
+> | 月度可编译次数 | 10–20 次 | **约 150 次**（200 分钟 ÷ 1.3 分钟） |
+>
+> → 「macOS 配额是瓶颈」这个判断**不成立**。预研报告里「单次往返 8–20 分钟」的估计也偏悲观了：
+> 实际是**改代码 → push → 1–2 分钟拿到编译结果**。剩下的痛点只有「没有断点调试」这一条。
+>
+> #### 已实施的处置
+> 1. **`ios-compile` job**（`macos-14`，**仅 `workflow_dispatch` 手动触发**）：编 `iosSimulatorArm64` + `iosArm64`，
+>    带**反 SKIPPED 断言**（macOS 上若还 SKIPPED，说明开关没生效 → 必须让它红）。
+> 2. **Linux 的 `common-gate` 改跑 `compileCommonMainKotlinMetadata`** —— 这是**唯一权威的 common 纯度检查**
+>    （metadata 编译只允许 common API）。它替代了原来「在 Linux 上编 iOS klib」的定位。
+> 3. **新增 `tools/ci/check-common-purity.sh`**（秒级本地自查，24 个特征串）—— 快但不完备，权威仍是 metadata 编译。
+> 4. **SideStore 的 7 天重签不需要重新编译**（重签的是同一个 ipa）→ macOS 配额只花在「代码变更后的重新编译」上。
+>
+> #### ★ metadata 编译当场抓出一个 Android 编译抓不到的 bug（证明这道门禁不可省）
+> `ScoreHistory` 里用了 `t.javaClass.simpleName` —— **`javaClass` 是 JVM-only 的 API**，
+> 而 **Android 侧编译完全看不出来**（Android 有 javaClass），iOS 上会直接编译失败。
+> 若没有这道门禁，它要等到**第一次真机出包**才暴露 —— 那时整个编译周期已经浪费了。已改为 `t::class.simpleName`。
+>
+> #### ★ T00 可证伪判据：**未触发**（路线成立）
+> 「KMP 编译链走不通」这个情形**没有发生** —— 三环境全绿：
+> Windows `:shared:compileDebugKotlinAndroid` ✅ / Linux `compileCommonMainKotlinMetadata` ✅ / macOS `compileKotlinIosArm64` ✅。
+> **iOS 移植最大的风险（commonMain 不纯）已排除**，剩下只有 Native 特有的语义差异。
+>
+> #### 另附：CI 首跑连环翻车的三条（已修，值得留档）
+> 1. **`gradlew` 没有执行位** → `Permission denied`（exit 126）。根因：**Windows 上 git 的 `core.fileMode` 默认 false**，
+>    本地文件有执行位但**提交进仓库的模式是 100644**。修：`git update-index --chmod=+x gradlew` + workflow 里 `chmod +x`。
+> 2. **`signingConfigs` 在配置阶段抛异常** → CI 上没有 `gradle.properties`（被 gitignore，含明文口令），
+>    于是**连 `assembleDebug` 都构建失败**。修：改成惰性求值（且**空字符串也要当成"缺"**，因为 example 里就是空串，
+>    `file("")` 会报 "path may not be null or empty string"）。
+> 3. **DNS 把 `github.com` 解析到亚洲节点 `20.205.243.166` 时可能不通**（而 `api.github.com` 通）。
+>    备用 IP 段 `140.82.112/113/114/116.3` 与 `20.27.177.113` 都通。
 
 > ### 🔒 CI 硬规则（clover 已拍板，固化在 workflow 注释与 CONTRIBUTING 里）
 >
@@ -933,7 +976,7 @@ exit $fail
 | **当前状态（2026-10-18）** | ⚠️ **仓库尚未建成**。GitHub 连接器用的是 **GitHub App 集成令牌**，`POST /user/repos` 返回 `403 Resource not accessible by integration` —— 这类令牌**没有创建仓库的权限**，只能操作已存在且已授权给该 App 的仓库；账号 `1912811308-boop` 当前 0 仓库。**建仓库必须走账号自己的 PAT / SSH key，或直接在网页上建**（team-lead 处理中）。**这不阻塞任何任务**：门禁文件是纯文本，先在本地写好即可，仓库就位后一次提交即生效 |
 | 落地命令 | `gh repo create shottuner --private --source=. --remote=origin --push`（在 `5a6d7c7` 基线上执行；`.gitignore` 已排除 `dist/` `work/` `gradle.properties` `*.jks` `local.properties`） |
 | **CI 的硬约束** | GitHub 私有仓库的 Actions 包含额度：**Linux 2,000 分钟/月，macOS 200 分钟/月**（macOS 按 10× 折算） |
-| **结论** | **macOS runner 每月只有约 200 分钟 ≈ 20 次 10 分钟的完整出包**。所以：**push/PR 只跑 G1/G2/G3（Linux）**，G4 只在 `workflow_dispatch` 手动触发或打 tag 时跑。**这正是四档门禁分层的意义**——它把 macOS 配额留给"真的要出包"的那一刻 |
+| **结论** | **macOS runner 每月只有约 200 分钟**。所以：**push/PR 只跑 Linux 那一档**（含 `compileCommonMainKotlinMetadata` 这个权威的 common 纯度检查），iOS 编译与出包只在 `workflow_dispatch` 手动触发时跑。**这正是四档门禁分层的意义**——它把 macOS 配额留给"真的要出包"的那一刻 |
 
 **推论（要写进排期）**：iOS 侧每天能拿到的"真机可装包"数量受 macOS 配额限制 → **调试节奏不能依赖"改一点出一次包"**。对策是 §4.1 的 G2/G3 在 Linux 上 3–8 分钟一轮，**绝大多数缺陷在 commonTest 阶段就被拦下**，根本不用出包。
 
@@ -1050,7 +1093,7 @@ targets:
 | # | 事项 | 决策 | 记录 |
 |---|---|---|---|
 | 1 | **Apple Developer Program（99 USD/年）** | **不买** | 走 SideStore 方案 B：CI 出未签名 ipa，设备端 7 天自动续签，功能零损失。付费账号记为**可选**决策点，**不是阻塞项** |
-| 2 | **macOS 配额 200 分钟/月** | **接受** | G2/G3 在 Linux 上拦下绝大多数缺陷；只有 G4 出包 + 二进制扫描用 macOS。按 13–20 人日、每周 1–2 次出包估 ≈ 40–160 分钟/月，在配额内。**前提是悬置项 S1 结论为 A**（G2 留 Linux）——若翻盘，配额从"充裕"变"瓶颈"，处置见 §4.1 悬置项 S1 |
+| 2 | **macOS 配额 200 分钟/月** | **接受** | G2/G3 在 Linux 上拦下绝大多数缺陷；只有 G4 出包 + 二进制扫描用 macOS。按 13–20 人日、每周 1–2 次出包估 ≈ 40–160 分钟/月，在配额内。**S1 已实测解答（2026-10-27）**：iOS 编译**必须 macOS 宿主**（Linux 上是 SKIPPED），但**实测 iOS 编译只要 1 分 17 秒**、换 `macos-14` 后 5 分钟内能排到 runner → 月度可编译约 150 次，**配额不构成瓶颈**。详见 §4.1 的 S1 段 |
 | 3 | **Q6 Locale 缺陷** | **(b) 两端一起修** | `text/NumFmt.kt` 两端共用（包名沿用 `com.shottuner.app.*` → 无需条件编译）；Android 侧 9 处替换已**单独派发**给工程师，独立验收，不混进 KMP 大重构；必加 de-DE / fr-FR Locale 回归单测 |
 | 4 | **Spike #0 的可证伪判据** | 写进验收标准 | 若 KMP 编译链本身走不通 → **立刻重评「KMP vs 纯 Swift 重写内核」**，不在错误路线上继续投 3–4 人日 |
 | 5 | **纯文件口径** | L1 文件级 → **L2 类级闭包**（★ 权威见 IOS-ARCH §11.2；**代码在推进，数字会变**） | KMP 改造量按 **3–4 人日**排。⚠️ **口径必须解析「同包引用」**（不需要 import，扫 import 会漏）→ L2 比 L1 少 3 个文件（`FeatureAdvisor`/`VideoRecommender`/`SceneClassifier`） |
