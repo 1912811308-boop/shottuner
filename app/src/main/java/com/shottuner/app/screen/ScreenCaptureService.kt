@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.graphics.drawable.Icon
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -21,6 +22,7 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Display
 import com.shottuner.app.MainActivity
 import com.shottuner.app.analysis.AiVision
 import com.shottuner.app.analysis.AiVisionResult
@@ -80,6 +82,26 @@ class ScreenCaptureService : Service() {
     private var lastAt = 0L
     private var profile: DeviceProfile = DeviceProfile.unknown()
     private var caps: CameraCaps = CameraCaps.UNKNOWN
+
+    /**
+     * 屏幕的**物理**方向与尺寸。
+     *
+     * 不能用 `resources.displayMetrics`：它受 App 自己的方向锁影响
+     * （MainActivity 锁了 portrait），拿不到真实的物理横屏状态。
+     *
+     * `by lazy` 是必须的：Service 的字段初始化跑在 `attach()` 之前，
+     * 那时 `getSystemService()` 还没有 base context，直接调会 NPE。
+     */
+    private val displayManager: DisplayManager by lazy {
+        getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+    }
+    private val screenDisplay: Display? by lazy {
+        displayManager.getDisplay(Display.DEFAULT_DISPLAY)
+    }
+
+    /** 转屏监听：录屏画布要跟着物理方向重建 */
+    private var displayListener: DisplayManager.DisplayListener? = null
+    private var lastRotation: Int = OverlayOrientation.ROTATION_0
 
     private val aiVision = AiVision()
 
@@ -170,51 +192,197 @@ class ScreenCaptureService : Service() {
         val h = Handler(worker!!.looper)
         handler = h
 
-        val dm = resources.displayMetrics
-        val w = (dm.widthPixels / 3).coerceIn(240, 720)
-        val hgt = (dm.heightPixels / 3).coerceIn(320, 1600)
-
-        reader = ImageReader.newInstance(w, hgt, PixelFormat.RGBA_8888, 2)
-        virtualDisplay = p.createVirtualDisplay(
-            "shottuner-coach",
-            w, hgt, dm.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            reader!!.surface, null, h
-        )
-
-        reader!!.setOnImageAvailableListener({ r ->
-            val image = try {
-                r.acquireLatestImage()
-            } catch (_: Throwable) {
-                null
-            } ?: return@setOnImageAvailableListener
-            try {
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastAt < MIN_INTERVAL_MS) return@setOnImageAvailableListener
-                lastAt = now
-                val plane = image.planes[0]
-                frameTick++
-                val wantAi = frameTick % 3 == 0
-                val stats = ScreenStats.compute(
-                    plane.buffer, image.width, image.height, plane.rowStride, plane.pixelStride,
-                    onBitmap = if (wantAi) { bmp ->
-                        aiVision.analyze(bmp) { r -> aiResult = r }
-                    } else null
-                )
-                if (stats != null) handle(stats)
-            } catch (e: Throwable) {
-                // 坏帧丢弃：投屏管线一旦抛异常会导致整条流停摆。
-                // 但"坏帧"和"代码 bug"必须能在日志里分开 —— 记 W 不记 E，
-                // 因为这类异常可能每秒来一次，会迅速把环形日志刷满。
-                Diag.w(TAG, "屏幕帧处理失败（已丢弃该帧）", e)
-            } finally {
-                image.close()
-            }
-        }, h)
+        startCapture(p, h)
+        ensureDisplayListener()
 
         main.post {
             overlay = CoachOverlay(this) { stopSelf() }
             overlay?.show()
+        }
+    }
+
+    /**
+     * 录屏管线：屏幕 → VirtualDisplay → ImageReader → 逐帧分析。
+     *
+     * 画布尺寸必须跟着**屏幕物理方向**走（见 [captureSize]），
+     * 所以转屏时要重建这条管线 —— 见 [recreateCapture]。
+     */
+    private fun startCapture(p: MediaProjection, h: Handler) {
+        val (w, hgt) = captureSize()
+        val newReader = ImageReader.newInstance(w, hgt, PixelFormat.RGBA_8888, 2)
+        val newDisplay = p.createVirtualDisplay(
+            "shottuner-coach",
+            w, hgt,
+            resources.displayMetrics.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            newReader.surface, null, h
+        )
+        // 新的管线先起来，再拆旧的：中途失败也不至于把录屏整个弄没
+        val oldReader = reader
+        val oldDisplay = virtualDisplay
+        reader = newReader
+        virtualDisplay = newDisplay
+        newReader.setOnImageAvailableListener({ r -> onFrame(r) }, h)
+        try {
+            oldReader?.setOnImageAvailableListener(null, null)
+            oldReader?.close()
+        } catch (_: Throwable) {
+        }
+        try {
+            oldDisplay?.release()
+        } catch (_: Throwable) {
+        }
+    }
+
+    /**
+     * 录屏画布尺寸：**跟着屏幕的物理方向**走。
+     *
+     * 为什么不能沿用 `resources.displayMetrics`：
+     * 那个值受 App 自己的方向锁影响（MainActivity 锁了 portrait），
+     * 拿到的一直是竖屏尺寸；而且它是 App 级配置，用户切到系统相机时
+     * 甚至可能已经是横屏的值，两种情况都会算错。
+     *
+     * `Display.getRealSize()` 给的是物理尺寸：横屏时是 2340×1080。
+     * 画布形状必须和屏幕一致 —— VirtualDisplay 是把屏幕等比镜像进画布，
+     * 比例对不上就会上下/左右留黑边，而黑边会把平均亮度拉低，
+     * 夜景 / 日落这类场景判断会跟着一起错。
+     *
+     * 竖屏时算出来与旧版逐像素一致（1080×2340 → 360×780）。
+     *
+     * API 35 标了废弃但仍可用：推荐的 `getCurrentWindowMetrics()` 给的是
+     * **本 App 窗口**尺寸，会被 portrait 方向锁改成竖屏值 —— 正是这里要躲开的。
+     */
+    @Suppress("DEPRECATION")
+    private fun captureSize(): Pair<Int, Int> {
+        val real = Point()
+        val d = screenDisplay
+        if (d != null) {
+            try {
+                d.getRealSize(real)
+                if (real.x > 0 && real.y > 0) {
+                    return scaledCaptureSize(real.x, real.y)
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        val dm = resources.displayMetrics
+        return scaledCaptureSize(dm.widthPixels, dm.heightPixels)
+    }
+
+    /** 画布按 1/3 缩放；宽高同比例缩放，保证与屏幕同形（不留黑边） */
+    private fun scaledCaptureSize(pxW: Int, pxH: Int): Pair<Int, Int> {
+        var w = (pxW / 3).coerceAtLeast(1)
+        var h = (pxH / 3).coerceAtLeast(1)
+        if (w > 720) {
+            h = (h * 720f / w).toInt()
+            w = 720
+        }
+        if (w < 240) {
+            h = (h * 240f / w).toInt().coerceAtLeast(1)
+            w = 240
+        }
+        if (h > 1600) {
+            w = (w * 1600f / h).toInt().coerceAtLeast(1)
+            h = 1600
+        }
+        if (h < 320) {
+            w = (w * 320f / h).toInt().coerceAtLeast(1)
+            h = 320
+        }
+        return w to h
+    }
+
+    /** 转屏了：按新方向重建录屏管线 */
+    private fun recreateCapture() {
+        val p = projection ?: return
+        val h = handler ?: return
+        h.post {
+            // 排队的这段时间里服务可能已经被停掉了：投屏授权没了就别再重建
+            if (projection == null) return@post
+            try {
+                startCapture(p, h)
+            } catch (e: Throwable) {
+                Diag.w(TAG, "转屏后重建录屏管线失败（保留旧管线）", e)
+            }
+        }
+    }
+
+    /**
+     * 监听屏幕物理方向。
+     *
+     * 只看 `Display.getRotation()`，不看 Service 的 Configuration ——
+     * 后者受 App 方向锁与前后台状态影响，横竖屏判断不可靠。
+     */
+    private fun ensureDisplayListener() {
+        if (displayListener != null) return
+        val d = screenDisplay
+        lastRotation = try {
+            d?.rotation ?: OverlayOrientation.ROTATION_0
+        } catch (_: Throwable) {
+            OverlayOrientation.ROTATION_0
+        }
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+
+            override fun onDisplayRemoved(displayId: Int) = Unit
+
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != Display.DEFAULT_DISPLAY) return
+                val now = try {
+                    d?.rotation ?: OverlayOrientation.ROTATION_0
+                } catch (_: Throwable) {
+                    OverlayOrientation.ROTATION_0
+                }
+                if (now == lastRotation) return
+                lastRotation = now
+                recreateCapture()
+            }
+        }
+        try {
+            // handler 传 null = 用调用线程（主线程）的 Looper
+            displayManager.registerDisplayListener(listener, null)
+            displayListener = listener
+        } catch (_: Throwable) {
+            displayListener = null
+        }
+    }
+
+    private fun unregisterDisplayListener() {
+        val listener = displayListener ?: return
+        displayListener = null
+        try {
+            displayManager.unregisterDisplayListener(listener)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun onFrame(r: ImageReader) {
+        val image = try {
+            r.acquireLatestImage()
+        } catch (_: Throwable) {
+            null
+        } ?: return
+        try {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastAt < MIN_INTERVAL_MS) return
+            lastAt = now
+            val plane = image.planes[0]
+            frameTick++
+            val wantAi = frameTick % 3 == 0
+            val stats = ScreenStats.compute(
+                plane.buffer, image.width, image.height, plane.rowStride, plane.pixelStride,
+                onBitmap = if (wantAi) { bmp ->
+                    aiVision.analyze(bmp) { r -> aiResult = r }
+                } else null
+            )
+            if (stats != null) handle(stats)
+        } catch (e: Throwable) {
+            // 坏帧丢弃：投屏管线一旦抛异常会导致整条流停摆。
+            // 但"坏帧"和"代码 bug"必须能在日志里分开 —— 记 W 不记 E，
+            // 因为这类异常可能每秒来一次，会迅速把环形日志刷满。
+            Diag.w(TAG, "屏幕帧处理失败（已丢弃该帧）", e)
+        } finally {
+            image.close()
         }
     }
 
@@ -323,6 +491,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun cleanup() {
+        unregisterDisplayListener()
         try {
             aiVision.close()
         } catch (_: Throwable) {
