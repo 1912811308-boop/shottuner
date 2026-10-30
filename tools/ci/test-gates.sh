@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "${SCRIPT_DIR}/lib/common.sh"
 
 ci_log "▶ 门禁反向验证"
 
@@ -23,117 +23,117 @@ ci_log "▶ 门禁反向验证"
 NETPAT="$(ci_load_patterns "network-source.txt" | head -1)"
 CREDPAT="$(ci_load_patterns "apple-secrets.txt" | head -1)"
 EMPTYVAR="$(ci_load_patterns "apple-signing-empty.txt" | head -1)"
-[ -n "$NETPAT" ]  || ci_die "network-source.txt 为空"
-[ -n "$CREDPAT" ] || ci_die "apple-secrets.txt 为空"
-[ -n "$EMPTYVAR" ] || ci_die "apple-signing-empty.txt 为空"
+[ -n "${NETPAT}" ]  || ci_die "network-source.txt 为空"
+[ -n "${CREDPAT}" ] || ci_die "apple-secrets.txt 为空"
+[ -n "${EMPTYVAR}" ] || ci_die "apple-signing-empty.txt 为空"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "${WORK}"' EXIT
 
 PASS=0
 FAIL=0
 
 # expect <期望: pass|fail> <用例名> <命令...>
 expect() {
-  local want="$1" name="$2"; shift 2
+  local want="${1}" name="${2}"; shift 2
   local rc=0
-  "$@" >"$WORK/out.txt" 2>&1 || rc=$?
-  if [ "$want" = "pass" ] && [ "$rc" -eq 0 ]; then
-    ci_info "  ✓ $name（期望绿，实得绿）"; PASS=$((PASS+1)); return 0
+  "${@}" >"${WORK}/out.txt" 2>&1 || rc=${?}
+  if [ "${want}" = "pass" ] && [ "${rc}" -eq 0 ]; then
+    ci_info "  ✓ ${name}（期望绿，实得绿）"; PASS=$((PASS+1)); return 0
   fi
-  if [ "$want" = "fail" ] && [ "$rc" -ne 0 ]; then
-    ci_info "  ✓ $name（期望红，实得红，exit=$rc）"; PASS=$((PASS+1)); return 0
+  if [ "${want}" = "fail" ] && [ "${rc}" -ne 0 ]; then
+    ci_info "  ✓ ${name}（期望红，实得红，exit=${rc}）"; PASS=$((PASS+1)); return 0
   fi
-  ci_error "-" "-" "反向验证失败：$name —— 期望 $want，实得 exit=$rc"
-  sed 's/^/      /' "$WORK/out.txt" | head -12 >&2
+  ci_error "-" "-" "反向验证失败：${name} —— 期望 ${want}，实得 exit=${rc}"
+  sed 's/^/      /' "${WORK}/out.txt" | head -12 >&2
   FAIL=$((FAIL+1)); return 0
 }
 
 # ── 构造一个最小仓库 ────────────────────────────────────────────────────────
-REPO="$WORK/repo"
-mkdir -p "$REPO/ios" "$REPO/shared/src" "$REPO/docs" "$REPO/tools/ci"
-cp -r "$SCRIPT_DIR/lib" "$SCRIPT_DIR/patterns" "$REPO/tools/ci/"
-cp "$SCRIPT_DIR/check-no-network.sh" "$SCRIPT_DIR/check-no-network-config.sh" \
-   "$SCRIPT_DIR/check-apple-credentials.sh" "$SCRIPT_DIR/check-ios-project-spec.sh" \
-   "$REPO/tools/ci/"
-chmod +x "$REPO/tools/ci/"*.sh
+REPO="${WORK}/repo"
+mkdir -p "${REPO}/ios" "${REPO}/shared/src" "${REPO}/docs" "${REPO}/tools/ci"
+cp -r "${SCRIPT_DIR}/lib" "${SCRIPT_DIR}/patterns" "${REPO}/tools/ci/"
+cp "${SCRIPT_DIR}/check-no-network.sh" "${SCRIPT_DIR}/check-no-network-config.sh" \
+   "${SCRIPT_DIR}/check-apple-credentials.sh" "${SCRIPT_DIR}/check-ios-project-spec.sh" \
+   "${REPO}/tools/ci/"
+chmod +x "${REPO}/tools/ci/"*.sh
 
-printf '// 初始内容\nval a = 1\n' > "$REPO/shared/src/Seed.kt"
-printf 'import Foundation\n' > "$REPO/ios/Seed.swift"
-printf '# 初始文档\n' > "$REPO/docs/seed.md"
+printf '// 初始内容\nval a = 1\n' > "${REPO}/shared/src/Seed.kt"
+printf 'import Foundation\n' > "${REPO}/ios/Seed.swift"
+printf '# 初始文档\n' > "${REPO}/docs/seed.md"
 
-L1="$REPO/tools/ci/check-no-network.sh"
-L2="$REPO/tools/ci/check-no-network-config.sh"
-G1D="$REPO/tools/ci/check-apple-credentials.sh"
+L1="${REPO}/tools/ci/check-no-network.sh"
+L2="${REPO}/tools/ci/check-no-network-config.sh"
+G1D="${REPO}/tools/ci/check-apple-credentials.sh"
 
 ci_info ""
 ci_info "【坑 1】注释行不应触发红灯"
-printf '// 说明：这里不要用 %s\nval b = 2\n' "$NETPAT" > "$REPO/shared/src/Commented.kt"
-expect pass "被禁词只出现在 .kt 注释里 → L1 绿" "$L1" "$REPO"
-rm -f "$REPO/shared/src/Commented.kt"
+printf '// 说明：这里不要用 %s\nval b = 2\n' "${NETPAT}" > "${REPO}/shared/src/Commented.kt"
+expect pass "被禁词只出现在 .kt 注释里 → L1 绿" "${L1}" "${REPO}"
+rm -f "${REPO}/shared/src/Commented.kt"
 
 ci_info ""
 ci_info "【坑 2】文档散文不应触发红灯"
-printf '文档里讨论了 %s 的用法\n' "$NETPAT" > "$REPO/docs/talk.md"
-expect pass "被禁词出现在 docs/*.md → L1 绿" "$L1" "$REPO"
-expect pass "被禁词出现在 docs/*.md → L2 绿" "$L2" "$REPO"
-rm -f "$REPO/docs/talk.md"
+printf '文档里讨论了 %s 的用法\n' "${NETPAT}" > "${REPO}/docs/talk.md"
+expect pass "被禁词出现在 docs/*.md → L1 绿" "${L1}" "${REPO}"
+expect pass "被禁词出现在 docs/*.md → L2 绿" "${L2}" "${REPO}"
+rm -f "${REPO}/docs/talk.md"
 
 ci_info ""
 ci_info "【坑 3】门禁脚本与清单自身不应触发红灯"
-expect pass "被禁词只在 patterns/*.txt 里 → L1 绿" "$L1" "$REPO"
-expect pass "被禁词只在 patterns/*.txt 里 → G1-d 绿" "$G1D" "$REPO"
+expect pass "被禁词只在 patterns/*.txt 里 → L1 绿" "${L1}" "${REPO}"
+expect pass "被禁词只在 patterns/*.txt 里 → G1-d 绿" "${G1D}" "${REPO}"
 
 ci_info ""
 ci_info "【真违规必须红】"
-printf 'import Foundation\nlet x = %s.shared\n' "$NETPAT" > "$REPO/ios/Bad.swift"
-expect fail "被禁词出现在 ios/*.swift 代码里 → L1 红" "$L1" "$REPO"
-rm -f "$REPO/ios/Bad.swift"
+printf 'import Foundation\nlet x = %s.shared\n' "${NETPAT}" > "${REPO}/ios/Bad.swift"
+expect fail "被禁词出现在 ios/*.swift 代码里 → L1 红" "${L1}" "${REPO}"
+rm -f "${REPO}/ios/Bad.swift"
 
-printf 'val c = %s\n' "$NETPAT" > "$REPO/shared/src/Bad.kt"
-expect fail "被禁词出现在 shared/src/*.kt 代码里 → L1 红" "$L1" "$REPO"
-rm -f "$REPO/shared/src/Bad.kt"
+printf 'val c = %s\n' "${NETPAT}" > "${REPO}/shared/src/Bad.kt"
+expect fail "被禁词出现在 shared/src/*.kt 代码里 → L1 红" "${L1}" "${REPO}"
+rm -f "${REPO}/shared/src/Bad.kt"
 
 ci_info ""
 ci_info "【凭据门禁】"
-printf 'jobs:\n  build:\n    env:\n      %s: whatever\n' "$CREDPAT" > "$REPO/ci.yml"
-expect fail "凭据特征出现在 .yml → G1-d 红" "$G1D" "$REPO"
-rm -f "$REPO/ci.yml"
+printf 'jobs:\n  build:\n    env:\n      %s: whatever\n' "${CREDPAT}" > "${REPO}/ci.yml"
+expect fail "凭据特征出现在 .yml → G1-d 红" "${G1D}" "${REPO}"
+rm -f "${REPO}/ci.yml"
 
-printf '文档里提到了 %s 这个词\n' "$CREDPAT" > "$REPO/docs/cred.md"
-expect fail "凭据特征出现在 .md → G1-d 红" "$G1D" "$REPO"
-rm -f "$REPO/docs/cred.md"
+printf '文档里提到了 %s 这个词\n' "${CREDPAT}" > "${REPO}/docs/cred.md"
+expect fail "凭据特征出现在 .md → G1-d 红" "${G1D}" "${REPO}"
+rm -f "${REPO}/docs/cred.md"
 
 ci_info ""
 ci_info "【签名开关必须恒为空】"
-printf 'build:\n  settings:\n    %s: "Apple Development: someone"\n' "$EMPTYVAR" > "$REPO/sig.yml"
-expect fail "签名变量非空 → G1-d 红" "$G1D" "$REPO"
-rm -f "$REPO/sig.yml"
+printf 'build:\n  settings:\n    %s: "Apple Development: someone"\n' "${EMPTYVAR}" > "${REPO}/sig.yml"
+expect fail "签名变量非空 → G1-d 红" "${G1D}" "${REPO}"
+rm -f "${REPO}/sig.yml"
 
-printf 'build:\n  settings:\n    %s: ""\n' "$EMPTYVAR" > "$REPO/sig.yml"
-expect pass "签名变量为空 → G1-d 绿" "$G1D" "$REPO"
-rm -f "$REPO/sig.yml"
+printf 'build:\n  settings:\n    %s: ""\n' "${EMPTYVAR}" > "${REPO}/sig.yml"
+expect pass "签名变量为空 → G1-d 绿" "${G1D}" "${REPO}"
+rm -f "${REPO}/sig.yml"
 
 ci_info ""
 ci_info "【L2 配置层】"
-printf 'targets:\n  App:\n    settings:\n      %s: YES\n' "$(ci_load_patterns 'ios-config-must-be-no.txt' | head -1)" > "$REPO/ios/project.yml"
-expect fail "签名开关非 NO → L2 红" "$L2" "$REPO"
-rm -f "$REPO/ios/project.yml"
+printf 'targets:\n  App:\n    settings:\n      %s: YES\n' "$(ci_load_patterns 'ios-config-must-be-no.txt' | head -1)" > "${REPO}/ios/project.yml"
+expect fail "签名开关非 NO → L2 红" "${L2}" "${REPO}"
+rm -f "${REPO}/ios/project.yml"
 
-printf 'targets:\n  App:\n    settings:\n      %s: NO\n' "$(ci_load_patterns 'ios-config-must-be-no.txt' | head -1)" > "$REPO/ios/project.yml"
-expect pass "签名开关为 NO → L2 绿" "$L2" "$REPO"
-rm -f "$REPO/ios/project.yml"
+printf 'targets:\n  App:\n    settings:\n      %s: NO\n' "$(ci_load_patterns 'ios-config-must-be-no.txt' | head -1)" > "${REPO}/ios/project.yml"
+expect pass "签名开关为 NO → L2 绿" "${L2}" "${REPO}"
+rm -f "${REPO}/ios/project.yml"
 
 # ── iOS 工程规格门禁（T10 新增）──────────────────────────────────────────
 # ★ 这道门禁也必须被反向验证：它检查的是**纯文本**，
 #   一旦规则写反（例如把签名开关的判断写反），就会变成「永远绿」的假门禁。
 ci_info ""
 ci_info "【iOS 工程规格门禁】"
-SPEC="$REPO/tools/ci/check-ios-project-spec.sh"
+SPEC="${REPO}/tools/ci/check-ios-project-spec.sh"
 
-mkdir -p "$REPO/ios/ShotTuner" "$REPO/ios/Scripts" "$REPO/shared/src/iosMain/kotlin"
+mkdir -p "${REPO}/ios/ShotTuner" "${REPO}/ios/Scripts" "${REPO}/shared/src/iosMain/kotlin"
 
-cat > "$REPO/ios/project.yml" <<'YAML'
+cat > "${REPO}/ios/project.yml" <<'YAML'
 name: ShotTuner
 options:
   projectFormat: xcode15_0
@@ -151,7 +151,7 @@ targets:
         CODE_SIGN_IDENTITY: ""
 YAML
 
-cat > "$REPO/ios/ShotTuner/Info.plist" <<'PLIST'
+cat > "${REPO}/ios/ShotTuner/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
@@ -162,10 +162,10 @@ cat > "$REPO/ios/ShotTuner/Info.plist" <<'PLIST'
 PLIST
 
 printf '#!/bin/sh\n./gradlew :shared:embedAndSignAppleFrameworkForXcode\n' \
-  > "$REPO/ios/Scripts/kmp-build-framework.sh"
-printf 'package com.shottuner.app.ios\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
+  > "${REPO}/ios/Scripts/kmp-build-framework.sh"
+printf 'package com.shottuner.app.ios\n' > "${REPO}/shared/src/iosMain/kotlin/Seed.kt"
 printf 'kotlin {\n    iosArm64().binaries.framework {\n        baseName = "Shared"\n    }\n}\n' \
-  > "$REPO/shared/build.gradle.kts"
+  > "${REPO}/shared/build.gradle.kts"
 
 # ── 导出选项（未签名口径）───────────────────────────────────────────────────
 # ★ 为什么要给它单独准备 fixture：
@@ -174,7 +174,143 @@ printf 'kotlin {\n    iosArm64().binaries.framework {\n        baseName = "Share
 # ★ 纪律：这里写的是**要被注入的坏值**，但它不是「凭据」——
 #   它是凭空捏造的占位串，仓库里任何地方都不该有真的证书名。
 write_export_opts() {
-  cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
+  cat > "${REPO}/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string></string>
+</dict>
+</plist>
+PLIST
+}
+write_export_opts
+
+expect pass "规格合规 → 规格门禁绿" "${SPEC}" "${REPO}"
+
+sed -i 's/CODE_SIGNING_ALLOWED: "NO"/CODE_SIGNING_ALLOWED: "YES"/' "${REPO}/ios/project.yml"
+expect fail "签名开关不是 NO → 规格门禁红" "${SPEC}" "${REPO}"
+sed -i 's/CODE_SIGNING_ALLOWED: "YES"/CODE_SIGNING_ALLOWED: "NO"/' "${REPO}/ios/project.yml"
+
+sed -i 's/iOS: "16.0"/iOS: "16.1"/' "${REPO}/ios/project.yml"
+expect fail "部署目标不是 16.0 → 规格门禁红" "${SPEC}" "${REPO}"
+sed -i 's/iOS: "16.1"/iOS: "16.0"/' "${REPO}/ios/project.yml"
+
+sed -i 's/projectFormat: xcode15_0/projectFormat: xcode16_0/' "${REPO}/ios/project.yml"
+expect fail "工程格式不是 xcode15_0 → 规格门禁红" "${SPEC}" "${REPO}"
+sed -i 's/projectFormat: xcode16_0/projectFormat: xcode15_0/' "${REPO}/ios/project.yml"
+
+printf 'val x = 1\n' > "${REPO}/shared/src/iosMain/kotlin/Seed.kt"
+rm -f "${REPO}/shared/src/iosMain/kotlin/Seed.kt"
+expect fail "iosMain 源集是空的 → 规格门禁红" "${SPEC}" "${REPO}"
+
+sed -i 's/binaries\.framework {//' "${REPO}/shared/build.gradle.kts"
+expect fail "shared 没声明 framework 二进制 → 规格门禁红" "${SPEC}" "${REPO}"
+
+printf '#!/bin/sh\nif [ 1 ; then\n' > "${REPO}/ios/Scripts/Broken.sh"
+expect fail "iOS 的 shell 脚本语法错 → 规格门禁红" "${SPEC}" "${REPO}"
+rm -f "${REPO}/ios/Scripts/Broken.sh"
+
+# ── 导出选项的反向验证（硬规则一在出包链路上的落点）────────────────────────
+ci_info ""
+ci_info "【导出选项必须恒为未签名】"
+
+# ① 非空的签名身份 → 必须红
+cat > "${REPO}/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Fake Signing Identity For Test</string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string></string>
+</dict>
+</plist>
+PLIST
+expect fail "导出选项里有非空签名身份 → 规格门禁红" "${SPEC}" "${REPO}"
+
+# ② 非空的 teamID → 必须红
+cat > "${REPO}/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string>FAKETEAM12</string>
+</dict>
+</plist>
+PLIST
+expect fail "导出选项里有非空 teamID → 规格门禁红" "${SPEC}" "${REPO}"
+
+# ③ 非空的 provisioningProfiles → 必须红
+cat > "${REPO}/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.shottuner.app</key>
+		<string>FakeProfile</string>
+	</dict>
+	<key>teamID</key>
+	<string></string>
+</dict>
+</plist>
+PLIST
+expect fail "导出选项里有非空 provisioningProfiles → 规格门禁红" "${SPEC}" "${REPO}"
+
+# ④ signingStyle=automatic → 必须红（automatic 会让 Xcode 自己去「找」证书）
+cat > "${REPO}/ios/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>signingCertificate</key>
+	<string></string>
+	<key>provisioningProfiles</key>
+	<dict/>
+	<key>teamID</key>
+	<string></string>
+</dict>
+</plist>
+PLIST
+expect fail "导出选项的 signingStyle 是 automatic → 规格门禁红" "${SPEC}" "${REPO}"
+
+# ⑤ method 用了旧版拼写 → 必须红
+#   实测踩过（2026-10-29）：Xcode 15 不认 `release` 这个 method 值了，
+#   报错是 "expected one {app-store-connect, release-testing, ...} but found release" ——
+#   看起来像「签名做不了」，其实只是版本改名。写进门禁就不用再靠人记。
+cat > "${REPO}/ios/ExportOptions.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
@@ -191,128 +327,23 @@ write_export_opts() {
 </dict>
 </plist>
 PLIST
-}
-write_export_opts
+expect fail "导出选项的 method 是旧版拼写 → 规格门禁红" "${SPEC}" "${REPO}"
 
-expect pass "规格合规 → 规格门禁绿" "$SPEC" "$REPO"
-
-sed -i 's/CODE_SIGNING_ALLOWED: "NO"/CODE_SIGNING_ALLOWED: "YES"/' "$REPO/ios/project.yml"
-expect fail "签名开关不是 NO → 规格门禁红" "$SPEC" "$REPO"
-sed -i 's/CODE_SIGNING_ALLOWED: "YES"/CODE_SIGNING_ALLOWED: "NO"/' "$REPO/ios/project.yml"
-
-sed -i 's/iOS: "16.0"/iOS: "16.1"/' "$REPO/ios/project.yml"
-expect fail "部署目标不是 16.0 → 规格门禁红" "$SPEC" "$REPO"
-sed -i 's/iOS: "16.1"/iOS: "16.0"/' "$REPO/ios/project.yml"
-
-sed -i 's/projectFormat: xcode15_0/projectFormat: xcode16_0/' "$REPO/ios/project.yml"
-expect fail "工程格式不是 xcode15_0 → 规格门禁红" "$SPEC" "$REPO"
-sed -i 's/projectFormat: xcode16_0/projectFormat: xcode15_0/' "$REPO/ios/project.yml"
-
-printf 'val x = 1\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
-rm -f "$REPO/shared/src/iosMain/kotlin/Seed.kt"
-expect fail "iosMain 源集是空的 → 规格门禁红" "$SPEC" "$REPO"
-
-sed -i 's/binaries\.framework {//' "$REPO/shared/build.gradle.kts"
-expect fail "shared 没声明 framework 二进制 → 规格门禁红" "$SPEC" "$REPO"
-
-printf '#!/bin/sh\nif [ 1 ; then\n' > "$REPO/ios/Scripts/Broken.sh"
-expect fail "iOS 的 shell 脚本语法错 → 规格门禁红" "$SPEC" "$REPO"
-rm -f "$REPO/ios/Scripts/Broken.sh"
-
-# ── 导出选项的反向验证（硬规则一在出包链路上的落点）────────────────────────
-ci_info ""
-ci_info "【导出选项必须恒为未签名】"
-
-# ① 非空的签名身份 → 必须红
-cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-	<key>signingStyle</key>
-	<string>manual</string>
-	<key>signingCertificate</key>
-	<string>Fake Signing Identity For Test</string>
-	<key>provisioningProfiles</key>
-	<dict/>
-	<key>teamID</key>
-	<string></string>
-</dict>
-</plist>
-PLIST
-expect fail "导出选项里有非空签名身份 → 规格门禁红" "$SPEC" "$REPO"
-
-# ② 非空的 teamID → 必须红
-cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-	<key>signingStyle</key>
-	<string>manual</string>
-	<key>signingCertificate</key>
-	<string></string>
-	<key>provisioningProfiles</key>
-	<dict/>
-	<key>teamID</key>
-	<string>FAKETEAM12</string>
-</dict>
-</plist>
-PLIST
-expect fail "导出选项里有非空 teamID → 规格门禁红" "$SPEC" "$REPO"
-
-# ③ 非空的 provisioningProfiles → 必须红
-cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-	<key>signingStyle</key>
-	<string>manual</string>
-	<key>signingCertificate</key>
-	<string></string>
-	<key>provisioningProfiles</key>
-	<dict>
-		<key>com.shottuner.app</key>
-		<string>FakeProfile</string>
-	</dict>
-	<key>teamID</key>
-	<string></string>
-</dict>
-</plist>
-PLIST
-expect fail "导出选项里有非空 provisioningProfiles → 规格门禁红" "$SPEC" "$REPO"
-
-# ④ signingStyle=automatic → 必须红（automatic 会让 Xcode 自己去「找」证书）
-cat > "$REPO/ios/ExportOptions.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-	<key>signingStyle</key>
-	<string>automatic</string>
-	<key>signingCertificate</key>
-	<string></string>
-	<key>provisioningProfiles</key>
-	<dict/>
-	<key>teamID</key>
-	<string></string>
-</dict>
-</plist>
-PLIST
-expect fail "导出选项的 signingStyle 是 automatic → 规格门禁红" "$SPEC" "$REPO"
-
-# ⑤ 恢复合规状态 → 必须绿（证明上面 4 条不是「永远红」）
+# ⑥ 恢复合规状态 → 必须绿（证明上面 5 条不是「永远红」）
 #   ★ 注意：前面那几条用例为了制造违规，**故意破坏了 shared 的 fixture**
 #     （删了 iosMain 的 .kt、刮掉了 binaries.framework）且没有还原。
 #     所以这里必须先把它复原，否则这条「期望绿」会带着前面积累的违规一起红 ——
 #     那就不是在测导出选项了。
-printf 'package com.shottuner.app.ios\n' > "$REPO/shared/src/iosMain/kotlin/Seed.kt"
+printf 'package com.shottuner.app.ios\n' > "${REPO}/shared/src/iosMain/kotlin/Seed.kt"
 printf 'kotlin {\n    iosArm64().binaries.framework {\n        baseName = "Shared"\n    }\n}\n' \
-  > "$REPO/shared/build.gradle.kts"
+  > "${REPO}/shared/build.gradle.kts"
 write_export_opts
-expect pass "导出选项恢复未签名口径 → 规格门禁绿" "$SPEC" "$REPO"
+expect pass "导出选项恢复未签名口径 → 规格门禁绿" "${SPEC}" "${REPO}"
 
 ci_log ""
-if [ "$FAIL" -gt 0 ]; then
-  ci_log "✗ 反向验证未通过：$PASS 项符合预期，$FAIL 项不符"
+if [ "${FAIL}" -gt 0 ]; then
+  ci_log "✗ 反向验证未通过：${PASS} 项符合预期，${FAIL} 项不符"
   exit 1
 fi
-ci_log "✓ 反向验证全部通过（$PASS 项）"
+ci_log "✓ 反向验证全部通过（${PASS} 项）"
 exit 0

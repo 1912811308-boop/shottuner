@@ -196,9 +196,9 @@ jobs:
               echo "::warning::brew install xcodegen 失败 → 回退到 GitHub Releases 的官方二进制"
               ZIP_URL="$(curl -fsSL https://api.github.com/repos/yonaskolb/XcodeGen/releases/latest \
                 | grep -o 'https://[^"]*xcodegen\.zip' | head -1)"
-              [ -n "$ZIP_URL" ] || { echo "::error::拿不到 XcodeGen 的下载地址"; exit 1; }
-              echo "下载：$ZIP_URL"
-              curl -fsSL -o /tmp/xcodegen.zip "$ZIP_URL"
+              [ -n "${ZIP_URL}" ] || { echo "::error::拿不到 XcodeGen 的下载地址"; exit 1; }
+              echo "下载：${ZIP_URL}"
+              curl -fsSL -o /tmp/xcodegen.zip "${ZIP_URL}"
               rm -rf /tmp/xcodegen && mkdir -p /tmp/xcodegen
               unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
               sudo install -m 0755 /tmp/xcodegen/bin/xcodegen /usr/local/bin/xcodegen
@@ -211,12 +211,12 @@ jobs:
           #   而那个报错看起来像「工程文件坏了」，排查成本极高。
           VER="$(xcodegen --version | grep -oE '[0-9]+\.[0-9]+' | head -1)"
           MAJ="${VER%%.*}"
-          MIN="$(printf '%s' "$VER" | cut -d. -f2)"
-          if [ -z "$MAJ" ] || [ -z "$MIN" ] || [ "$MAJ" -lt 2 ] || { [ "$MAJ" -eq 2 ] && [ "$MIN" -lt 45 ]; }; then
+          MIN="$(printf '%s' "${VER}" | cut -d. -f2)"
+          if [ -z "${MAJ}" ] || [ -z "${MIN}" ] || [ "${MAJ}" -lt 2 ] || { [ "${MAJ}" -eq 2 ] && [ "${MIN}" -lt 45 ]; }; then
             echo "::error::XcodeGen 版本过低（${VER:-未知}）—— projectFormat 选项需要 >= 2.45"
             exit 1
           fi
-          echo "XcodeGen 版本 OK：$VER"
+          echo "XcodeGen 版本 OK：${VER}"
 
       - name: 记录 Xcode 版本
         run: |
@@ -257,14 +257,14 @@ jobs:
         run: |
           set -euo pipefail
           APP=$(find ios/build/DerivedData -maxdepth 5 -name 'ShotTuner.app' -type d | head -1)
-          if [ -z "$APP" ]; then
+          if [ -z "${APP}" ]; then
             echo "::error::找不到构建出来的 ShotTuner.app"
             exit 1
           fi
-          echo "产物：$APP"
-          ls -la "$APP"
+          echo "产物：${APP}"
+          ls -la "${APP}"
           # 共享内核的 framework 必须被嵌进去（动态 framework 少了它，真机装上去会崩）
-          test -d "$APP/Frameworks/Shared.framework" \
+          test -d "${APP}/Frameworks/Shared.framework" \
             || { echo "::error::产物里没有 Frameworks/Shared.framework"; exit 1; }
 
   # ── ios-package：产出**真机可装**的未签名 ipa（**必须 macOS 宿主**）────────
@@ -333,9 +333,9 @@ jobs:
               echo "::warning::brew install xcodegen 失败 → 回退到 GitHub Releases 的官方二进制"
               ZIP_URL="$(curl -fsSL https://api.github.com/repos/yonaskolb/XcodeGen/releases/latest \
                 | grep -o 'https://[^"]*xcodegen\.zip' | head -1)"
-              [ -n "$ZIP_URL" ] || { echo "::error::拿不到 XcodeGen 的下载地址"; exit 1; }
-              echo "下载：$ZIP_URL"
-              curl -fsSL -o /tmp/xcodegen.zip "$ZIP_URL"
+              [ -n "${ZIP_URL}" ] || { echo "::error::拿不到 XcodeGen 的下载地址"; exit 1; }
+              echo "下载：${ZIP_URL}"
+              curl -fsSL -o /tmp/xcodegen.zip "${ZIP_URL}"
               rm -rf /tmp/xcodegen && mkdir -p /tmp/xcodegen
               unzip -q /tmp/xcodegen.zip -d /tmp/xcodegen
               sudo install -m 0755 /tmp/xcodegen/bin/xcodegen /usr/local/bin/xcodegen
@@ -344,12 +344,12 @@ jobs:
           xcodegen --version
           VER="$(xcodegen --version | grep -oE '[0-9]+\.[0-9]+' | head -1)"
           MAJ="${VER%%.*}"
-          MIN="$(printf '%s' "$VER" | cut -d. -f2)"
-          if [ -z "$MAJ" ] || [ -z "$MIN" ] || [ "$MAJ" -lt 2 ] || { [ "$MAJ" -eq 2 ] && [ "$MIN" -lt 45 ]; }; then
+          MIN="$(printf '%s' "${VER}" | cut -d. -f2)"
+          if [ -z "${MAJ}" ] || [ -z "${MIN}" ] || [ "${MAJ}" -lt 2 ] || { [ "${MAJ}" -eq 2 ] && [ "${MIN}" -lt 45 ]; }; then
             echo "::error::XcodeGen 版本过低（${VER:-未知}）—— projectFormat 选项需要 >= 2.45"
             exit 1
           fi
-          echo "XcodeGen 版本 OK：$VER"
+          echo "XcodeGen 版本 OK：${VER}"
 
       - name: 记录 Xcode / SDK 版本
         run: |
@@ -381,8 +381,8 @@ jobs:
       - name: 归档（xcodebuild archive · 真机 iphoneos · 不签名）
         run: |
           set -euo pipefail
-          ARCHIVE="$RUNNER_TEMP/ShotTuner.xcarchive"
-          rm -rf "$ARCHIVE"
+          ARCHIVE="${RUNNER_TEMP}/ShotTuner.xcarchive"
+          rm -rf "${ARCHIVE}"
           # ★ 用 { } 包起来再重定向：这样 CODE_SIGN_IDENTITY="" 那一行**后面什么都不跟**。
           #   G1-d 凭据门禁按「行首变量名 + 赋值 + 非空值」扫描全仓库，
           #   那一行后面若跟了 ` 2>&1 | tee ...`，整个管道会被当成变量值 → 门禁误报。
@@ -392,7 +392,7 @@ jobs:
               -scheme ShotTuner \
               -configuration Release \
               -destination 'generic/platform=iOS' \
-              -archivePath "$ARCHIVE" \
+              -archivePath "${ARCHIVE}" \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY=""
@@ -404,10 +404,10 @@ jobs:
             || { echo "::error::xcodebuild 没有 ARCHIVE SUCCEEDED"; exit 1; }
           grep -q "KMP_FRAMEWORK_READY=1" /tmp/archive.log \
             || { echo "::error::KMP 共享内核的 framework 没有产出 —— Run Script 没跑或跑失败了"; exit 1; }
-          test -d "$ARCHIVE/Products/Applications/ShotTuner.app" \
+          test -d "${ARCHIVE}/Products/Applications/ShotTuner.app" \
             || { echo "::error::归档里没有 Products/Applications/ShotTuner.app"; exit 1; }
           echo "::notice::归档完成"
-          ls -la "$ARCHIVE/Products/Applications/ShotTuner.app"
+          ls -la "${ARCHIVE}/Products/Applications/ShotTuner.app"
 
       # ── 出 ipa：路线 A（exportArchive）→ 失败回退路线 B（直接打 zip）──────
       #
@@ -421,67 +421,67 @@ jobs:
       - name: 出 ipa（路线 A：exportArchive → 失败回退路线 B：直接打 zip）
         run: |
           set -uo pipefail
-          ARCHIVE="$RUNNER_TEMP/ShotTuner.xcarchive"
-          OUTDIR="$RUNNER_TEMP/ipa-out"
-          EXPORT_DIR="$RUNNER_TEMP/export"
+          ARCHIVE="${RUNNER_TEMP}/ShotTuner.xcarchive"
+          OUTDIR="${RUNNER_TEMP}/ipa-out"
+          EXPORT_DIR="${RUNNER_TEMP}/export"
           VERSION="$(grep -E "^[[:space:]]*MARKETING_VERSION[[:space:]]*:" ios/project.yml | head -1 \
             | sed -E 's/.*:[[:space:]]*//' | tr -d '"' | tr -d '[:space:]')"
           ASSET_NAME="ShotTuner-${VERSION}-unsigned.ipa"
-          echo "版本号（取自 ios/project.yml）：$VERSION"
-          echo "产物名：$ASSET_NAME"
-          [ -n "$VERSION" ] || { echo "::error::从 ios/project.yml 里读不出 MARKETING_VERSION"; exit 1; }
+          echo "版本号（取自 ios/project.yml）：${VERSION}"
+          echo "产物名：${ASSET_NAME}"
+          [ -n "${VERSION}" ] || { echo "::error::从 ios/project.yml 里读不出 MARKETING_VERSION"; exit 1; }
 
-          rm -rf "$OUTDIR" "$EXPORT_DIR"
-          mkdir -p "$OUTDIR" "$EXPORT_DIR"
+          rm -rf "${OUTDIR}" "${EXPORT_DIR}"
+          mkdir -p "${OUTDIR}" "${EXPORT_DIR}"
 
           # ── 路线 A：xcodebuild -exportArchive（标准做法）──
           echo "▶ 路线 A：xcodebuild -exportArchive（未签名导出）"
           set +e
           xcodebuild -exportArchive \
-            -archivePath "$ARCHIVE" \
-            -exportPath "$EXPORT_DIR" \
+            -archivePath "${ARCHIVE}" \
+            -exportPath "${EXPORT_DIR}" \
             -exportOptionsPlist ios/ExportOptions.plist \
             2>&1 | tee /tmp/export-a.log
           RC_A="${PIPESTATUS[0]}"
           set -e
-          echo "路线 A 退出码：$RC_A"
+          echo "路线 A 退出码：${RC_A}"
           ROUTE="none"
-          if [ "$RC_A" -eq 0 ]; then
-            A_IPA="$(find "$EXPORT_DIR" -name '*.ipa' -type f 2>/dev/null | head -1)"
-            if [ -n "$A_IPA" ] && [ -s "$A_IPA" ]; then
-              cp "$A_IPA" "$OUTDIR/$ASSET_NAME"
+          if [ "${RC_A}" -eq 0 ]; then
+            A_IPA="$(find "${EXPORT_DIR}" -name '*.ipa' -type f 2>/dev/null | head -1)"
+            if [ -n "${A_IPA}" ] && [ -s "${A_IPA}" ]; then
+              cp "${A_IPA}" "${OUTDIR}/${ASSET_NAME}"
               ROUTE="A"
-              echo "::notice::路线 A 成功：$A_IPA"
+              echo "::notice::路线 A 成功：${A_IPA}"
             else
               echo "::warning::路线 A 退出码为 0，但导出目录里没有 ipa —— 按失败处理"
             fi
           else
-            echo "::warning::路线 A 失败（退出码 $RC_A）—— 报错原文："
+            echo "::warning::路线 A 失败（退出码 ${RC_A}）—— 报错原文："
             grep -iE "error|requires|provisioning|certificate|signing" /tmp/export-a.log | head -30 || true
           fi
 
           # ── 路线 B：直接从 .xcarchive 取 .app 打成 ipa ──
-          if [ "$ROUTE" != "A" ]; then
+          if [ "${ROUTE}" != "A" ]; then
             echo "▶ 路线 B：直接取 .app 打 ipa（ipa = 顶层含 Payload/ 的 zip）"
-            APP="$ARCHIVE/Products/Applications/ShotTuner.app"
-            if [ ! -d "$APP" ]; then
-              APP="$(find "$ARCHIVE/Products" -type d -name 'ShotTuner.app' 2>/dev/null | head -1)"
+            APP="${ARCHIVE}/Products/Applications/ShotTuner.app"
+            if [ ! -d "${APP}" ]; then
+              APP="$(find "${ARCHIVE}/Products" -type d -name 'ShotTuner.app' 2>/dev/null | head -1)"
             fi
-            [ -n "$APP" ] && [ -d "$APP" ] \
+            [ -n "${APP}" ] && [ -d "${APP}" ] \
               || { echo "::error::归档里找不到 ShotTuner.app"; exit 1; }
-            STAGE="$RUNNER_TEMP/ipa-stage"
-            rm -rf "$STAGE"
-            mkdir -p "$STAGE/Payload"
-            cp -R "$APP" "$STAGE/Payload/"
-            ( cd "$STAGE" && ditto -c -k --sequesterRsrc --keepParent Payload "$OUTDIR/$ASSET_NAME" )
+            STAGE="${RUNNER_TEMP}/ipa-stage"
+            rm -rf "${STAGE}"
+            mkdir -p "${STAGE}/Payload"
+            cp -R "${APP}" "${STAGE}/Payload/"
+            ( cd "${STAGE}" && ditto -c -k --sequesterRsrc --keepParent Payload "${OUTDIR}/${ASSET_NAME}" )
             ROUTE="B"
-            echo "::notice::路线 B 成功：$STAGE/Payload/ShotTuner.app → $OUTDIR/$ASSET_NAME"
+            echo "::notice::路线 B 成功：${STAGE}/Payload/ShotTuner.app → ${OUTDIR}/${ASSET_NAME}"
           fi
 
-          echo "::notice::最终出包路线：$ROUTE"
-          ls -la "$OUTDIR"
-          test -s "$OUTDIR/$ASSET_NAME" \
-            || { echo "::error::ipa 不存在或为空：$OUTDIR/$ASSET_NAME"; exit 1; }
+          echo "::notice::最终出包路线：${ROUTE}"
+          ls -la "${OUTDIR}"
+          test -s "${OUTDIR}/${ASSET_NAME}" \
+            || { echo "::error::ipa 不存在或为空：${OUTDIR}/${ASSET_NAME}"; exit 1; }
 
       # ── ★ 反假绿断言（**最重要的一步**）────────────────────────────────
       #
@@ -503,41 +503,41 @@ jobs:
       - name: 反假绿断言（ipa 结构 / 真机架构 / framework / 版本号）
         run: |
           set -uo pipefail
-          OUTDIR="$RUNNER_TEMP/ipa-out"
-          VERIFY="$RUNNER_TEMP/verify"
+          OUTDIR="${RUNNER_TEMP}/ipa-out"
+          VERIFY="${RUNNER_TEMP}/verify"
           VERSION="$(grep -E "^[[:space:]]*MARKETING_VERSION[[:space:]]*:" ios/project.yml | head -1 \
             | sed -E 's/.*:[[:space:]]*//' | tr -d '"' | tr -d '[:space:]')"
           ASSET_NAME="ShotTuner-${VERSION}-unsigned.ipa"
-          IPA="$OUTDIR/$ASSET_NAME"
+          IPA="${OUTDIR}/${ASSET_NAME}"
           FAILURES=0
-          fail() { echo "::error::断言失败 · $1"; FAILURES=$((FAILURES + 1)); }
+          fail() { echo "::error::断言失败 · ${1}"; FAILURES=$((FAILURES + 1)); }
 
           # ── ① ipa 存在且非空 ──
-          if [ -s "$IPA" ]; then
-            echo "[断言1] OK —— ipa 存在且非空：$IPA（$(wc -c < "$IPA" | tr -d ' ') 字节）"
+          if [ -s "${IPA}" ]; then
+            echo "[断言1] OK —— ipa 存在且非空：${IPA}（$(wc -c < "${IPA}" | tr -d ' ') 字节）"
           else
-            fail "[断言1] ipa 不存在或为空：$IPA"
+            fail "[断言1] ipa 不存在或为空：${IPA}"
           fi
 
           # ── 解包（后面每条断言都基于解包后的真实内容）──
-          rm -rf "$VERIFY"
-          mkdir -p "$VERIFY"
-          unzip -q "$IPA" -d "$VERIFY" 2>/dev/null || fail "[断言2] ipa 解包失败"
+          rm -rf "${VERIFY}"
+          mkdir -p "${VERIFY}"
+          unzip -q "${IPA}" -d "${VERIFY}" 2>/dev/null || fail "[断言2] ipa 解包失败"
           echo "--- ipa 顶层结构 ---"
-          ls -la "$VERIFY"
-          APP="$VERIFY/Payload/ShotTuner.app"
-          EXEC="$APP/ShotTuner"
+          ls -la "${VERIFY}"
+          APP="${VERIFY}/Payload/ShotTuner.app"
+          EXEC="${APP}/ShotTuner"
 
           # ── ② 顶层是 Payload/ShotTuner.app，且不是空壳 ──
-          if [ -d "$APP" ]; then
+          if [ -d "${APP}" ]; then
             echo "[断言2] OK —— ipa 里有 Payload/ShotTuner.app"
             echo "--- Payload/ShotTuner.app 目录树（两层）---"
-            find "$APP" -maxdepth 2 2>/dev/null | sed "s|$VERIFY/||" | sort
+            find "${APP}" -maxdepth 2 2>/dev/null | sed "s|${VERIFY}/||" | sort
           else
-            fail "[断言2] ipa 里没有 Payload/ShotTuner.app —— 顶层结构是：$(ls "$VERIFY" 2>/dev/null | tr '\n' ' ')"
+            fail "[断言2] ipa 里没有 Payload/ShotTuner.app —— 顶层结构是：$(ls "${VERIFY}" 2>/dev/null | tr '\n' ' ')"
           fi
-          if [ -f "$EXEC" ] && [ -s "$EXEC" ]; then
-            echo "[断言2b] OK —— 可执行文件存在且非空（$(wc -c < "$EXEC" | tr -d ' ') 字节）"
+          if [ -f "${EXEC}" ] && [ -s "${EXEC}" ]; then
+            echo "[断言2b] OK —— 可执行文件存在且非空（$(wc -c < "${EXEC}" | tr -d ' ') 字节）"
           else
             fail "[断言2b] Payload/ShotTuner.app 里没有可执行文件 ShotTuner —— 这是个空壳"
           fi
@@ -545,27 +545,27 @@ jobs:
           # ── ③ 架构：必须是**真机** arm64，不能是模拟器 ──
           #   判据不是 `file` 的输出（模拟器也是 arm64），而是 Mach-O 里的
           #   LC_BUILD_VERSION 的 platform 字段：IOS = 真机，IOSSIMULATOR = 模拟器。
-          if [ -f "$EXEC" ]; then
+          if [ -f "${EXEC}" ]; then
             echo "--- file 可执行文件 ---"
-            file "$EXEC"
+            file "${EXEC}"
             echo "--- lipo -archs 可执行文件 ---"
-            ARCHS="$(lipo -archs "$EXEC" 2>/dev/null || true)"
-            echo "$ARCHS"
+            ARCHS="$(lipo -archs "${EXEC}" 2>/dev/null || true)"
+            echo "${ARCHS}"
             echo "--- otool LC_BUILD_VERSION（真机/模拟器判据）---"
-            otool -l "$EXEC" 2>/dev/null | grep -A4 'LC_BUILD_VERSION' || true
-            PLATFORM_TAG="$(otool -l "$EXEC" 2>/dev/null | grep -E '^[[:space:]]+platform[[:space:]]+' \
+            otool -l "${EXEC}" 2>/dev/null | grep -A4 'LC_BUILD_VERSION' || true
+            PLATFORM_TAG="$(otool -l "${EXEC}" 2>/dev/null | grep -E '^[[:space:]]+platform[[:space:]]+' \
               | tr -s ' ' | sed 's/^ //' | sort -u | tr '\n' ',')"
-            echo "platform 标记：$PLATFORM_TAG"
-            case "$PLATFORM_TAG" in
+            echo "platform 标记：${PLATFORM_TAG}"
+            case "${PLATFORM_TAG}" in
               *IOSSIMULATOR*) fail "[断言3] 可执行文件是**模拟器**架构（IOSSIMULATOR）—— 装不到 iPhone 上" ;;
               *IOS*)          echo "[断言3] OK —— 可执行文件是**真机**架构（platform IOS）" ;;
-              *)              fail "[断言3] 读不出 platform 标记（实际：$PLATFORM_TAG）—— 判定不了真机/模拟器" ;;
+              *)              fail "[断言3] 读不出 platform 标记（实际：${PLATFORM_TAG}）—— 判定不了真机/模拟器" ;;
             esac
-            case "$ARCHS" in
+            case "${ARCHS}" in
               *arm64*) echo "[断言3b] OK —— 架构含 arm64" ;;
-              *)       fail "[断言3b] 架构里没有 arm64：$ARCHS" ;;
+              *)       fail "[断言3b] 架构里没有 arm64：${ARCHS}" ;;
             esac
-            case "$ARCHS" in
+            case "${ARCHS}" in
               *x86_64*) fail "[断言3c] 架构里出现了 x86_64（模拟器架构）—— 这不是纯真机产物" ;;
               *)        echo "[断言3c] OK —— 架构里没有 x86_64" ;;
             esac
@@ -574,25 +574,25 @@ jobs:
           # ── ④ Shared.framework 在里面，且也有 arm64 真机切片 ──
           #   动态 framework 少了它（或带了模拟器切片），真机装上去直接
           #   「Library not loaded」—— 这是整个出包链路最容易翻车的地方。
-          FW="$APP/Frameworks/Shared.framework"
-          if [ -d "$FW" ]; then
+          FW="${APP}/Frameworks/Shared.framework"
+          if [ -d "${FW}" ]; then
             echo "[断言4] OK —— Frameworks/Shared.framework 存在"
             echo "--- Shared.framework 内容 ---"
-            ls -la "$FW"
-            if [ -f "$FW/Shared" ]; then
-              FW_ARCHS="$(lipo -archs "$FW/Shared" 2>/dev/null || true)"
-              FW_PLATFORM="$(otool -l "$FW/Shared" 2>/dev/null | grep -E '^[[:space:]]+platform[[:space:]]+' \
+            ls -la "${FW}"
+            if [ -f "${FW}/Shared" ]; then
+              FW_ARCHS="$(lipo -archs "${FW}/Shared" 2>/dev/null || true)"
+              FW_PLATFORM="$(otool -l "${FW}/Shared" 2>/dev/null | grep -E '^[[:space:]]+platform[[:space:]]+' \
                 | tr -s ' ' | sed 's/^ //' | sort -u | tr '\n' ',')"
-              echo "Shared.framework 架构：$FW_ARCHS"
-              echo "Shared.framework platform：$FW_PLATFORM"
-              case "$FW_ARCHS" in
+              echo "Shared.framework 架构：${FW_ARCHS}"
+              echo "Shared.framework platform：${FW_PLATFORM}"
+              case "${FW_ARCHS}" in
                 *arm64*) echo "[断言4b] OK —— Shared.framework 含 arm64 切片" ;;
-                *)       fail "[断言4b] Shared.framework 没有 arm64 切片：$FW_ARCHS" ;;
+                *)       fail "[断言4b] Shared.framework 没有 arm64 切片：${FW_ARCHS}" ;;
               esac
-              case "$FW_PLATFORM" in
+              case "${FW_PLATFORM}" in
                 *IOSSIMULATOR*) fail "[断言4c] Shared.framework 是**模拟器**切片 —— 真机会崩" ;;
                 *IOS*)          echo "[断言4c] OK —— Shared.framework 是**真机**切片" ;;
-                *)              fail "[断言4c] 读不出 Shared.framework 的 platform：$FW_PLATFORM" ;;
+                *)              fail "[断言4c] 读不出 Shared.framework 的 platform：${FW_PLATFORM}" ;;
               esac
             else
               fail "[断言4] Shared.framework 里没有可执行文件 Shared —— 空壳"
@@ -602,21 +602,21 @@ jobs:
           fi
 
           # ── ⑤ Info.plist 的三个关键字段 ──
-          PLIST="$APP/Info.plist"
-          if [ -f "$PLIST" ]; then
+          PLIST="${APP}/Info.plist"
+          if [ -f "${PLIST}" ]; then
             echo "--- Info.plist（plutil -p）---"
-            plutil -p "$PLIST" 2>/dev/null || echo "(plutil 读取失败)"
+            plutil -p "${PLIST}" 2>/dev/null || echo "(plutil 读取失败)"
             read_plist() {
-              plutil -extract "$1" raw -o - "$PLIST" 2>/dev/null \
-                || /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null \
+              plutil -extract "${1}" raw -o - "${PLIST}" 2>/dev/null \
+                || /usr/libexec/PlistBuddy -c "Print :${1}" "${PLIST}" 2>/dev/null \
                 || echo "<读取失败>"
             }
             BID="$(read_plist CFBundleIdentifier)"
             SHV="$(read_plist CFBundleShortVersionString)"
             BVN="$(read_plist CFBundleVersion)"
-            echo "CFBundleIdentifier        = $BID"
-            echo "CFBundleShortVersionString = $SHV"
-            echo "CFBundleVersion           = $BVN"
+            echo "CFBundleIdentifier        = ${BID}"
+            echo "CFBundleShortVersionString = ${SHV}"
+            echo "CFBundleVersion           = ${BVN}"
             # 期望值从 ios/project.yml 取（单一事实来源），不另写一份常量。
             EXPECT_SHV="$(grep -E "^[[:space:]]*MARKETING_VERSION[[:space:]]*:" ios/project.yml | head -1 \
               | sed -E 's/.*:[[:space:]]*//' | tr -d '"' | tr -d '[:space:]')"
@@ -629,16 +629,16 @@ jobs:
                 sub(/^[^:]*:[[:space:]]*/, ""); gsub(/"/, ""); print; exit
               }
             ' ios/project.yml)"
-            echo "期望（来自 ios/project.yml）：id=$EXPECT_BID version=$EXPECT_SHV build=$EXPECT_BVN"
-            [ "$BID" = "$EXPECT_BID" ] \
-              && echo "[断言5] OK —— CFBundleIdentifier = $BID" \
-              || fail "[断言5] CFBundleIdentifier 不对：期望 $EXPECT_BID，实际 $BID"
-            [ "$SHV" = "$EXPECT_SHV" ] \
-              && echo "[断言5b] OK —— CFBundleShortVersionString = $SHV" \
-              || fail "[断言5b] CFBundleShortVersionString 不对：期望 $EXPECT_SHV，实际 $SHV"
-            [ "$BVN" = "$EXPECT_BVN" ] \
-              && echo "[断言5c] OK —— CFBundleVersion = $BVN" \
-              || fail "[断言5c] CFBundleVersion 不对：期望 $EXPECT_BVN，实际 $BVN"
+            echo "期望（来自 ios/project.yml）：id=${EXPECT_BID} version=${EXPECT_SHV} build=${EXPECT_BVN}"
+            [ "${BID}" = "${EXPECT_BID}" ] \
+              && echo "[断言5] OK —— CFBundleIdentifier = ${BID}" \
+              || fail "[断言5] CFBundleIdentifier 不对：期望 ${EXPECT_BID}，实际 ${BID}"
+            [ "${SHV}" = "${EXPECT_SHV}" ] \
+              && echo "[断言5b] OK —— CFBundleShortVersionString = ${SHV}" \
+              || fail "[断言5b] CFBundleShortVersionString 不对：期望 ${EXPECT_SHV}，实际 ${SHV}"
+            [ "${BVN}" = "${EXPECT_BVN}" ] \
+              && echo "[断言5c] OK —— CFBundleVersion = ${BVN}" \
+              || fail "[断言5c] CFBundleVersion 不对：期望 ${EXPECT_BVN}，实际 ${BVN}"
           else
             fail "[断言5] 产物里没有 Info.plist"
           fi
@@ -646,24 +646,24 @@ jobs:
           # ── 附：签名状态（硬规则一：CI 一律不签名）──
           #   「完全未签名」= 最好；「ad-hoc」= 只是占位签名，SideStore 重签会覆盖；
           #   带真实身份 = 违反硬规则一，必须红。
-          if [ -f "$EXEC" ]; then
-            SIGN_INFO="$(codesign -dv --verbose=4 "$EXEC" 2>&1 || true)"
+          if [ -f "${EXEC}" ]; then
+            SIGN_INFO="$(codesign -dv --verbose=4 "${EXEC}" 2>&1 || true)"
             echo "--- codesign -dv --verbose=4（可执行文件）---"
-            echo "$SIGN_INFO" | head -20
-            if echo "$SIGN_INFO" | grep -q "not signed at all"; then
+            echo "${SIGN_INFO}" | head -20
+            if echo "${SIGN_INFO}" | grep -q "not signed at all"; then
               echo "[附] OK —— 可执行文件**完全未签名**（code object is not signed at all）"
-            elif echo "$SIGN_INFO" | grep -qi "adhoc"; then
+            elif echo "${SIGN_INFO}" | grep -qi "adhoc"; then
               echo "::warning::[附] 可执行文件是 **ad-hoc 签名**（不是真签名）—— SideStore 重签会覆盖，但已不是纯粹未签名产物"
-            elif echo "$SIGN_INFO" | grep -qiE '^Authority=|^TeamIdentifier='; then
+            elif echo "${SIGN_INFO}" | grep -qiE '^Authority=|^TeamIdentifier='; then
               fail "[附] 产物带**真实签名身份** —— 违反硬规则一（CI 一律不签名）"
             else
-              echo "::warning::[附] 读不出签名状态：$SIGN_INFO"
+              echo "::warning::[附] 读不出签名状态：${SIGN_INFO}"
             fi
           fi
 
           echo "=================================================="
-          if [ "$FAILURES" -gt 0 ]; then
-            echo "::error::反假绿断言失败：$FAILURES 条不通过 —— **这个包不能上传**"
+          if [ "${FAILURES}" -gt 0 ]; then
+            echo "::error::反假绿断言失败：${FAILURES} 条不通过 —— **这个包不能上传**"
             exit 1
           fi
           echo "::notice::反假绿断言全部通过（5 组断言 + 附带的签名状态检查）"
@@ -692,38 +692,38 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          OUTDIR="$RUNNER_TEMP/ipa-out"
+          OUTDIR="${RUNNER_TEMP}/ipa-out"
           VERSION="$(grep -E "^[[:space:]]*MARKETING_VERSION[[:space:]]*:" ios/project.yml | head -1 \
             | sed -E 's/.*:[[:space:]]*//' | tr -d '"' | tr -d '[:space:]')"
           ASSET_NAME="ShotTuner-${VERSION}-unsigned.ipa"
-          IPA="$OUTDIR/$ASSET_NAME"
+          IPA="${OUTDIR}/${ASSET_NAME}"
           API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
           AUTH_CFG() {
-            printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "$GITHUB_TOKEN"
+            printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "${GITHUB_TOKEN}"
           }
-          echo "▶ 取 Release（id=$RELEASE_ID）的 upload_url"
-          REL_JSON="$(curl -fsSL --config <(AUTH_CFG) "$API/releases/$RELEASE_ID")"
-          UPLOAD_URL="$(printf '%s' "$REL_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"])')"
+          echo "▶ 取 Release（id=${RELEASE_ID}）的 upload_url"
+          REL_JSON="$(curl -fsSL --config <(AUTH_CFG) "${API}/releases/${RELEASE_ID}")"
+          UPLOAD_URL="$(printf '%s' "${REL_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"])')"
           # ★ 截掉 URL 末尾的 {?name,label} 模板串 —— 带上去会 404。
           UPLOAD_URL="${UPLOAD_URL%%\{*}"
-          echo "upload_url（已截模板串）：$UPLOAD_URL"
+          echo "upload_url（已截模板串）：${UPLOAD_URL}"
 
           # 重跑时 GitHub 不允许同名 asset → 先删掉旧的。
           # ★ python 代码必须写成**单行**：多行的话，YAML 块标量的缩进基准会被打乱
           #   （块内某一行顶格 → YAML 认为块结束了 → 整份 workflow 解析失败）。
-          EXIST_ID="$(printf '%s' "$REL_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); n=sys.argv[1]; print(next((a["id"] for a in d.get("assets",[]) if a.get("name")==n), ""))' "$ASSET_NAME")"
-          if [ -n "$EXIST_ID" ]; then
-            echo ">> 已存在同名 asset（id=$EXIST_ID）→ 先删除"
-            curl -fsSL -X DELETE --config <(AUTH_CFG) "$API/releases/assets/$EXIST_ID"
+          EXIST_ID="$(printf '%s' "${REL_JSON}" | python3 -c 'import json,sys; d=json.load(sys.stdin); n=sys.argv[1]; print(next((a["id"] for a in d.get("assets",[]) if a.get("name")==n), ""))' "${ASSET_NAME}")"
+          if [ -n "${EXIST_ID}" ]; then
+            echo ">> 已存在同名 asset（id=${EXIST_ID}）→ 先删除"
+            curl -fsSL -X DELETE --config <(AUTH_CFG) "${API}/releases/assets/${EXIST_ID}"
           fi
 
-          echo ">> 上传 $ASSET_NAME"
+          echo ">> 上传 ${ASSET_NAME}"
           HTTP_CODE="$(curl -sS -o /tmp/upload.out -w '%{http_code}' -X POST \
-            --config <(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\nheader = "Content-Type: application/octet-stream"\n' "$GITHUB_TOKEN") \
-            --data-binary "@$IPA" \
+            --config <(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\nheader = "Content-Type: application/octet-stream"\n' "${GITHUB_TOKEN}") \
+            --data-binary "@${IPA}" \
             "${UPLOAD_URL}?name=${ASSET_NAME}")"
           cat /tmp/upload.out
           echo
-          [ "$HTTP_CODE" = "201" ] \
-            || { echo "::error::上传失败，HTTP $HTTP_CODE"; exit 1; }
-          echo "::notice::ipa 已挂到 Release（$ASSET_NAME）"
+          [ "${HTTP_CODE}" = "201" ] \
+            || { echo "::error::上传失败，HTTP ${HTTP_CODE}"; exit 1; }
+          echo "::notice::ipa 已挂到 Release（${ASSET_NAME}）"

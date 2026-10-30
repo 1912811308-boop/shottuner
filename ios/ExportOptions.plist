@@ -19,9 +19,16 @@
       而 CI 一旦具备签名能力，凭据迟早会进 secrets —— 那是硬规则二要防的事。
       tools/ci/check-ios-project-spec.sh 会盯着这三个字段，改成非空直接让门禁变红。
 
-  ★ method = release / signingStyle = manual：
-    manual 是必须的 —— automatic 会让 Xcode 自己去「找」一张证书，
-    那正是「CI 具备签名能力」的开始。写死 manual + 空证书 = 明确的「我不签」。
+  ★ method = app-store-connect / signingStyle = manual：
+    · method：**Xcode 15 把它改名了** —— 老写法 `release` 在 Xcode 15 上会被直接拒掉：
+        error: exportOptionsPlist error for key "method" expected one
+        {app-store-connect, release-testing, enterprise, debugging, validation} but found release
+      （实测踩过：2026-10-29 第一次出包，路线 A 就死在这。）
+      `app-store-connect` 是 Xcode 15 里对应「发布」的那个值。
+      ★ 这个值只影响「用哪套分发规则导出」，**不代表真的会上传 App Store** ——
+        destination = export 才是「只导出到本地目录」的关键。
+    · signingStyle = manual 是必须的 —— automatic 会让 Xcode 自己去「找」一张证书，
+      那正是「CI 具备签名能力」的开始。写死 manual + 空证书 = 明确的「我不签」。
 
   ★ destination = export：导出到本地目录（不是上传到 App Store Connect）——
     我们不走 App Store，也没有开发者账号。
@@ -29,7 +36,7 @@
 <plist version="1.0">
 <dict>
 	<key>method</key>
-	<string>release</string>
+	<string>app-store-connect</string>
 	<key>signingStyle</key>
 	<string>manual</string>
 	<key>signingCertificate</key>
