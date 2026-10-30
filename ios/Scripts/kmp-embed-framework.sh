@@ -16,10 +16,10 @@ set -u
 
 FRAMEWORK_NAME="Shared"
 
-log() { echo "[ShotTuner/KMP] $*"; }
-warn() { echo "::warning::$*"; }
+log() { echo "[ShotTuner/KMP] ${*}"; }
+warn() { echo "::warning::${*}"; }
 fail() {
-    echo "::error::$*"
+    echo "::error::${*}"
     exit 1
 }
 
@@ -29,41 +29,41 @@ fail() {
 #   结果真机上 "Library not loaded"。所以两条都试。
 SRC=""
 for PLATFORM_KEY in "${SDK_NAME:-}" "${PLATFORM_NAME:-iphonesimulator}"; do
-    [ -n "$PLATFORM_KEY" ] || continue
-    CANDIDATE="$SRCROOT/../shared/build/xcode-frameworks/${CONFIGURATION:-Debug}/$PLATFORM_KEY/$FRAMEWORK_NAME.framework"
-    if [ -d "$CANDIDATE" ]; then
-        SRC="$CANDIDATE"
+    [ -n "${PLATFORM_KEY}" ] || continue
+    CANDIDATE="${SRCROOT}/../shared/build/xcode-frameworks/${CONFIGURATION:-Debug}/${PLATFORM_KEY}/${FRAMEWORK_NAME}.framework"
+    if [ -d "${CANDIDATE}" ]; then
+        SRC="${CANDIDATE}"
         break
     fi
 done
 
-if [ -z "$SRC" ]; then
+if [ -z "${SRC}" ]; then
     # 不在这里失败：App 的编译与链接不依赖嵌入（链接用的是 FRAMEWORK_SEARCH_PATHS）。
     # 但一定要喊出来 —— 否则真机装上去会报「Library not loaded」。
-    warn "找不到 $FRAMEWORK_NAME.framework（试过 SDK_NAME=${SDK_NAME:-未设置} 与 PLATFORM_NAME=${PLATFORM_NAME:-未设置}）—— 跳过嵌入。真机运行时会出现「Library not loaded」"
+    warn "找不到 ${FRAMEWORK_NAME}.framework（试过 SDK_NAME=${SDK_NAME:-未设置} 与 PLATFORM_NAME=${PLATFORM_NAME:-未设置}）—— 跳过嵌入。真机运行时会出现「Library not loaded」"
     log "KMP_FRAMEWORK_EMBEDDED=0"
     exit 0
 fi
 
-# .app 的位置：$BUILT_PRODUCTS_DIR/<Product>.app/<FRAMEWORKS_FOLDER_PATH>
+# .app 的位置：${BUILT_PRODUCTS_DIR}/<Product>.app/<FRAMEWORKS_FOLDER_PATH>
 APP_BUNDLE="${BUILT_PRODUCTS_DIR:-}/$(FULL_PRODUCT_NAME:-ShotTuner.app)"
-DEST_DIR="$APP_BUNDLE/${FRAMEWORKS_FOLDER_PATH:-Frameworks}"
-DEST="$DEST_DIR/$FRAMEWORK_NAME.framework"
+DEST_DIR="${APP_BUNDLE}/${FRAMEWORKS_FOLDER_PATH:-Frameworks}"
+DEST="${DEST_DIR}/${FRAMEWORK_NAME}.framework"
 
-log "嵌入 framework：$SRC → $DEST"
-mkdir -p "$DEST_DIR" || fail "无法创建 $DEST_DIR"
-rm -rf "$DEST"
-cp -R "$SRC" "$DEST" || fail "拷贝 framework 失败"
+log "嵌入 framework：${SRC} → ${DEST}"
+mkdir -p "${DEST_DIR}" || fail "无法创建 ${DEST_DIR}"
+rm -rf "${DEST}"
+cp -R "${SRC}" "${DEST}" || fail "拷贝 framework 失败"
 
 # ── 签名：只在真的需要签的时候才签 ─────────────────────────────────────────
 # CI：CODE_SIGNING_ALLOWED=NO → EXPANDED_CODE_SIGN_IDENTITY 为空 → 跳过。
 # 本机侧载：签名在设备端用侧载工具完成（工程本身始终不签名）。
 IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-}"
-if [ "${CODE_SIGNING_ALLOWED:-NO}" = "NO" ] || [ -z "$IDENTITY" ]; then
+if [ "${CODE_SIGNING_ALLOWED:-NO}" = "NO" ] || [ -z "${IDENTITY}" ]; then
     log "未签名模式（CI 一律不签名）→ 跳过 codesign"
 else
-    log "签名 framework：$IDENTITY"
-    codesign --force --sign "$IDENTITY" "$DEST" || fail "framework 签名失败：$DEST"
+    log "签名 framework：${IDENTITY}"
+    codesign --force --sign "${IDENTITY}" "${DEST}" || fail "framework 签名失败：${DEST}"
 fi
 
 log "KMP_FRAMEWORK_EMBEDDED=1"

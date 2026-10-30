@@ -4,13 +4,21 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.Test
-import java.util.Locale
 
 /**
- * [NumFmt] 的回归测试。
+ * [NumFmt] 的**纯数值**回归测试 —— 「给定输入 → 期望输出」的金标准。
  *
- * 核心价值只有一条：**小数点永远是 `.`**，跟系统语言设置无关。
- * 德语区（逗号作小数点）和法语区（逗号 + 窄不换行空格作千分位）都被显式钉死。
+ * 这 11 个用例**不碰任何系统 Locale**，因此可以在 Android 与 iOS 两端
+ * 跑同一份源码（Kotlin/Native 的 common 代码里没有 `java.util.Locale`）。
+ * iOS 端要靠它们验证 [NumFmt] 的核心行为。
+ *
+ * ## 与 [NumFmtLocaleTest] 的分工
+ *
+ * 「切系统 Locale（德语区/法语区）」的 3 个用例是 **Android 专属**的缺陷修复验证
+ * —— 它们依赖 JVM-only 的 `java.util.Locale.setDefault()`，
+ * 而 iOS 侧不存在「系统语言设置影响 Kotlin 数值格式化」这回事
+ * （[NumFmt] 自己不依赖任何 Locale，见它的 KDoc）。
+ * 所以那 3 个用例放在 app 侧：`app/src/test/java/com/shottuner/app/text/NumFmtLocaleTest.kt`。
  */
 class NumFmtTest {
 
@@ -91,67 +99,6 @@ class NumFmtTest {
     }
 
     @Test
-    fun germanLocaleStillUsesDotDecimalSeparator() {
-        val original = Locale.getDefault()
-        try {
-            Locale.setDefault(Locale.GERMANY)
-            assertEquals(Locale.GERMANY, Locale.getDefault(), "切换到德语区后生效")
-
-            assertEquals("1.5", NumFmt.one(1.5f))
-            assertEquals("1.50", NumFmt.fixed(1.5f, 2))
-            assertEquals("-0.5", NumFmt.one(-0.5f))
-            assertEquals("0.0", NumFmt.one(-0.0f))
-            assertEquals("2", NumFmt.fixed(1.6f, 0))
-            assertEquals("3.0", NumFmt.one(3f))
-
-            assertLocaleFree("德语区", NumFmt.one(1.5f))
-            assertLocaleFree("德语区", NumFmt.fixed(1234.5f, 2))
-        } finally {
-            Locale.setDefault(original)
-        }
-    }
-
-    @Test
-    fun frenchLocaleStillUsesDotDecimalSeparator() {
-        val original = Locale.getDefault()
-        try {
-            Locale.setDefault(Locale.FRANCE)
-            assertEquals(Locale.FRANCE, Locale.getDefault(), "切换到法语区后生效")
-
-            assertEquals("1.5", NumFmt.one(1.5f))
-            assertEquals("1.50", NumFmt.fixed(1.5f, 2))
-            assertEquals("-0.5", NumFmt.one(-0.5f))
-            assertEquals("0.0", NumFmt.one(-0.0f))
-            assertEquals("2", NumFmt.fixed(1.6f, 0))
-            assertEquals("3.0", NumFmt.one(3f))
-
-            // 法语区还牵涉窄不换行空格（U+202F）作千分位分隔符，
-            // 一旦实现里不小心用了 NumberFormat，这里就会露出
-            assertLocaleFree("法语区", NumFmt.one(1.5f))
-            assertLocaleFree("法语区", NumFmt.fixed(1234.5f, 2))
-        } finally {
-            Locale.setDefault(original)
-        }
-    }
-
-    @Test
-    fun outputIsIndependentOfDefaultLocale() {
-        val original = Locale.getDefault()
-        try {
-            Locale.setDefault(Locale.US)
-            val us = NumFmt.fixed(12.34f, 2)
-            Locale.setDefault(Locale.GERMANY)
-            val de = NumFmt.fixed(12.34f, 2)
-            Locale.setDefault(Locale.FRANCE)
-            val fr = NumFmt.fixed(12.34f, 2)
-            assertEquals(us, de, "同一数值在不同 Locale 下必须完全一致")
-            assertEquals(us, fr, "同一数值在不同 Locale 下必须完全一致")
-        } finally {
-            Locale.setDefault(original)
-        }
-    }
-
-    @Test
     fun signedValuesAlwaysShowExplicitSign() {
         assertEquals("+1.5", NumFmt.signed(1.5f, 1))
         assertEquals("-1.5", NumFmt.signed(-1.5f, 1))
@@ -182,16 +129,4 @@ class NumFmtTest {
         assertEquals("1.00", NumFmt.fixed(0.999f, 2))
     }
 
-    /**
-     * 断言输出里没有任何 locale 相关字符：
-     * 逗号（德语/法语的小数点）、普通空格、不换行空格 U+00A0、
-     * 窄不换行空格 U+202F（法语千分位分隔符）。
-     */
-    private fun assertLocaleFree(context: String, text: String) {
-        assertFalse(text.contains(","), "$context：输出不该含逗号，实际=$text")
-        assertFalse(text.contains(" "), "$context：输出不该含普通空格，实际=$text")
-        assertFalse(text.contains("\u00A0"), "$context：输出不该含不换行空格，实际=$text")
-        assertFalse(text.contains("\u202F"), "$context：输出不该含窄不换行空格，实际=$text")
-        assertFalse(text.any { it.isWhitespace() }, "$context：输出不该含任意空白字符，实际=$text")
-    }
 }

@@ -22,12 +22,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "${SCRIPT_DIR}/lib/common.sh"
 
-ROOT="${1:-$(ci_repo_root "$SCRIPT_DIR")}"
-[ -d "$ROOT" ] || ci_die "仓库根目录不存在：$ROOT"
+ROOT="${1:-$(ci_repo_root "${SCRIPT_DIR}")}"
+[ -d "${ROOT}" ] || ci_die "仓库根目录不存在：${ROOT}"
 
-ci_log "▶ G1-d Apple 凭据门禁（根目录：$ROOT）"
+ci_log "▶ G1-d Apple 凭据门禁（根目录：${ROOT}）"
 
 mapfile -t PATTERNS < <(ci_load_patterns "apple-secrets.txt")
 mapfile -t STRICT   < <(ci_load_patterns "apple-secrets-strict.txt")
@@ -37,54 +37,54 @@ mapfile -t EMPTYVAR < <(ci_load_patterns "apple-signing-empty.txt")
 
 # 只扫文本文件：二进制与图片跳过（grep -I 也会做，但先过滤掉明显非文本更快）。
 mapfile -t FILES < <(
-  ci_list_repo_files "$ROOT" \
+  ci_list_repo_files "${ROOT}" \
     | grep -v '^tools/ci/' \
     | grep -vE '\.(apk|ipa|aab|jar|png|jpg|jpeg|gif|webp|ico|so|dylib|zip|keystore|jks|p12|der|ttf|otf|woff2?|pdf|mp4|mov)$'
 )
 
 VIOLATIONS=0
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "${TMP}"' EXIT
 
 for rel in "${FILES[@]}"; do
-  abs="$ROOT/$rel"
-  [ -f "$abs" ] || continue
+  abs="${ROOT}/${rel}"
+  [ -f "${abs}" ] || continue
 
   # ── 第一档：可精确豁免 ──────────────────────────────────────────────────────
   for pat in "${PATTERNS[@]}"; do
-    grep -Iq . "$abs" 2>/dev/null || continue          # 非文本，跳过
-    grep -Fq -- "$pat" "$abs" || continue
-    if ci_is_allowlisted "$rel" "$pat"; then
-      ci_info "豁免：$rel（$pat）"
+    grep -Iq . "${abs}" 2>/dev/null || continue          # 非文本，跳过
+    grep -Fq -- "${pat}" "${abs}" || continue
+    if ci_is_allowlisted "${rel}" "${pat}"; then
+      ci_info "豁免：${rel}（${pat}）"
       continue
     fi
-    ci_error "$rel" "-" "仓库里出现被禁凭据特征：$pat —— 凭据必须走 CI secrets，本机不外传"
+    ci_error "${rel}" "-" "仓库里出现被禁凭据特征：${pat} —— 凭据必须走 CI secrets，本机不外传"
     VIOLATIONS=$((VIOLATIONS + 1))
   done
 
   # ── 第二档：真私钥，不允许任何豁免 ─────────────────────────────────────────
   for pat in "${STRICT[@]}"; do
-    grep -Iq . "$abs" 2>/dev/null || continue
-    grep -Fq -- "$pat" "$abs" || continue
-    ci_error "$rel" "-" "仓库里出现真实私钥/证书内容：$pat —— 没有任何豁免空间"
+    grep -Iq . "${abs}" 2>/dev/null || continue
+    grep -Fq -- "${pat}" "${abs}" || continue
+    ci_error "${rel}" "-" "仓库里出现真实私钥/证书内容：${pat} —— 没有任何豁免空间"
     VIOLATIONS=$((VIOLATIONS + 1))
   done
 done
 
 # ── 私钥文件（.p8 等）单独查：光扫内容不够，文件名本身就是信号 ──────────────
 mapfile -t KEYFILES < <(
-  ci_list_repo_files "$ROOT" | grep -v '^tools/ci/' | grep -E '\.(p8|p12|pem|key)$' || true
+  ci_list_repo_files "${ROOT}" | grep -v '^tools/ci/' | grep -E '\.(p8|p12|pem|key)$' || true
 )
 for rel in "${KEYFILES[@]}"; do
-  ci_error "$rel" "-" "仓库里出现密钥/证书文件 —— 私钥绝不入库"
+  ci_error "${rel}" "-" "仓库里出现密钥/证书文件 —— 私钥绝不入库"
   VIOLATIONS=$((VIOLATIONS + 1))
 done
 
 # ── 第三档：必须恒为空的构建变量 ────────────────────────────────────────────
 # 只扫"会被提交进仓库"的文件（build/ dist/ work/ 天然不参与）。
 for rel in "${FILES[@]}"; do
-  abs="$ROOT/$rel"
-  [ -f "$abs" ] || continue
+  abs="${ROOT}/${rel}"
+  [ -f "${abs}" ] || continue
   for var in "${EMPTYVAR[@]}"; do
     # ★ 必须锚定行首，否则会误伤文档。
     #   锚定前，`| \`CODE_SIGN_IDENTITY\` | 构建配置层锁死 |` 这种 Markdown 表格行
@@ -93,18 +93,18 @@ for rel in "${FILES[@]}"; do
     #   锚定后仍然能拦住的写法：YAML 映射、YAML 序列项、shell export。
     #   而文档里的"提及"（表格、代码片段、行内引用）不再误伤。
     while IFS= read -r raw; do
-      [ -n "$raw" ] || continue
-      val="$(printf '%s' "$raw" | sed -E 's/.*[:=][[:space:]]*//' | tr -d '"'"'" | tr -d '[:space:]')"
-      [ -n "$val" ] || continue                       # 空值 → 通过
-      ci_error "$rel" "-" "构建变量 $var 必须恒为空（CI 一律不签名），但发现非空赋值：$val"
+      [ -n "${raw}" ] || continue
+      val="$(printf '%s' "${raw}" | sed -E 's/.*[:=][[:space:]]*//' | tr -d '"'"'" | tr -d '[:space:]')"
+      [ -n "${val}" ] || continue                       # 空值 → 通过
+      ci_error "${rel}" "-" "构建变量 ${var} 必须恒为空（CI 一律不签名），但发现非空赋值：${val}"
       VIOLATIONS=$((VIOLATIONS + 1))
-    done < <(grep -InE -- "^[[:space:]]*(-[[:space:]]+)?(export[[:space:]]+)?${var}[[:space:]]*[:=]" "$abs" 2>/dev/null || true)
+    done < <(grep -InE -- "^[[:space:]]*(-[[:space:]]+)?(export[[:space:]]+)?${var}[[:space:]]*[:=]" "${abs}" 2>/dev/null || true)
   done
 done
 
-if [ "$VIOLATIONS" -gt 0 ]; then
+if [ "${VIOLATIONS}" -gt 0 ]; then
   ci_log ""
-  ci_log "✗ G1-d Apple 凭据门禁未通过：$VIOLATIONS 处违规"
+  ci_log "✗ G1-d Apple 凭据门禁未通过：${VIOLATIONS} 处违规"
   exit 1
 fi
 

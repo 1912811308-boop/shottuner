@@ -1,4 +1,4 @@
-# L1 · JVM-only 用法（commonMain 里绝不能出现）
+# L1 · JVM-only 用法（commonMain / commonTest 里绝不能出现）
 # ─────────────────────────────────────────────────────────────────────────────
 # 消费者：tools/ci/check-common-purity.sh（秒级本地自查）
 # 权威检查：CI 的 :shared:compileCommonMainKotlinMetadata（metadata 编译只允许 common API）
@@ -6,8 +6,14 @@
 # ★ 为什么必须有这一档：
 #   Android 有 javaClass、java.text.SimpleDateFormat、java.lang.Math、ThreadLocal …
 #   **commonMain 里用了它们，Android 侧编译是绿的，iOS 上直接编译失败。**
-#   真实发生过：ScoreHistory 用了 `t.javaClass.simpleName` —— Android 编译一路绿灯，
-#   是 CI 的 metadata 编译把它抓出来的。若没有那道门禁，
+#   真实发生过（两次）：
+#     ① ScoreHistory 用了 `t.javaClass.simpleName` —— Android 编译一路绿灯，
+#        是 CI 的 metadata 编译把它抓出来的。若没有那道门禁，
+#        这个 bug 要等到**第一次真机出包**才暴露 —— 那时整个编译周期已经浪费了。
+#     ② commonTest 里的 `java.util.Locale` —— **Android 编译也一路绿灯**
+#        （commonTest 只在 JVM 上编），但 iOS 侧编 commonTest 时直接失败。
+#        这次是**人**发现的，不是机器 → 所以扫描范围扩到了 commonTest，
+#        而且特征串补齐了 `Math.round` / `.format(` 这两个当时漏掉的形态。
 #   这个 bug 要等到**第一次真机出包**才暴露 —— 那时整个编译周期已经浪费了。
 #
 # ★ 本清单**只是快速反馈，不完备**：没被模式覆盖的 API、签名/类型差异都抓不到。
@@ -16,6 +22,8 @@
 # ★ 纪律：特征串只放在清单里，脚本不写字面量。
 #
 # 固定字符串匹配（grep -F），一行一条，'#' 之后为注释。
+# ★ 大小写敏感 —— 这条很重要：`Math.round`（java.lang，JVM-only）
+#   与 `kotlin.math.round`（common API）是两个东西，只差首字母大小写。
 
 # ── JVM 反射 / 类对象 ────────────────────────────────────────────────────────
 javaClass
@@ -48,3 +56,23 @@ ThreadLocal
 currentTimeMillis
 getTimeMillis
 nanoTime
+
+# ── ★ 后补：当时漏掉的两种形态 ───────────────────────────────────────────────
+# ★ 为什么要补：T07 收尾时 commonTest 里的 `java.util.Locale` 是**人**发现的。
+#   复盘发现，就算当时把 Locale 挑出来，同一批文件里的
+#   `Math.round(...)` 与 `"%.1f".format(...)` 这两个形态**特征串也抓不到**
+#   —— 清单里有 `java.lang.Math` 和 `String.format`，但代码里写的是
+#   简写 `Math.round` 与扩展函数形式 `"...".format(...)`。
+#   ⇒ 门禁只抓到了"我碰巧写的那一种形态"，等于没抓。
+#   所以这里把**实际会出现在代码里的写法**都列上。
+#
+# `Math.round` —— java.lang.Math.round，JVM-only（Kotlin/Native 没有 java.lang.Math）。
+#   不会误报 `kotlin.math.round`（首字母大小写不同，grep -F 大小写敏感）。
+#   也不会误报 `LevelMath.round...` 之类 —— 本仓 `LevelMath` 无 round 成员。
+Math.round
+#
+# `"...".format(...)` —— kotlin.text.String.format 扩展函数，
+#   **只在 kotlin-stdlib 的 jvmMain 里**（实测：kotlin-stdlib-1.9.24-sources.jar
+#   的 jvmMain/kotlin/text/StringsJVM.kt），Kotlin/Native 没有 → iOS 编译失败。
+#   写成 `.format(` 是为了连 `"%.1f".format(x)` 这种字面量接收者也抓到。
+.format(

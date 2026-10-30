@@ -23,19 +23,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "${SCRIPT_DIR}/lib/common.sh"
 
-ROOT="${1:-$(ci_repo_root "$SCRIPT_DIR")}"
-[ -d "$ROOT" ] || ci_die "仓库根目录不存在：$ROOT"
+ROOT="${1:-$(ci_repo_root "${SCRIPT_DIR}")}"
+[ -d "${ROOT}" ] || ci_die "仓库根目录不存在：${ROOT}"
 
-ci_log "▶ L1 源码层零网络门禁（根目录：$ROOT）"
+ci_log "▶ L1 源码层零网络门禁（根目录：${ROOT}）"
 
 # 扫描范围：只有我们自己写的 iOS 与共享层源码。
 # ★ 刻意不含 docs/**（坑 2）与 tools/ci/**（坑 3）。
 mapfile -t FILES < <(
   {
-    ci_list_files_under "$ROOT" "*.swift" "ios"
-    ci_list_files_under "$ROOT" "*.kt" "shared/src"
+    ci_list_files_under "${ROOT}" "*.swift" "ios"
+    ci_list_files_under "${ROOT}" "*.kt" "shared/src"
   } | sort -u
 )
 
@@ -49,39 +49,39 @@ mapfile -t PATTERNS < <(ci_load_patterns "network-source.txt")
 [ "${#PATTERNS[@]}" -gt 0 ] || ci_die "清单 network-source.txt 为空"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "${TMP}"' EXIT
 
 VIOLATIONS=0
 for rel in "${FILES[@]}"; do
-  abs="$ROOT/$rel"
-  [ -f "$abs" ] || continue
+  abs="${ROOT}/${rel}"
+  [ -f "${abs}" ] || continue
 
   # 剥注释（坑 1）。strip-comments.awk 保证输出行数与原文件一致，
   # 所以下面 grep -n 得到的行号可以直接用来定位原文件。
-  stripped="$TMP/stripped"
-  awk -f "$CI_LIB_DIR/strip-comments.awk" "$abs" > "$stripped" 2>/dev/null || {
-    ci_info "跳过无法解析的文件：$rel"
+  stripped="${TMP}/stripped"
+  awk -f "${CI_LIB_DIR}/strip-comments.awk" "${abs}" > "${stripped}" 2>/dev/null || {
+    ci_info "跳过无法解析的文件：${rel}"
     continue
   }
 
   for pat in "${PATTERNS[@]}"; do
-    grep -Fq -- "$pat" "$stripped" || continue
+    grep -Fq -- "${pat}" "${stripped}" || continue
     while IFS= read -r ln; do
-      [ -n "$ln" ] || continue
+      [ -n "${ln}" ] || continue
       # 精确豁免：只豁免「某一个文件的某一个特征串」，豁免不会自动扩大。
-      if ci_is_allowlisted "$rel" "$pat"; then
-        ci_info "豁免：$rel:$ln （$pat）"
+      if ci_is_allowlisted "${rel}" "${pat}"; then
+        ci_info "豁免：${rel}:${ln} （${pat}）"
         continue
       fi
-      ci_error "$rel" "$ln" "源码层出现被禁网络调用：$pat —— 违反零网络承诺"
+      ci_error "${rel}" "${ln}" "源码层出现被禁网络调用：${pat} —— 违反零网络承诺"
       VIOLATIONS=$((VIOLATIONS + 1))
-    done < <(grep -n -F -- "$pat" "$stripped" | cut -d: -f1)
+    done < <(grep -n -F -- "${pat}" "${stripped}" | cut -d: -f1)
   done
 done
 
-if [ "$VIOLATIONS" -gt 0 ]; then
+if [ "${VIOLATIONS}" -gt 0 ]; then
   ci_log ""
-  ci_log "✗ L1 源码层零网络门禁未通过：$VIOLATIONS 处违规"
+  ci_log "✗ L1 源码层零网络门禁未通过：${VIOLATIONS} 处违规"
   exit 1
 fi
 

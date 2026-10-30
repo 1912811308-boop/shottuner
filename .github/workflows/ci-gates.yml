@@ -544,7 +544,7 @@ jobs:
 
           # ── ③ 架构：必须是**真机** arm64，不能是模拟器 ──
           #   判据不是 `file` 的输出（模拟器也是 arm64），而是 Mach-O 里的
-          #   LC_BUILD_VERSION 的 platform 字段：IOS = 真机，IOSSIMULATOR = 模拟器。
+          #   LC_BUILD_VERSION 的 platform 字段（**数字**）：2 = IOS 真机，7 = IOSSIMULATOR 模拟器。
           if [ -f "${EXEC}" ]; then
             echo "--- file 可执行文件 ---"
             file "${EXEC}"
@@ -553,13 +553,19 @@ jobs:
             echo "${ARCHS}"
             echo "--- otool LC_BUILD_VERSION（真机/模拟器判据）---"
             otool -l "${EXEC}" 2>/dev/null | grep -A4 'LC_BUILD_VERSION' || true
-            PLATFORM_TAG="$(otool -l "${EXEC}" 2>/dev/null | grep -E '^[[:space:]]+platform[[:space:]]+' \
-              | tr -s ' ' | sed 's/^ //' | sort -u | tr '\n' ',')"
-            echo "platform 标记：${PLATFORM_TAG}"
-            case "${PLATFORM_TAG}" in
-              *IOSSIMULATOR*) fail "[断言3] 可执行文件是**模拟器**架构（IOSSIMULATOR）—— 装不到 iPhone 上" ;;
-              *IOS*)          echo "[断言3] OK —— 可执行文件是**真机**架构（platform IOS）" ;;
-              *)              fail "[断言3] 读不出 platform 标记（实际：${PLATFORM_TAG}）—— 判定不了真机/模拟器" ;;
+            # ★★ otool -l 的 LC_BUILD_VERSION 里 platform 是**数字**，不是字符串：
+            #   1=MACOS  2=IOS(真机)  3=TVOS  4=WATCHOS  6=MACCATALYST
+            #   7=IOSSIMULATOR(模拟器)  8=TVOS_SIMULATOR  11=VISIONOS
+            # ★ 第一版按字符串 IOS / IOSSIMULATOR 匹配 → **永远匹配不上**
+            #   （实测打印出来是 "platform 2,"），于是把**真机产物**误判成
+            #   「判定不了真机/模拟器」。**产物本身是对的，是判据写错了。**
+            PLATFORM_NUM="$(otool -l "${EXEC}" 2>/dev/null | grep -E '^[[:space:]]+platform[[:space:]]+'\
+              | tr -s ' ' | grep -oE '[0-9]+' | sort -u | tr '\n' ',')"
+            echo "platform 编号：${PLATFORM_NUM}（2=iOS 真机 / 7=iOS 模拟器）"
+            case "${PLATFORM_NUM}" in
+              *7*) fail "[断言3] 可执行文件是**模拟器**切片（platform 7）—— 装不到 iPhone 上" ;;
+              *2*) echo "[断言3] OK —— 可执行文件是**真机**切片（platform 2）" ;;
+              *)   fail "[断言3] 读不出 platform 编号（实际：${PLATFORM_NUM}）—— 判定不了真机/模拟器" ;;
             esac
             case "${ARCHS}" in
               *arm64*) echo "[断言3b] OK —— 架构含 arm64" ;;
@@ -582,7 +588,7 @@ jobs:
             if [ -f "${FW}/Shared" ]; then
               FW_ARCHS="$(lipo -archs "${FW}/Shared" 2>/dev/null || true)"
               FW_PLATFORM="$(otool -l "${FW}/Shared" 2>/dev/null | grep -E '^[[:space:]]+platform[[:space:]]+' \
-                | tr -s ' ' | sed 's/^ //' | sort -u | tr '\n' ',')"
+                | tr -s ' ' | grep -oE '[0-9]+' | sort -u | tr '\n' ',')"
               echo "Shared.framework 架构：${FW_ARCHS}"
               echo "Shared.framework platform：${FW_PLATFORM}"
               case "${FW_ARCHS}" in
@@ -590,9 +596,9 @@ jobs:
                 *)       fail "[断言4b] Shared.framework 没有 arm64 切片：${FW_ARCHS}" ;;
               esac
               case "${FW_PLATFORM}" in
-                *IOSSIMULATOR*) fail "[断言4c] Shared.framework 是**模拟器**切片 —— 真机会崩" ;;
-                *IOS*)          echo "[断言4c] OK —— Shared.framework 是**真机**切片" ;;
-                *)              fail "[断言4c] 读不出 Shared.framework 的 platform：${FW_PLATFORM}" ;;
+                *7*)             fail "[断言4c] Shared.framework 是**模拟器**切片（platform 7）—— 真机会崩" ;;
+                *2*)             echo "[断言4c] OK —— Shared.framework 是**真机**切片" ;;
+                *)              fail "[断言4c] 读不出 Shared.framework 的 platform 编号：${FW_PLATFORM}" ;;
               esac
             else
               fail "[断言4] Shared.framework 里没有可执行文件 Shared —— 空壳"

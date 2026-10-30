@@ -24,12 +24,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "${SCRIPT_DIR}/lib/common.sh"
 
-ROOT="${1:-$(ci_repo_root "$SCRIPT_DIR")}"
-[ -d "$ROOT" ] || ci_die "仓库根目录不存在：$ROOT"
+ROOT="${1:-$(ci_repo_root "${SCRIPT_DIR}")}"
+[ -d "${ROOT}" ] || ci_die "仓库根目录不存在：${ROOT}"
 
-ci_log "▶ L2 配置层零网络门禁（根目录：$ROOT）"
+ci_log "▶ L2 配置层零网络门禁（根目录：${ROOT}）"
 
 mapfile -t SDKPAT   < <(ci_load_patterns "network-binary.txt")
 mapfile -t FORBID  < <(ci_load_patterns "ios-config-forbidden.txt")
@@ -41,13 +41,13 @@ VIOLATIONS=0
 # ── 1. 第三方 SDK 血统：依赖声明文件里不得出现 ───────────────────────────────
 DEP_FILES=""
 for name in Package.swift Podfile Cartfile Package.resolved; do
-  [ -f "$ROOT/$name" ] && DEP_FILES="$DEP_FILES $name"
+  [ -f "${ROOT}/${name}" ] && DEP_FILES="${DEP_FILES} ${name}"
 done
-if [ -n "$DEP_FILES" ]; then
-  for dep in $DEP_FILES; do
+if [ -n "${DEP_FILES}" ]; then
+  for dep in ${DEP_FILES}; do
     for pat in "${SDKPAT[@]}"; do
-      if grep -Fq -- "$pat" "$ROOT/$dep"; then
-        ci_error "$dep" "-" "依赖声明里出现第三方 SDK 血统：$pat —— 第一批只用 Apple Vision，不引第三方 SDK"
+      if grep -Fq -- "${pat}" "${ROOT}/${dep}"; then
+        ci_error "${dep}" "-" "依赖声明里出现第三方 SDK 血统：${pat} —— 第一批只用 Apple Vision，不引第三方 SDK"
         VIOLATIONS=$((VIOLATIONS + 1))
       fi
     done
@@ -57,43 +57,43 @@ else
 fi
 
 # ── 2. ATS 不得放宽 ─────────────────────────────────────────────────────────
-mapfile -t PLISTS < <(ci_list_files_under "$ROOT" "Info.plist" "ios")
+mapfile -t PLISTS < <(ci_list_files_under "${ROOT}" "Info.plist" "ios")
 for rel in "${PLISTS[@]}"; do
   for pat in "${FORBID[@]}"; do
-    if grep -Fq -- "$pat" "$ROOT/$rel"; then
-      ci_error "$rel" "-" "Info.plist 出现被禁配置：$pat —— ATS 不得放宽"
+    if grep -Fq -- "${pat}" "${ROOT}/${rel}"; then
+      ci_error "${rel}" "-" "Info.plist 出现被禁配置：${pat} —— ATS 不得放宽"
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
   done
 done
 
 # ── 3. entitlements 不得带网络能力 ──────────────────────────────────────────
-mapfile -t ENTS < <(ci_list_files_under "$ROOT" "*.entitlements" "ios")
+mapfile -t ENTS < <(ci_list_files_under "${ROOT}" "*.entitlements" "ios")
 for rel in "${ENTS[@]}"; do
   for pat in "${FORBID[@]}"; do
-    if grep -Fq -- "$pat" "$ROOT/$rel"; then
-      ci_error "$rel" "-" "entitlements 出现被禁能力：$pat"
+    if grep -Fq -- "${pat}" "${ROOT}/${rel}"; then
+      ci_error "${rel}" "-" "entitlements 出现被禁能力：${pat}"
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
   done
 done
 
 # ── 4. 签名开关必须恒为 NO ──────────────────────────────────────────────────
-mapfile -t PROJFILES < <(ci_list_files_under "$ROOT" "project.yml" "ios")
+mapfile -t PROJFILES < <(ci_list_files_under "${ROOT}" "project.yml" "ios")
 for rel in "${PROJFILES[@]}"; do
   for var in "${MUSTNO[@]}"; do
-    val="$(grep -E -- "^[[:space:]]*${var}[[:space:]]*:" "$ROOT/$rel" | head -1 | sed -E 's/.*:[[:space:]]*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
-    [ -n "$val" ] || continue                     # 没这个变量 → 通过
-    if [ "$val" != "NO" ]; then
-      ci_error "$rel" "-" "构建开关 $var 必须为 NO（CI 一律不签名），实际为：$val"
+    val="$(grep -E -- "^[[:space:]]*${var}[[:space:]]*:" "${ROOT}/${rel}" | head -1 | sed -E 's/.*:[[:space:]]*//' | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+    [ -n "${val}" ] || continue                     # 没这个变量 → 通过
+    if [ "${val}" != "NO" ]; then
+      ci_error "${rel}" "-" "构建开关 ${var} 必须为 NO（CI 一律不签名），实际为：${val}"
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
   done
 done
 
-if [ "$VIOLATIONS" -gt 0 ]; then
+if [ "${VIOLATIONS}" -gt 0 ]; then
   ci_log ""
-  ci_log "✗ L2 配置层零网络门禁未通过：$VIOLATIONS 处违规"
+  ci_log "✗ L2 配置层零网络门禁未通过：${VIOLATIONS} 处违规"
   exit 1
 fi
 
