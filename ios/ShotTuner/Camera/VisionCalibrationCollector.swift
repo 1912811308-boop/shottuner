@@ -152,7 +152,12 @@ enum VisionCalibrationCollector {
             outputDirectoryName,
             isDirectory: true
         )
-        guard FileManager.default.fileExists(atPath: directory.path) else {
+        // ★ 这里用 `if` 而不是 `guard else`：
+        //   `guard` 的 body 必须**退出作用域**（return/throw/break/continue），
+        //   而"创建目录成功"这条路径是正常往下走的 → 写成 guard else 会编译报错
+        //   （error: 'guard' body must not fall through）。
+        //   语义与原来的 guard 完全一致：不存在就建，建不出来就返回 nil。
+        if !FileManager.default.fileExists(atPath: directory.path) {
             do {
                 try FileManager.default.createDirectory(
                     at: directory,
