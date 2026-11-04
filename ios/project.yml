@@ -174,13 +174,51 @@ targets:
         basedOnDependencyAnalysis: false
         showEnvVars: false
 
+  # ── 单测 target ────────────────────────────────────────────────────────────
+  #
+  # ★ 为什么第一批只有骨架用例：
+  #   T12 的验收方式之一是「同一批固定图在两端 dump 出逐字段一致的统计量」，
+  #   这个验收一直卡在**工程里根本没有 unit-test target**，连跑都跑不起来。
+  #   先把 target 立起来、让 `xcodebuild test` 在 CI 上绿，才有地方放真正的比对。
+  #
+  # ★ 为什么是 bundle.unit-test + 依赖 app target（而不是 bundle.unit-test 裸跑）：
+  #   裸测试 bundle 没有 host app，跑在模拟器里拿不到应用沙箱，
+  #   而 Fixture 图集将来要从 app bundle 里读。挂 host 是免费的。
+  #
+  # ★ 为什么不写 TEST_HOST / BUNDLE_LOADER：
+  #   XcodeGen 的 `dependencies: - target: ShotTuner` 会自动生成这两项，
+  #   手写反而容易和生成值打架（尤其 BUNDLE_LOADER 里的 $(BUILT_PRODUCTS_DIR) 展开）。
+  ShotTunerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ShotTunerTests
+    dependencies:
+      - target: ShotTuner
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shottuner.app.tests
+        # 测试 bundle 不需要单独的 Info.plist 文件，让 Xcode 现场生成
+        GENERATE_INFOPLIST_FILE: "YES"
+        # 与 app target 保持一致：模拟器只编 arm64（仓库没有 iosX64 目标）
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+
 # ── Scheme：显式声明，避免依赖 XcodeGen 的自动生成 ──────────────────────────
 schemes:
   ShotTuner:
     build:
       targets:
         ShotTuner: all
+        ShotTunerTests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      # ★ gatherCoverageData 刻意关掉：
+      #   CI 上跑的是「契约有没有破」，不是覆盖率看板；
+      #   开覆盖率会让 xcodebuild 多产出一堆 .profdata，还拖慢 30% 以上。
+      gatherCoverageData: false
+      targets:
+        - ShotTunerTests
     archive:
       config: Release
