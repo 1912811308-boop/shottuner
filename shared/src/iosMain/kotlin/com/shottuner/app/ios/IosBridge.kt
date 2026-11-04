@@ -16,6 +16,7 @@
 
 package com.shottuner.app.ios
 
+import com.shottuner.app.analysis.FrameStatsDump
 import com.shottuner.app.sensors.LevelMath
 import com.shottuner.app.text.NumFmt
 
@@ -93,4 +94,65 @@ object IosBridge {
      * @return 在容差内返回 true
      */
     fun isLevel(roll: Double): Boolean = LevelMath.isLevel(roll.toFloat())
+
+    /**
+     * 跨端对齐用的取景统计量 dump：喂进一帧 YUV420 的三平面字节，吐出**整段文本**。
+     *
+     * ## 为什么返回 String 而不是把统计量逐个导出
+     *
+     * T12 要证明「同一批固定测试图在 Android 与 iOS 上算出同一套 FrameStats」。
+     * 若把 `FrameStats` 的字段逐个桥接给 Swift 再由 Swift 拼文本：
+     *
+     * 1. `FloatArray`（histogram / grid / skinGrid）会桥接成 `NSArray<NSNumber>`，
+     *    既慢又容易在 Swift 侧被隐式转成不同精度；
+     * 2. 更要命的是 **Float 的字符串化在 Kotlin 与 Swift 里不保证逐字一致**，
+     *    两边各拼各的，算法明明相同 diff 也会永远对不上。
+     *
+     * 所以这里让 **Kotlin 一次性生成文本**，Swift 只做「传字节 → 拿字符串 → 落盘」：
+     * 格式由 commonMain 的 [FrameStatsDump] 统一定义，两端调用的是同一份拼装代码，
+     * 一致性是结构保证，不靠人工对齐文档。
+     *
+     * ## 固定参数口径
+     *
+     * `yPixelStride=1`、`uPixelStride=1`、`vPixelStride=1`、`vRowStride=uRowStride`、
+     * `rotationDegrees=0`、`computeFocus=true`、`focusFallback=0f`、`emitRgb=false`。
+     * 这些值写死在 [FrameStatsDump.computeDump] 里，**Android 侧 dump 工具调的也是它**，
+     * 所以两端不会各传各的。
+     *
+     * ## Swift 侧调用提示
+     *
+     * `IosBridge` 是 Kotlin `object`，在 Swift 里是类属性单例：
+     * `IosBridge.shared.dumpFrameStats(yPlane:uPlane:vPlane:yRowStride:uRowStride:width:height:label:)`。
+     * `ByteArray` 会被 Kotlin/Native 导出成 `KotlinByteArray`，Swift 侧需用它
+     * （或由 `NSData` 逐字节填充）承载三个平面；`String` 正常桥接成 Swift `String`。
+     *
+     * @param yPlane Y 平面字节
+     * @param uPlane U 平面字节
+     * @param vPlane V 平面字节
+     * @param yRowStride Y 平面每行字节跨度
+     * @param uRowStride U 平面每行字节跨度（V 平面沿用同一个值）
+     * @param width 图像宽（像素）
+     * @param height 图像高（像素）
+     * @param label 图名，写入首行 `### ` 标题，例如 `01-bright`
+     * @return 可直接落盘、与 Android 侧逐字节 diff 的文本；尺寸过小等无法统计时给出占位文本
+     */
+    fun dumpFrameStats(
+        yPlane: ByteArray,
+        uPlane: ByteArray,
+        vPlane: ByteArray,
+        yRowStride: Int,
+        uRowStride: Int,
+        width: Int,
+        height: Int,
+        label: String
+    ): String = FrameStatsDump.computeDump(
+        yPlane = yPlane,
+        uPlane = uPlane,
+        vPlane = vPlane,
+        yRowStride = yRowStride,
+        uRowStride = uRowStride,
+        width = width,
+        height = height,
+        label = label
+    )
 }
