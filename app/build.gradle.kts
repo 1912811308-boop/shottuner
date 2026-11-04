@@ -21,8 +21,8 @@ android {
         // 不该沿用内部迭代号；两端统一从 1.0.0 重新对外计数）。
         // ★ versionCode **不能回退** —— 系统靠它判断能否覆盖安装，
         //   已装过 31/32 的设备装不上 versionCode 更小的包。故内部取 33。
-        versionCode = 33
-        versionName = "1.0.0"
+        versionCode = 34
+        versionName = "1.0.1"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }

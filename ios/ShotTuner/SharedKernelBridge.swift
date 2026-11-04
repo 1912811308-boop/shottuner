@@ -81,6 +81,13 @@ enum SharedKernelBridge {
         IosBridge.shared.isLevel(roll: roll)
     }
 
+    /// 技法图鉴的条目总数（与 Android 版读同一份 commonMain 数据）。
+    ///
+    /// ★ `count()` 的 Kotlin `Int` 映射到 Swift 是 `Int32`，显式转成 `Int` 给 SwiftUI 用。
+    static var techniqueCount: Int {
+        Int(TechniqueDexBridge.shared.count())
+    }
+
     /// **直接**调用 commonMain 的纯函数（不经 iosMain 门面）。
     ///
     /// 用来证明：commonMain 里的实现**原样**就能被 Swift 调到 —— 两端共用同一份代码，

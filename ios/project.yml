@@ -75,12 +75,12 @@ settings:
     SWIFT_VERSION: "5.9"
 
     # ── 版本号 ──
-    # MARKETING_VERSION 与 Android 侧同源（app/build.gradle.kts 的 versionName = 1.0.0）。
+    # MARKETING_VERSION 与 Android 侧同源（app/build.gradle.kts 的 versionName = 1.0.1）。
     # ★ 2026-10-29 clover 决定：两端统一从 1.0.0 对外计数 —— iOS 是新产品，
     #   不该沿用 Android 内部的迭代号（2.x/3.x 从未对外发布过）。
     # CURRENT_PROJECT_VERSION 是 iOS 侧的**独立递增**（从 1 起算），与 Android 的 versionCode 无关。
-    MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "1.0.1"
+    CURRENT_PROJECT_VERSION: "2"
 
     # ── 签名：CI 一律不签名（硬规则一）──
     # ★ 加引号是刻意的：YAML 1.1 会把裸的 NO 解析成布尔 false，

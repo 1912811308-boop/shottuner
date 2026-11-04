@@ -2,12 +2,13 @@
 //
 // ios/ShotTuner/ContentView.swift —— 第一批（T10）的最小界面。
 //
-// ★ 只搭骨架，不实现业务逻辑。
-//   界面上刻意只放三件事，每一件都对应一条必须被验证的链路：
-//     ① 标题          → SwiftUI 工程能起来
-//     ② 相机权限按钮  → 权限链路通
-//     ③ 共享内核自检  → Kotlin → ObjC → Swift 链路通
-//   真正的取景、评分、照拨文案在后续批次（AVFoundation 取景 / Vision 适配）里接上。
+// ★ 第一批搭骨架，第二批补内容：
+//   ① 标题          → SwiftUI 工程能起来
+//   ② 相机权限按钮  → 权限链路通
+//   ③ 共享内核自检  → Kotlin → ObjC → Swift 链路通
+//   ④ 技法图鉴      → 83 条拍照技巧（与 Android 同源，读 commonMain）
+//   ★ 取景、评分、照拨文案**仍未接入** —— 那是 T12/T13 的事，别把图鉴
+//     误当成「功能版」。界面上这句话要一直留着，直到取景真正接上。
 
 import SwiftUI
 
@@ -17,15 +18,23 @@ struct ContentView: View {
     /// 相机权限状态。
     @StateObject private var cameraPermission = CameraPermissionModel()
 
+    /// 技法图鉴是否以模态呈现。
+    @State private var showingTechniqueDex = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
                 cameraSection
+                techniqueSection
                 kernelSection
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .sheet(isPresented: $showingTechniqueDex) {
+            // TechniqueDexView 自带 NavigationView，可直接作为模态内容。
+            TechniqueDexView()
         }
     }
 
@@ -38,6 +47,9 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Text("本版本只搭骨架：相机取景与评分接入在后续批次。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text("技法图鉴已上线：83 条拍照技巧，与 Android 版读同一份内核。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -60,6 +72,24 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             Text("照片只在这台设备上分析，不会上传。App 给的是参考分与「照拨」建议，参数由你自己调。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // ── 技法图鉴（83 条，与 Android 同源）───────────────────────────────────
+    private var techniqueSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("技法图鉴")
+
+            Button {
+                showingTechniqueDex = true
+            } label: {
+                Text("浏览 \(SharedKernelBridge.techniqueCount) 条拍照技巧")
+            }
+            .buttonStyle(.bordered)
+
+            Text("口诀、什么时候用、怎么做、建议值、容易踩的坑——全部来自共享内核，两端同一份内容。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
