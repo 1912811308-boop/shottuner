@@ -84,6 +84,8 @@ final class CameraSession: NSObject {
         case noBackCamera
         /// 建 `AVCaptureDeviceInput` 失败。
         case cannotCreateInput(underlying: Error)
+        /// session 收不下相机输入。
+        case cannotAddInput
         /// session 收不下视频输出。
         case cannotAddVideoDataOutput
         /// session 收不下拍照输出。
@@ -92,6 +94,8 @@ final class CameraSession: NSObject {
         case cannotLockDevice(underlying: Error)
         /// 目标帧率不在该 format 的 `videoSupportedFrameRateRanges` 里。
         case unsupportedFrameRate(Int)
+        /// 该设备 / 该 format 不支持 `.custom` 曝光模式。
+        case customExposureUnsupported
         /// 拍照失败。
         case photoCapture(underlying: Error)
     }
@@ -268,7 +272,9 @@ final class CameraSession: NSObject {
             if self.session.isRunning {
                 self.session.stopRunning()
             }
+            self.stateLock.lock()
             self.isRunning = false
+            self.stateLock.unlock()
         }
     }
 
@@ -465,9 +471,7 @@ final class CameraSession: NSObject {
                 return
             }
             guard currentDevice.isExposureModeSupported(.custom) else {
-                DispatchQueue.main.async { completion(Failure.cannotLockDevice(
-                    underlying: ManualExposureError.customModeUnsupported
-                )) }
+                DispatchQueue.main.async { completion(Failure.customExposureUnsupported) }
                 return
             }
             do {
@@ -509,12 +513,6 @@ final class CameraSession: NSObject {
         }
     }
 
-    /// 手动曝光失败的子原因。
-    enum ManualExposureError: Error {
-        /// 该设备 / 该 format 不支持 `.custom` 曝光模式。
-        case customModeUnsupported
-    }
-
     // MARK: - 拍照
 
     /// 拍一张照片并落盘到指定 URL。
@@ -530,9 +528,7 @@ final class CameraSession: NSObject {
             }
             let capture = PhotoCapture(outputURL: url) { [weak self] result in
                 // 释放 delegate（A/V 框架只在拍照期间弱引用它）。
-                if let capture = self?.takeFinishedCapture(matching: url) {
-                    _ = capture
-                }
+                self?.takeFinishedCapture(matching: url)
                 DispatchQueue.main.async { completion(result) }
             }
             self.stateLock.lock()
@@ -545,6 +541,7 @@ final class CameraSession: NSObject {
     /// 从持有表里摘掉已完成的 delegate。
     /// - Parameter url: 该次拍照的输出 URL。
     /// - Returns: 被摘掉的 delegate（没有则 nil）。
+    @discardableResult
     private func takeFinishedCapture(matching url: URL) -> PhotoCapture? {
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -609,9 +606,7 @@ final class CameraSession: NSObject {
             throw Failure.cannotCreateInput(underlying: error)
         }
         guard session.canAddInput(input) else {
-            throw Failure.cannotCreateInput(
-                underlying: ManualExposureError.customModeUnsupported
-            )
+            throw Failure.cannotAddInput
         }
         session.addInput(input)
         device = backCamera
@@ -718,8 +713,8 @@ final class CameraSession: NSObject {
         }
         let format = currentDevice.activeFormat
         var raw = RawCaps()
-        raw.isoMin = Int32(max(1, format.minISO.rounded()))
-        raw.isoMax = Int32(max(raw.isoMin, format.maxISO.rounded()))
+        raw.isoMin = Int32(max(Float(1), format.minISO.rounded()))
+        raw.isoMax = max(raw.isoMin, Int32(format.maxISO.rounded()))
         raw.exposureMinNs = nanoseconds(format.minExposureDuration)
         raw.exposureMaxNs = max(raw.exposureMinNs, nanoseconds(format.maxExposureDuration))
         raw.supportsManualSensor = currentDevice.isExposureModeSupported(.custom)
@@ -919,8 +914,8 @@ extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         stateLock.lock()
-        let isFirstFrame = (frameIndex == 0)
-        if isFirstFrame && startTime > 0 {
+        // 首帧计时只结算一次：frameIndex 自增后，后续帧不会再进这个分支。
+        if frameIndex == 0 && startTime > 0 {
             _firstFrameLatencySeconds = CFAbsoluteTimeGetCurrent() - startTime
         }
         let index = frameIndex
@@ -935,7 +930,6 @@ extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         onFrame?(pixelBuffer)
-        _ = isFirstFrame
     }
 }
 
