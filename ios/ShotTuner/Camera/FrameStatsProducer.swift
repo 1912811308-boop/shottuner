@@ -306,7 +306,7 @@ enum FrameStatsProducer {
             throw ProducerError.cannotDecodeImage
         }
         let rgba = try decodeRGBA(cgImage)
-        return try toI420(rgba)
+        return toI420(rgba)
     }
 
     /// `CVPixelBuffer` → 紧凑 I420 平面。
@@ -393,7 +393,7 @@ enum FrameStatsProducer {
         let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue |
             CGImageAlphaInfo.premultipliedLast.rawValue
         guard let context = CGContext(
-            data: buffer,
+            data: UnsafeMutableRawPointer(buffer),
             width: width,
             height: height,
             bitsPerComponent: 8,
@@ -453,7 +453,7 @@ enum FrameStatsProducer {
     private static let vG = -0.418688
     private static let vB = -0.081312
 
-    private static func toI420(_ image: DecodedRGBA) throws -> Yuv420Planes {
+    private static func toI420(_ image: DecodedRGBA) -> Yuv420Planes {
         let width = image.width
         let height = image.height
         let chromaWidth = (width + 1) / 2
