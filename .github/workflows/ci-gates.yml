@@ -298,12 +298,13 @@ jobs:
       group: ios-package-macos
       cancel-in-progress: false
     env:
-      # Release id —— v1.0.0（Android 的 apk 已经挂在它上面，ipa 挂同一个 Release）。
-      # ★ 2026-10-29 更新：对外版本口径改为 1.0.0（clover 决定），
-      #   Release 也随之从 v3.2.0 换成了 v1.0.0，release id 也跟着变。
-      #   ★ 这个 id 变了就得改这里 —— 挂错 Release 会 404，而 404 的报错
-      #   （"Not Found"）完全看不出是「挂错 Release 了」。
-      RELEASE_ID: "427906078"
+      # ★ 按 **tag** 查 Release，不写死 release id。
+      #   之前写死 `RELEASE_ID: "427906078"`（v1.0.0），每发一个新版本就得改一次；
+      #   忘了改就会把 ipa 挂到旧 Release 上，而且 API 不会报错（旧 Release 还在），
+      #   **静默挂错**比 404 更难发现。
+      #   ⇒ 改成按 tag 查：发新版本时只需改这一行 tag，release id 由 API 现场解析。
+      # ★ 这一行必须与 `ios/project.yml` 的 `MARKETING_VERSION` 保持同步。
+      RELEASE_TAG: "v1.0.1"
     steps:
       - uses: actions/checkout@v4
 
@@ -707,8 +708,10 @@ jobs:
           AUTH_CFG() {
             printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "${GITHUB_TOKEN}"
           }
-          echo "▶ 取 Release（id=${RELEASE_ID}）的 upload_url"
-          REL_JSON="$(curl -fsSL --config <(AUTH_CFG) "${API}/releases/${RELEASE_ID}")"
+          echo "▶ 取 Release（tag=${RELEASE_TAG}）的 upload_url"
+          # ★ 用 /releases/tags/<tag> 端点：返回的就是完整 release 对象
+          #   （含 upload_url 与 assets），与 /releases/<id> 等价，但不用维护 id。
+          REL_JSON="$(curl -fsSL --config <(AUTH_CFG) "${API}/releases/tags/${RELEASE_TAG}")"
           UPLOAD_URL="$(printf '%s' "${REL_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"])')"
           # ★ 截掉 URL 末尾的 {?name,label} 模板串 —— 带上去会 404。
           UPLOAD_URL="${UPLOAD_URL%%\{*}"
