@@ -306,6 +306,38 @@ jobs:
       # ★ 这一行必须与 `ios/project.yml` 的 `MARKETING_VERSION` 保持同步。
       RELEASE_TAG: "v1.0.1"
     steps:
+      # ★ 前置检查：Release 必须**先**存在，否则本 job 会白烧约 20 分钟 macOS 配额。
+      #
+      #   为什么需要它：最后一步用 `/releases/tags/<tag>` 端点取 upload_url，
+      #   而 `curl -f` 遇 404 直接失败 ⇒ `set -e` 让 step 退出 ⇒ 整个 job 红。
+      #   问题是这一步在**归档 + 打包 + 12 条反假绿断言全部跑完之后**才执行，
+      #   也就是说「Release 忘了建」这个纯粹的手工疏漏，要烧掉 20 分钟才暴露。
+      #   把它提到最前面，20 分钟变成 5 秒。
+      #
+      #   ★ 为什么放在 `ios-package` 里而不是另开一个 ubuntu 前置 job：
+      #     另开 job 就得再写一遍 tag 字面量，而本文件上方刚说过
+      #     「tag 写死容易静默挂错」。放在 job 内可以直接复用 `${RELEASE_TAG}`，
+      #     只有一个真出处。
+      - name: 前置检查 · Release 是否存在
+        # ★ `GITHUB_TOKEN` 不是自动注入的环境变量，必须显式给。
+        #   本文件其它用到它的地方也是逐个 step 自己给的（见最后的上传步骤），
+        #   所以这里同样显式声明，不要指望 job 级 env 里已经有。
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          CODE="$(curl -sS -o /tmp/rel.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${API}/releases/tags/${RELEASE_TAG}")"
+          if [ "${CODE}" != "200" ]; then
+            echo "::error::Release ${RELEASE_TAG} 不存在（HTTP ${CODE}）—— 请先在网页上建好 Release，否则后面的 ipa 无处可挂"
+            echo "         https://github.com/${GITHUB_REPOSITORY}/releases/new?tag=${RELEASE_TAG}"
+            exit 1
+          fi
+          echo "::notice::Release ${RELEASE_TAG} 已存在，可以出包"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-java@v4
