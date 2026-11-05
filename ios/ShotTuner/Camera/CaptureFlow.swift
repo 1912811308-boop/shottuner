@@ -109,6 +109,14 @@ final class CaptureFlow: ObservableObject {
     /// ★ `private(set)` ⇒ 调用方要清掉它（例如关掉提示条）请用 `clearError()`。
     @Published private(set) var lastError: String? = nil
 
+    /// `lastError` 对应的失败**是不是权限问题** —— 决定告警里要不要给「去设置」按钮。
+    ///
+    /// ★ 为什么不靠文案里有没有「权限」两个字来判断：文案会改，改的人不会想到
+    ///   还有一个 `contains` 在依赖它。这类「字符串嗅探」是本仓反复避免的写法。
+    /// ★ 只有 `saveDenied` 为 `true`。`writeFailed` 在权限被中途撤销时也可能发生，
+    ///   但那句话没有明确指向设置页，给了按钮反而把用户带偏 —— 保守只认确定的那个。
+    @Published private(set) var lastErrorNeedsSettings: Bool = false
+
     /// 最近一次成功保存到相册的时刻。
     ///
     /// ★ 缩略图飞入（`matchedGeometryEffect`，T17 验收② ≤400ms）靠它触发：
@@ -202,6 +210,7 @@ final class CaptureFlow: ObservableObject {
     /// 清掉 `lastError`（提示条关闭时调）。
     func clearError() {
         lastError = nil
+        lastErrorNeedsSettings = false
     }
 
     /// 放掉内存里那张复盘图（**复盘卡关闭时调**）。
@@ -430,8 +439,25 @@ final class CaptureFlow: ObservableObject {
             lastSavedAt = Date()
         case .failure(let error):
             lastError = Self.userMessage(for: error)
+            lastErrorNeedsSettings = Self.needsSettings(for: error)
         }
         job.completion(result)
+    }
+
+    /// 这个失败是不是「用户得去系统设置才能解决」。
+    ///
+    /// ★ 判据是**枚举分类**，不是文案内容。只有权限被拒那一条才成立。
+    ///
+    /// - Parameter error: 任意错误。
+    /// - Returns: 为 `true` 时告警应给出「去设置」按钮。
+    private static func needsSettings(for error: Error) -> Bool {
+        guard let failure = error as? CaptureFailure else { return false }
+        switch failure {
+        case .saveDenied:
+            return true
+        case .renderFailed, .writeFailed, .photoCapture:
+            return false
+        }
     }
 
     /// 把任意 `Error` 折成给用户看的一句中文。

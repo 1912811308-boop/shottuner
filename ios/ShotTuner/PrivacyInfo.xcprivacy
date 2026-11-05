@@ -8,14 +8,22 @@
     · NSPrivacyTracking = false        —— 没有跨 App 追踪
     · NSPrivacyTrackingDomains = []    —— 不连任何域名（零网络承诺）
     · NSPrivacyCollectedDataTypes = [] —— 不采集任何用户数据（照片只在本机分析）
-  ★ NSPrivacyAccessedAPITypes 从「空」变成「一条」（T17 补齐，2026 批次）：
-    `CaptureFlow.watermarkEnabled` 用 `UserDefaults` 存水印开关（键名 `watermark_enabled`，
-    与 Android 侧 KEY_WATERMARK 逐字一致），而 **UserDefaults 属于 Apple 的
-    「必需理由 API」**（required reason API），必须声明类别与理由码。
-    · 类别：NSPrivacyAccessedAPICategoryUserDefaults
-    · 理由：CA92.1 —— 仅本 App 自身访问自己写入的偏好
-  ★ 为什么必须补：这份文件此前写着「未使用需要声明的 API」，
-    而实际代码已经在用 UserDefaults —— 那是一条**自相矛盾的合规陈述**。
+  ★ NSPrivacyAccessedAPITypes 现在有「两条」（此前是空数组）：
+    ① `CaptureFlow.watermarkEnabled` 用 `UserDefaults` 存水印开关（键名 `watermark_enabled`，
+       与 Android 侧 KEY_WATERMARK 逐字一致），而 **UserDefaults 属于 Apple 的
+       「必需理由 API」**（required reason API）。
+       · 类别：NSPrivacyAccessedAPICategoryUserDefaults
+       · 理由：CA92.1 —— 仅本 App 自身访问自己写入的偏好
+    ② `MissionModel` 的 400ms 定时器用 `ProcessInfo.processInfo.systemUptime` 取单调时钟，
+       `ScoreCoordinator` 用 `CACurrentMediaTime()` —— 这两个都读**开机以来的时间**，
+       属于 NSPrivacyAccessedAPICategorySystemBootTime。
+       · 理由：35F9.1 —— 仅用于测量 App 内部事件之间流逝的时间
+       ★ 为什么不用 `Date()` 代替、从而绕开这条声明：**不能**。
+         这两个时间源被选中的理由恰恰是它们**单调**（不受用户改系统时间、网络校时影响）。
+         换成墙钟会让倒计时、帧间隔、任务超时在改表那一刻集体错乱，
+         而那种错乱是静默的。宁可多一条声明，也不换时间源。
+  ★ 为什么这两条必须补：这份文件此前写着「未使用需要声明的 API」，
+    而实际代码已经在用 UserDefaults 与开机时钟 —— 那是一条**自相矛盾的合规陈述**。
     本产品不采集、不上传，隐私口径是核心资产；清单里出现一句不成立的话，
     比缺一条声明更伤。所以这里补齐，而不是留着等上架前再审。
     其余键一个都没动（只改了 NSPrivacyAccessedAPITypes 这一项）。
@@ -36,6 +44,14 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
 			</array>
 		</dict>
 	</array>

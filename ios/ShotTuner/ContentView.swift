@@ -84,8 +84,28 @@ struct ContentView: View {
     ///   复盘卡显示的是「你按下快门时这张照片值多少分」，必须在那一刻定住。
     @State private var reviewScoreText = ""
 
-    /// 技法图鉴是否以模态呈现。
-    @State private var showingTechniqueDex = false
+    /// 按快门那一刻**冻结**的分数快照。
+    ///
+    /// ★ 与 `reviewScoreText` 同一个理由、同一个时刻取，但用途不同：
+    ///   文案是给水印和复盘卡看的（已经过 `ScoreWording` 口径处理），
+    ///   快照要原样交给 `ScoreHistoryStore.record` 去落盘。
+    ///   两者**都不能**读实时值 —— 否则「这张照片几分」会被后面几十帧改写。
+    @State private var frozenScore: ScoreSnapshot = .empty
+
+    /// 参考分历史。落盘在 Application Support（不参与 iCloud 备份），环形 500 条。
+    ///
+    /// ★ `@StateObject` 而不是 `@State`：它是 `ObservableObject`，
+    ///   发 `revision` 让成长页在拍完一张后重算。
+    @StateObject private var historyStore = ScoreHistoryStore()
+
+    /// 当前打开的功能页。
+    ///
+    /// ★ 全 App **只有一个** `.sheet`，由它驱动。理由见 `body` 里那段注释：
+    ///   同一个视图节点挂两个 `.sheet` 是 SwiftUI 有名的坑。
+    @State private var activePage: AppPage?
+
+    /// 「更多」菜单是否展开。
+    @State private var showingPageMenu = false
 
     /// 是否显示详细统计（直方图 + 四维明细）。默认收起，把画面还给取景。
     @State private var showingDetails = false
@@ -152,8 +172,57 @@ struct ContentView: View {
             if status.allowsCapture { startIfAllowed() }
         }
         .onDisappear(perform: stopEverything)
-        .sheet(isPresented: $showingTechniqueDex) {
-            TechniqueDexView()
+        // ★ 「更多」用 `confirmationDialog` 而不是再开一个 sheet：
+        //   根节点上已经有 `.sheet(item: $activePage)`，同节点再挂一个 `.sheet`
+        //   是两个 `isPresented` 同时为真时只有一个生效、且顺序不保证的那个坑。
+        //   `confirmationDialog` 与 `.sheet` 是**不同**的修饰符，各走各的呈现通道，
+        //   不存在互相顶掉的问题；它是 action sheet 的语义，本来就适合「选一个去哪」。
+        .confirmationDialog("要看什么", isPresented: $showingPageMenu, titleVisibility: .visible) {
+            Button("这会儿该开什么") { activePage = .features }
+            Button("录像方案") { activePage = .video }
+            Button("参考分变化") { activePage = .growth }
+            Button("技法图鉴") { activePage = .techniqueDex }
+            // ★ 水印开关放在这里，是因为它只需要一个开关、不值得单开一页。
+            //   标题带当前状态（`水印：开` / `水印：关`）—— 一个不显示状态的
+            //   「切换水印」按钮，用户点完不知道现在是什么。
+            //   不带勾选标记是 `confirmationDialog` 的限制（它不支持 Toggle 样式），
+            //   所以状态只能写进标题里。
+            Button(captureFlow.watermarkEnabled ? "水印：开" : "水印：关") {
+                captureFlow.watermarkEnabled.toggle()
+            }
+            Button("取消", role: .cancel) {}
+        }
+        // ★ 全 App **唯一**的 `.sheet`。四个目的地共用一个，靠 `AppPage` 分派。
+        //
+        //   为什么收成一个：原来技法图鉴单独挂了 `.sheet(isPresented:)`，
+        //   再加三个页面就变成「同一节点四个 sheet」—— SwiftUI 同时为真时
+        //   只有一个生效，而且哪个生效不保证。收成 `.sheet(item:)` 之后
+        //   「同时只能有一个页面」由类型本身保证（`activePage` 是单值）。
+        .sheet(item: $activePage) { page in
+            switch page {
+            case .techniqueDex:
+                TechniqueDexView()
+            case .features:
+                // ★ `profile` 在这里现取一次（而不是在 `body` 里预存到 `@State`）：
+                //   模态内容是**惰性**求值的，只有真的要打开这一页时才付这次构造成本；
+                //   而 `currentDeviceProfile()` 要读设备能力，不是轻活。
+                FeatureView(
+                    coordinator: coordinator,
+                    profile: session.currentDeviceProfile(),
+                    onClose: { activePage = nil }
+                )
+            case .video:
+                VideoPlanView(
+                    coordinator: coordinator,
+                    profile: session.currentDeviceProfile(),
+                    onClose: { activePage = nil }
+                )
+            case .growth:
+                GrowthView(
+                    store: historyStore,
+                    onClose: { activePage = nil }
+                )
+            }
         }
     }
 
@@ -201,9 +270,9 @@ struct ContentView: View {
     /// 快门条 + 它的模态与告警。
     ///
     /// ★ 为什么 `.sheet` / `.alert` 挂在**这个子视图**上，而不挂在根 `ZStack` 上：
-    ///   根上已经有一个 `.sheet(isPresented: $showingTechniqueDex)`。
+    ///   根上已经挂了一个 `.sheet(item: $activePage)`（四个页面共用那一个）。
     ///   SwiftUI 在同一个视图节点上挂第二个 `.sheet` 是有名的坑 ——
-    ///   两个 `isPresented` 同时为真时只有一个生效，而且顺序不保证。
+    ///   两个呈现同时为真时只有一个生效，而且顺序不保证。
     ///   挂在不同节点上就没有这个问题，各自独立。
     private var shutterBar: some View {
         ShutterBar(
@@ -242,6 +311,19 @@ struct ContentView: View {
                 set: { presented in if !presented { captureFlow.clearError() } }
             )
         ) {
+            // ★ 权限被拒时给一条直达路径。只靠文案里那句「可在『设置 → 隐私与安全性
+            //   → 照片』里改回来」，用户得自己翻四层菜单；相机权限那边有 `scenePhase`
+            //   兜底可以自动恢复，相册这条没有等价机制，所以必须给一个跳转。
+            //   按钮只在 `lastErrorNeedsSettings` 时出现 —— 渲染失败之类的错误
+            //   跳设置页是误导。
+            if captureFlow.lastErrorNeedsSettings {
+                Button("去设置") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                    captureFlow.clearError()
+                }
+            }
             Button("好", role: .cancel) { captureFlow.clearError() }
         } message: {
             Text(captureFlow.lastError ?? "")
@@ -261,6 +343,10 @@ struct ContentView: View {
         guard !captureFlow.isCapturing else { return }
 
         reviewScoreText = ScoreWording.full(coordinator.score)
+        // ★ 与上面同一刻冻结，但这一份是给历史落盘用的**原始快照**。
+        //   不能等到回调里再读 `coordinator.score`：拍照是异步的，
+        //   回调回来时画面已经又走了几帧，记进历史的就成了「下一帧的分」。
+        frozenScore = coordinator.score
         mission.abort("CAPTURE")
 
         captureFlow.capture(
@@ -273,7 +359,20 @@ struct ContentView: View {
             // 失败时 `captureFlow.lastError` 已经有中文说明了，
             // 告警由上面的 `.alert` 弹；这里不再重复提示。
             if case .success = result {
-                showingReview = true
+                // ★ 只有**真的存进相册**才记历史。存失败的照片不该进成长曲线 ——
+                //   那条曲线回答的是「我练得有没有进步」，一张没留下来的照片
+                //   不该算作一次练习。
+                historyStore.record(frozenScore)
+
+                // ★ 先确认拿到图再开复盘卡。
+                //   `lastCapturedImage` 可能为 nil（水印关闭时解码失败那条路径，
+                //   照片本身是成功进相册的）。原来直接置 `true`，于是 sheet 里
+                //   `if let image = ...` 为 false → 内容变成空视图 →
+                //   用户看到一张**没有「完成」按钮、只能下滑关闭**的白卡，
+                //   以为 App 卡了。宁可不开，也不要开一张关不掉的空卡。
+                if captureFlow.lastCapturedImage != nil {
+                    showingReview = true
+                }
             }
         }
     }
@@ -310,7 +409,9 @@ struct ContentView: View {
             Spacer(minLength: 0)
 
             Button {
-                showingTechniqueDex = true
+                // 一个入口，四条去路（功能页 / 录像方案 / 成长 / 图鉴）。
+                // 顶栏只有 40pt 见方的地方，塞四个图标会互相挤到认不出。
+                showingPageMenu = true
             } label: {
                 Image(systemName: "book.closed")
                     .font(.system(size: 16, weight: .semibold))
@@ -506,6 +607,29 @@ struct ContentView: View {
         session.stop()
         pipelineStarted = false
     }
+}
+
+// MARK: - 功能页路由
+
+/// 全 App 唯一那个 `.sheet` 的目的地。
+///
+/// ★ 为什么收成一个枚举而不是四个 `Bool`：
+///   四个 `@State var showingXxx` 允许多个同时为 `true`，而同一个节点上的
+///   多个 `.sheet` 在那种情况下只有一个生效、且哪个生效不保证 ——
+///   也就是说「代码看起来支持同时打开两页，实际行为随机」。
+///   单值 `Optional` 让「同时只能有一个页面」由类型保证，编译器帮我们挡。
+///
+/// ★ 为什么不加 `.techniqueDex` 之外的更多项：
+///   这个 App 只有四个能离开取景器的页面，多一项就说明该重新设计导航了。
+private enum AppPage: String, Identifiable {
+    case techniqueDex
+    case features
+    case video
+    case growth
+
+    /// `Identifiable` 要求。用 `rawValue` 而不是自增 `UUID`：
+    /// sheet 的身份必须**稳定**，否则同一个页面重开会被当成另一个身份、重新走入场动画。
+    var id: String { rawValue }
 }
 
 // MARK: - 参考分文案

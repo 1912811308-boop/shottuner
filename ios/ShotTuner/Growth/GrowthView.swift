@@ -136,6 +136,17 @@ struct GrowthView: View {
         .onAppear {
             points = store.recentPoints(days: GrowthDefaults.windowDays, now: Date())
         }
+        // ★ 这一条不能省：`@ObservedObject` 只保证 `store` 变化时**重算 body**，
+        //   而 `points` 是 `@State`，`body` 重算**不会**重跑 `onAppear`。
+        //
+        //   后果很具体：拍完一张 → `record()` 让 `revision` +1 → body 重算了、
+        //   计数与成长卡都跟着更新，但**折线还是打开这一页那一刻的旧数据**。
+        //   因为成长页是个模态，用户通常是「拍几张 → 打开看」，这一页在打开期间
+        //   本来就不会有新记录；但「打开着不动、靠后台/分屏继续拍」的路径会踩到，
+        //   而且这种不一致没有任何报错，只表现为「图不对」。
+        .onChange(of: store.revision) { _ in
+            points = store.recentPoints(days: GrowthDefaults.windowDays, now: Date())
+        }
     }
 
     // MARK: - 首末对比卡
@@ -301,9 +312,17 @@ struct GrowthView: View {
     // MARK: - 折线图
 
     /// 折线图区块（标题 + 图）。
+    ///
+    /// ★ 标题写「参考分变化」，**不写「最近 30 天参考分」**。
+    ///   `GrowthDefaults.windowDays` 是**取数窗口**（只取最近 30 天的记录），
+    ///   但 X 轴的跨度是「窗口内首末两条记录的真实时间」（见 `GrowthChart.xPosition`）。
+    ///   于是两天内拍两张，两个点会落在轴的两端 —— 图看起来像「跨越三十天的陡峭进步」。
+    ///   标题若写成「最近 30 天」，就是在替这张图**宣称一个它没有的横轴**。
+    ///   要么改标题（这里），要么画一根真实的 30 天轴（那会让新用户的点挤成一竖线）。
+    ///   选了前者：宁可少说，不说错。
     private var chartSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("最近 \(GrowthDefaults.windowDays) 天参考分")
+            Text("参考分变化")
                 .font(.system(size: 11))
                 .foregroundStyle(Palette.overlayTextSecondary)
             GrowthChart(points: points)

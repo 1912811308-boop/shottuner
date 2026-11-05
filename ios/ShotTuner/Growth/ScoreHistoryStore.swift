@@ -313,8 +313,12 @@ final class ScoreHistoryStore: ObservableObject {
 
     /// 给文件打「不进 iCloud 备份」标记。
     ///
-    /// ★ `setResourceValues(_:)` 是 **mutating** 的，所以参数要先拷进 `var`。
-    ///   直接写 `url.setResourceValues(&values)`（`url` 是 `let`）会编译失败。
+    /// ★ `setResourceValues(_:)` 的签名是
+    ///   `mutating func setResourceValues(_ values: URLResourceValues) throws` ——
+    ///   **`mutating` 作用在 `URL` 自己身上，形参是按值传入、不是 `inout`**。
+    ///   所以需要 `var` 的是 `url`，不是 `values`。写成 `setResourceValues(&values)`
+    ///   会直接编译失败：`'&' used with non-inout argument of type 'URLResourceValues'`。
+    ///   （`values` 之所以也是 `var`，只是因为它要先被赋值 `isExcludedFromBackup`。）
     ///
     /// ★ 失败只打日志：备份策略是「省钱」层面的优化，不该因为它失败而中断拍照。
     ///
@@ -324,7 +328,7 @@ final class ScoreHistoryStore: ObservableObject {
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         do {
-            try url.setResourceValues(&values)
+            try url.setResourceValues(values)
         } catch {
             print("[ScoreHistory] 设置「不进备份」标记失败：\(error)")
         }
