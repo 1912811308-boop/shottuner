@@ -4,21 +4,31 @@
 //
 // 它做四件事，别的一概不管：
 //   ① 从 CameraSession 收帧（`CVPixelBuffer`）；
-//   ② 节流后把帧转成紧凑 I420，连同「传感器横滚角 + 构图提示」一起交给 Kotlin 门面
-//      （`IosBridge.shared.analyzeFrame(...)`）；
+//   ② 节流后把帧转成紧凑 I420，连同「传感器横滚角 + 场景名」交给 Kotlin 门面
+//      （`IosBridge.shared.analyzeFrame(...)`，11 个参数）；
 //   ③ 把 Kotlin 吐回来的扁平 DTO 翻成 SwiftUI 能直接绑的 `ScoreSnapshot` /
-//      `HistogramSnapshot`；
-//   ④ 传感器与构图各自「只改自己那几个字段」地更新 `GuideSnapshot`。
+//      `HistogramSnapshot` / `GuideSnapshot` 的构图部分；
+//   ④ 姿态（横滚角 / 俯仰角）由 `updateMotion` 单独喂，只改它自己那几个字段。
 //
 // ★ 为什么评分不写在这里：
 //   四维参考分、等级、提示卡文案全部在 commonMain（`ScoreBoard` / `FrameStatsCore` /
 //   `FramingCoach`）。两端共用一份实现，iOS 侧只负责「喂数据 + 翻译结果」。
 //   一旦 Swift 侧自己算分，两端就再也不可能对齐 —— 那是这份代码最想避免的事。
 //
-// ★ 为什么 `guide` 不从 DTO 回来：
-//   横滚角与构图提示是**原生侧本来就有的数据**（CoreMotion / Vision），
-//   送进 Kotlin 只是为了让「水平维度」参与评分。再让 Kotlin 把它们吐回来，
-//   等于给同一份数据造两个来源，只会多一条会漂移的链路。
+// ★ 为什么**构图**也从 DTO 回来（这条曾经写反过，别再改回去）：
+//   构图分析（主体位置、地平线、三分交点、构图分）由 commonMain 的
+//   `CompositionAnalyzer.analyze(stats)` 算，它只吃 `FrameStats`、是纯函数。
+//   所以 iOS 侧**不需要也不应该**在 Swift 里重写一遍构图分析，再把 15 个标量喂回去 ——
+//   那等于维护一份「这些参数该从哪来」的映射，两端必然走样，而且走样了不会有人发现
+//   （构图分只是少几分，不像崩溃那样显眼）。
+//   现在的链路与 Android 完全一致：
+//     `FrameStatsCore.compute → CompositionAnalyzer.analyze → ScoreBoard.score`
+//   三步都在 commonMain。Swift 只做「画」。
+//
+// ★ 唯独姿态（`rollDegrees` / `pitchDegrees` / `pitchAvailable`）留在 Swift：
+//   那是 CoreMotion 的原始读数，Kotlin 只把 `roll` 当评分入参用，不需要回吐。
+//   所以 `updateMotion` 与「DTO 填构图」各自只动自己的字段，谁也不覆盖谁 ——
+//   见 `land(...)` 里 `var next = guide` 的那几行注释。
 //
 // ★ 线程模型（看图更快）：
 //
@@ -26,13 +36,14 @@
 //        └─ admit(now:)：节流判定 + 取一份输入快照 ──── 丢弃则 return，一行重活不做
 //        └─ gate.queue（后台串行）
 //              ├─ yuv420(from:)              —— 最贵的一步
-//              ├─ IosBridge.analyzeFrame(...) —— 同步 Kotlin 调用
+//              ├─ IosBridge.analyzeFrame(...) —— 同步 Kotlin 调用（含构图分析）
 //              └─ Task { @MainActor }         —— 只把**纯 Swift 值类型**投回主线程
 //                    └─ land(...) 写 @Published
 //
-//   ★ 为什么「投回主线程」只带 `ScoreSnapshot` / `HistogramSnapshot`：
-//     它们是 Swift 值类型（字段全是 Int/String/Float/Bool，隐式 Sendable），
-//     跨隔离边界零争议；而 `IosFrameAnalysisDto` 是 Kotlin 对象，不是 Sendable。
+//   ★ 为什么「投回主线程」只带纯值类型：
+//     `ScoreSnapshot` / `HistogramSnapshot` / `GuideReading` 都是 Swift 值类型
+//     （字段全是 Int/String/Float/Bool，隐式 Sendable），跨隔离边界零争议；
+//     而 `IosFrameAnalysisDto` 是 Kotlin 对象，不是 Sendable。
 //     让 DTO 留在后台队列上被翻译掉，主线程只收成品。
 //
 // ★ 产品口径（改这些行为之前先想清楚）：
@@ -71,31 +82,65 @@ private enum ScoreDefaults {
 
 /// 送进 Kotlin 的全部标量入参（每帧一份快照）。
 ///
-/// ★ 为什么单独成一个值类型：这些字段由两条不同线程写
-///   （`updateMotion` / `updateComposition` 在主线程，帧回调在后台队列），
-///   每帧开始分析时**先取一份不可变快照**，就避免了「分析过程中被改了一半」的撕裂。
+/// ★ 只剩三个字段了：构图那 15 项**已经收回 commonMain**
+///   （`CompositionAnalyzer.analyze(stats)` 只吃 `FrameStats`，是纯函数），
+///   不再由 Swift 算好再喂回去。所以这里只留 Kotlin 自己拿不到的东西：
+///   姿态（来自 CoreMotion）与场景（来自用户的场景选择器）。
 ///
-/// 默认值与 `GuideSnapshot.empty` 同口径，这样「传感器还没喂过」时
-/// 送进 Kotlin 的是一组中性值，而不是 0 堆出来的假数据。
+/// ★ 为什么单独成一个值类型：这些字段由两条不同线程写
+///   （`updateMotion` / `setScene` 在主线程，帧回调在后台队列），
+///   每帧开始分析时**先取一份不可变快照**，就避免了「分析过程中被改了一半」的撕裂。
 private struct AnalysisInputs {
     var roll: Float = 0
     var rollValid: Bool = false
     var sceneName: String = ScoreDefaults.scene
-    var hintScore: Int32 = 0
-    var tiltDeg: Float = 0
-    var horizonDetected: Bool = false
-    var horizonY: Float = 0.5
-    var subjectX: Float = 0.5
-    var subjectY: Float = 0.5
-    var subjectConfidence: Float = 0
-    var subjectSize: Float = 0
-    var subjectLeft: Float = 0.4
-    var subjectTop: Float = 0.4
-    var subjectRight: Float = 0.6
-    var subjectBottom: Float = 0.6
-    var targetX: Float = 0.6667
-    var targetY: Float = 0.3333
-    var suggestMove: Bool = false
+}
+
+/// DTO 里的构图读数，翻成 Swift 值类型后再投回主线程。
+///
+/// ★ 为什么需要这个中间结构：`IosFrameAnalysisDto` 是 Kotlin 对象、**不是 Sendable**，
+///   不能跨隔离边界投递。而这 15 个字段全是标量，打包成一个内部 struct 就变成
+///   隐式 Sendable，`Task { @MainActor }` 只带它走。
+///
+/// ★ 为什么字段名与 DTO 一模一样、一个都不改：这一层只做「搬运」，
+///   一旦在这里改名 / 换算 / 补默认值，就多了一处会与 Kotlin 分叉的地方。
+///   要改口径请改 Kotlin（`CompositionAnalyzer`），别改这里。
+private struct GuideReading: Sendable {
+    let hintScore: Int32
+    let tiltDeg: Float
+    let horizonDetected: Bool
+    let horizonY: Float
+    let subjectX: Float
+    let subjectY: Float
+    let subjectConfidence: Float
+    let subjectSize: Float
+    let subjectLeft: Float
+    let subjectTop: Float
+    let subjectRight: Float
+    let subjectBottom: Float
+    let targetX: Float
+    let targetY: Float
+    let suggestMove: Bool
+
+    /// 从 DTO 抄一份（**只搬运，不换算**）。
+    /// - Parameter dto: Kotlin 的扁平分析结果。
+    init(from dto: IosFrameAnalysisDto) {
+        hintScore = dto.hintScore
+        tiltDeg = dto.tiltDeg
+        horizonDetected = dto.horizonDetected
+        horizonY = dto.horizonY
+        subjectX = dto.subjectX
+        subjectY = dto.subjectY
+        subjectConfidence = dto.subjectConfidence
+        subjectSize = dto.subjectSize
+        subjectLeft = dto.subjectLeft
+        subjectTop = dto.subjectTop
+        subjectRight = dto.subjectRight
+        subjectBottom = dto.subjectBottom
+        targetX = dto.targetX
+        targetY = dto.targetY
+        suggestMove = dto.suggestMove
+    }
 }
 
 /// 帧门：节流时间戳、`generation` 计数器、帧序号、最近一次输入快照、清晰度缓存。
@@ -367,7 +412,7 @@ final class ScoreCoordinator: ObservableObject {
         guide = .empty
     }
 
-    // MARK: - 传感器与构图入口
+    // MARK: - 传感器入口
 
     /// 传感器喂入（横滚角 / 俯仰角，单位：度）。
     ///
@@ -379,12 +424,10 @@ final class ScoreCoordinator: ObservableObject {
     /// ★ 一个采样只有一个有效性标志：`roll` 与 `pitch` 同帧同源，
     ///   所以 `pitchAvailable` 也用 `rollValid`（对应 Android 的 `pitchDeg != null`）。
     ///
-    /// ★ 为什么这里也置 `hasReading = true`：`hasReading` 的契约文字是
-    ///   「是否已经收到可信的**构图 / 姿态**读数」—— 一次 `rollValid == true` 的
-    ///   CoreMotion 采样就是一份实测姿态，拿它画一条水平参考线不算撒谎。
-    ///   若只认构图读数（严格对齐 Android 的 `hint != null`），那么 Vision 还没吐出
-    ///   第一帧之前，手机明明端平了、线也是白的 —— 用户会以为功能坏了。
-    ///   两条入口谁先到，覆盖层就从谁开始画；**任何一条都没到时一条线都不画**。
+    /// ★ 这个入口**不置 `hasReading`**：那是「有没有构图读数」的标志，现在由
+    ///   `land(...)` 在 DTO 回来时置位（`4314c4d` 之后构图数据从 DTO 来）。
+    ///   姿态先到、构图还没到的时候，`hasReading` 仍是 `false` → 覆盖层一条线都不画，
+    ///   这正好是「不拿姿态去假装有构图」的意思。
     /// - Parameters:
     ///   - rollDegrees: 横滚角（度），正值表示画面右侧偏低。
     ///   - pitchDegrees: 俯仰角（度）。
@@ -395,93 +438,14 @@ final class ScoreCoordinator: ObservableObject {
             inputs.rollValid = rollValid
         }
 
-        guide.rollDegrees = rollDegrees
-        guide.pitchDegrees = pitchDegrees
-        guide.pitchAvailable = rollValid
-        // 姿态读数也是「真实测到的量」：收到它就允许覆盖层开始画（见 hasReading 的注释）。
-        if rollValid {
-            guide.hasReading = true
-        }
-        guide.isLevel = resolveIsLevel(rollValid: rollValid)
-    }
-
-    /// 构图提示喂入。
-    ///
-    /// ★ Vision 的检测是异步的、与相机帧不同步，所以它是**独立入口**：
-    ///   一次构图结果会跟着之后若干帧一起送去评分，直到下一次更新。
-    /// - Parameters:
-    ///   - hintScore: common `CompositionAnalyzer` 给出的构图分（0..25）。
-    ///   - tiltDeg: 画面内结构线倾角（度），正值表示右侧偏低。
-    ///   - horizonDetected: 是否检测到可信地平线/水平结构线。
-    ///   - horizonY: 地平线纵向位置（0..1）。
-    ///   - subjectX: 主体重心 X（0..1）。
-    ///   - subjectY: 主体重心 Y（0..1）。
-    ///   - subjectConfidence: 主体显著度置信度（0..1）。
-    ///   - subjectSize: 主体面积占比（0..1）。★ 只作评分入参，覆盖层不用它。
-    ///   - subjectLeft: 主体外框左（0..1）。
-    ///   - subjectTop: 主体外框上（0..1）。
-    ///   - subjectRight: 主体外框右（0..1）。
-    ///   - subjectBottom: 主体外框下（0..1）。
-    ///   - targetX: 三分交点 X（0..1）。
-    ///   - targetY: 三分交点 Y（0..1）。
-    ///   - suggestMove: 是否有「把主体挪到交点」的建议。
-    func updateComposition(
-        hintScore: Int,
-        tiltDeg: Float,
-        horizonDetected: Bool,
-        horizonY: Float,
-        subjectX: Float,
-        subjectY: Float,
-        subjectConfidence: Float,
-        subjectSize: Float,
-        subjectLeft: Float,
-        subjectTop: Float,
-        subjectRight: Float,
-        subjectBottom: Float,
-        targetX: Float,
-        targetY: Float,
-        suggestMove: Bool
-    ) {
-        gate.updateInputs { inputs in
-            inputs.hintScore = Int32(hintScore)
-            inputs.tiltDeg = tiltDeg
-            inputs.horizonDetected = horizonDetected
-            inputs.horizonY = horizonY
-            inputs.subjectX = subjectX
-            inputs.subjectY = subjectY
-            inputs.subjectConfidence = subjectConfidence
-            inputs.subjectSize = subjectSize
-            inputs.subjectLeft = subjectLeft
-            inputs.subjectTop = subjectTop
-            inputs.subjectRight = subjectRight
-            inputs.subjectBottom = subjectBottom
-            inputs.targetX = targetX
-            inputs.targetY = targetY
-            inputs.suggestMove = suggestMove
-        }
-
-        // ★ 只改构图那几项，**不碰** `rollDegrees` / `pitchDegrees` ——
-        //   两个入口各自负责自己的字段，互相覆盖会让覆盖层抖动。
-        guide.tiltDeg = tiltDeg
-        guide.horizonDetected = horizonDetected
-        guide.horizonY = horizonY
-        guide.subjectX = subjectX
-        guide.subjectY = subjectY
-        guide.subjectConfidence = subjectConfidence
-        guide.subjectLeft = subjectLeft
-        guide.subjectTop = subjectTop
-        guide.subjectRight = subjectRight
-        guide.subjectBottom = subjectBottom
-        guide.targetX = targetX
-        guide.targetY = targetY
-        guide.suggestMove = suggestMove
-        // ★ 走到这里说明构图分析确实给了结果，覆盖层可以开始画了。
-        //   注意：**主体置信度为 0 也算「有读数」** —— 那是「测了，画面里没有显著主体」，
-        //   不是「还没测」。契约里区分的是「有没有测」，不是「测出来好不好」。
-        //   这是「不撒谎」的另一半：`hasReading == false` 时视图一条参考线都不画，
-        //   而不是拿 `GuideSnapshot.empty` 里的默认值画一条绿色的「你已端平」。
-        guide.hasReading = true
-        guide.isLevel = resolveIsLevel(rollValid: gate.currentInputs.rollValid)
+        // ★ 只改姿态那三项，**不碰**构图的 15 项 —— `land(...)` 那边也一样，
+        //   两个来源各写各的，谁都不整份覆盖，覆盖层才不会抖。
+        var next = guide
+        next.rollDegrees = rollDegrees
+        next.pitchDegrees = pitchDegrees
+        next.pitchAvailable = rollValid
+        next.isLevel = ScoreCoordinator.resolveIsLevel(rollValid: rollValid, guide: next)
+        guide = next
     }
 
     /// 切换场景。
@@ -553,22 +517,7 @@ final class ScoreCoordinator: ObservableObject {
                 focusFallback: 0,
                 roll: inputs.roll,
                 rollValid: inputs.rollValid,
-                sceneName: inputs.sceneName,
-                hintScore: inputs.hintScore,
-                tiltDeg: inputs.tiltDeg,
-                horizonDetected: inputs.horizonDetected,
-                horizonY: inputs.horizonY,
-                subjectX: inputs.subjectX,
-                subjectY: inputs.subjectY,
-                subjectConfidence: inputs.subjectConfidence,
-                subjectSize: inputs.subjectSize,
-                subjectLeft: inputs.subjectLeft,
-                subjectTop: inputs.subjectTop,
-                subjectRight: inputs.subjectRight,
-                subjectBottom: inputs.subjectBottom,
-                targetX: inputs.targetX,
-                targetY: inputs.targetY,
-                suggestMove: inputs.suggestMove
+                sceneName: inputs.sceneName
             )
 
             // 本轮没算成（尺寸过小、统计退化等）：保留上一帧，不要把界面清空。
@@ -582,12 +531,15 @@ final class ScoreCoordinator: ObservableObject {
                 gate.storeClarity(snapshot.clarity)
             }
             let bars = makeHistogram(from: dto)
+            // 构图读数同样在后台就搬进值类型 —— 主线程只收成品。
+            let reading = GuideReading(from: dto)
 
             // ★ 只有动 `@Published` 这一刻才回主线程，而且带的是纯值类型。
             Task { @MainActor [coordinator] in
                 coordinator?.land(
                     snapshot: snapshot,
                     histogram: bars,
+                    reading: reading,
                     generation: generation,
                     sequence: sequence
                 )
@@ -601,20 +553,62 @@ final class ScoreCoordinator: ObservableObject {
     ///
     /// ★ 落地前再核一次「代次 + 序号」：`Task { @MainActor }` 的唤醒顺序不保证 FIFO，
     ///   晚到的旧结果必须丢掉，否则界面会按「谁先被调度」随机闪回上一帧的分数。
+    ///
+    /// ★ 为什么先 `var next = guide` 再整份赋回：
+    ///   构图 15 项来自 DTO，而 `rollDegrees` / `pitchDegrees` / `pitchAvailable`
+    ///   来自 `updateMotion`。两个来源写同一个 struct，如果这里直接从 `.empty` 造一个
+    ///   新值，就会把姿态那三项冲掉（覆盖层上的倾斜角会在 5fps 上跳 0）。所以是
+    ///   「读旧值 → 只改构图那几项 → 算 isLevel → 整份写回」。
+    ///
+    /// ★ `isLevel` 必须用 `next` 算，**不能用 `guide`**：`next` 里才是这一帧的
+    ///   `tiltDeg` / `horizonDetected`；用 `guide` 会拿上一帧的地平线判据判这一帧
+    ///   （画面已经转正了，线还是歪的）。`resolveIsLevel` 收 `guide:` 参数就是为了
+    ///   在类型上强制这一点 —— 想用错都不容易。
     /// - Parameters:
     ///   - snapshot: 本帧的评分成品。
     ///   - histogram: 本帧的直方图成品。
+    ///   - reading: 本帧的构图读数（来自 DTO，已翻成 Swift 值类型）。
     ///   - generation: 发起分析时记下的代次。
     ///   - sequence: 发起分析时记下的帧序号。
     private func land(
         snapshot: ScoreSnapshot,
         histogram bars: HistogramSnapshot,
+        reading: GuideReading,
         generation: UInt64,
         sequence: UInt64
     ) {
         guard gate.acceptLanding(generation: generation, sequence: sequence) else { return }
+
+        var next = guide
+        // 走到这里说明 Kotlin 侧的 `CompositionAnalyzer` 确实给了结果 —— 覆盖层可以画了。
+        // 注意：**主体置信度为 0 也算「有读数」**，那是「测了，画面里没有显著主体」，
+        // 不是「还没测」。契约区分的是「有没有测」，不是「测出来好不好」。
+        next.hasReading = true
+        next.horizonDetected = reading.horizonDetected
+        next.horizonY = reading.horizonY
+        next.tiltDeg = reading.tiltDeg
+        next.subjectX = reading.subjectX
+        next.subjectY = reading.subjectY
+        next.subjectConfidence = reading.subjectConfidence
+        next.subjectLeft = reading.subjectLeft
+        next.subjectTop = reading.subjectTop
+        next.subjectRight = reading.subjectRight
+        next.subjectBottom = reading.subjectBottom
+        next.targetX = reading.targetX
+        next.targetY = reading.targetY
+        next.suggestMove = reading.suggestMove
+        // ^ `subjectSize` 与 `hintScore` **不写进 guide**：前者只作评分入参，
+        //   后者是构图分本身（已经在 `snapshot.composition.score` 里），
+        //   `GuideSnapshot` 里也没有对应字段 —— 覆盖层不需要它们。
+
+        next.isLevel = ScoreCoordinator.resolveIsLevel(
+            rollValid: gate.currentInputs.rollValid,
+            guide: next
+        )
+
         score = snapshot
         histogram = bars
+        guide = next
         lastAnalysisAt = Date()
     }
 
@@ -769,13 +763,23 @@ final class ScoreCoordinator: ObservableObject {
     ///   两个口径各有各的消费者，混用哪一边都是错。
     ///
     /// ★ 开头那道 `hasReading` 闸门是**唯一的「没有读数就不许绿」保证点**：
-    ///   `updateMotion` / `updateComposition` 里都可能是「刚挂上、还没收到采样」的状态，
-    ///   那时 `guide` 里的角度是 `.empty` 的缺省值（0°），算出来必然是 `true`。
-    ///   与其在两个入口各判一次（漏一处就漏一条假绿线），不如把判据收在这里一处 ——
+    ///   调用方可能是「刚挂上、还没收到采样」的状态，那时 `guide` 里的角度是
+    ///   `.empty` 的缺省值（0°），算出来必然是 `true`。与其在各个调用点各判一次
+    ///   （漏一处就漏一条假绿线），不如把判据收在这里一处 ——
     ///   **没有任何读数 ⇒ 不可能给出 `true`**。
-    /// - Parameter rollValid: 本次横滚角是否可信。
+    ///
+    /// ★ 为什么是 `nonisolated static` 且把 `guide` 收成参数（而不是读 `self.guide`）：
+    ///   ① 纯函数，好测（给定一份 guide + rollValid，输出确定）；
+    ///   ② **顺序安全**：调用方刚把这一帧的 `tiltDeg` / `horizonDetected` 写进
+    ///      `next`，必须拿 `next` 来算。收成参数后，想用错成 `self.guide` 都不容易。
+    /// - Parameters:
+    ///   - rollValid: 本次横滚角是否可信。
+    ///   - guide: 用来判定的那份几何（**应当是刚写完构图字段的那一份**）。
     /// - Returns: 是否已端平；无读数时恒为 `false`。
-    private func resolveIsLevel(rollValid: Bool) -> Bool {
+    private nonisolated static func resolveIsLevel(
+        rollValid: Bool,
+        guide: GuideSnapshot
+    ) -> Bool {
         guard guide.hasReading else { return false }
 
         let theta: Float
