@@ -232,7 +232,10 @@ struct GuideSnapshot: Equatable {
     var targetY: Float
 
     /// 是否有"该把主体挪到交点"的建议。
-    var suggestMove: Boolean
+    /// ★ 是 `Bool`，不是 `Boolean`：`Boolean` 在 Swift 里是 CoreFoundation 的
+    ///   `UInt8` 别名，写上它既编译不过（下面 `empty` 给的是 `false`），
+    ///   也会让 `if guide.suggestMove` 变成「整数当布尔用」的坑。
+    var suggestMove: Bool
 
     /// 俯仰角（度），用于俯仰刻度条。
     var pitchDegrees: Float
