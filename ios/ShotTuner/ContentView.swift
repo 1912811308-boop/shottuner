@@ -71,6 +71,19 @@ struct ContentView: View {
     ///   Swift 侧只负责「到点了，把当前 roll 送进去，把快照翻成值类型」。
     @StateObject private var mission = MissionModel()
 
+    /// 拍照 → 落相册 →（可选）水印 的流水线。
+    @StateObject private var captureFlow = CaptureFlow()
+
+    /// 复盘卡是否展开。
+    @State private var showingReview = false
+
+    /// 按快门那一刻**冻结**的参考分文案。
+    ///
+    /// ★ 不能等复盘卡打开时再读 `coordinator.score`：取景还在跑，
+    ///   分数每帧都在变，复盘卡上的数字会跟着后面的画面跳。
+    ///   复盘卡显示的是「你按下快门时这张照片值多少分」，必须在那一刻定住。
+    @State private var reviewScoreText = ""
+
     /// 技法图鉴是否以模态呈现。
     @State private var showingTechniqueDex = false
 
@@ -175,8 +188,94 @@ struct ContentView: View {
             missionLayer
             scorePanel
                 .padding(.horizontal, 16)
+            // ★ 快门条放在最下面（贴底部安全区），不放中间：
+            //   ① 单手拇指的自然落点就在那里；② 放中间会正好挡住构图引导的中心十字，
+            //   而中心十字是「主体该放哪」的参照物，挡住等于把引导废了。
+            shutterBar
         }
-        .padding(.vertical, 12)
+        .padding(.top, 12)
+        // ★ 纵向 padding 只留上边：底部要让快门贴到安全区边缘，
+        //   由 `ShutterBar` 自己控制内边距，否则会被这里再压进去 12pt。
+    }
+
+    /// 快门条 + 它的模态与告警。
+    ///
+    /// ★ 为什么 `.sheet` / `.alert` 挂在**这个子视图**上，而不挂在根 `ZStack` 上：
+    ///   根上已经有一个 `.sheet(isPresented: $showingTechniqueDex)`。
+    ///   SwiftUI 在同一个视图节点上挂第二个 `.sheet` 是有名的坑 ——
+    ///   两个 `isPresented` 同时为真时只有一个生效，而且顺序不保证。
+    ///   挂在不同节点上就没有这个问题，各自独立。
+    private var shutterBar: some View {
+        ShutterBar(
+            isCapturing: captureFlow.isCapturing,
+            thumbnail: captureFlow.lastCapturedImage,
+            onShutter: capture,
+            onReview: { showingReview = true }
+        )
+        .sheet(isPresented: $showingReview) {
+            // ★ 用 `if let` 而不是 `?? UIImage()`：
+            //   兜底造一张空图会让复盘卡显示一块黑矩形 —— 那是「坏掉」的样子，
+            //   比什么都不显示更糟。理论上走不到这里（能点缩略图就说明图在），
+            //   但兜底不该伪造内容。
+            if let image = captureFlow.lastCapturedImage {
+                PhotoReviewSheet(
+                    image: image,
+                    scoreText: reviewScoreText,
+                    onDismiss: { showingReview = false }
+                )
+                // ★ 释放 12MP 位图必须放在 `onDisappear`，**不能**放在 `onDismiss` 里。
+                //   `lastCapturedImage` 是 `@Published`，在关闭动画**进行中**置 nil 会触发
+                //   一次 `objectWillChange` → 上面那个 `if let` 变 false → sheet 内容
+                //   重算成空视图 → 用户看到「图先消失、卡片再收起」。
+                //   `onDisappear` 在内容真正离场之后才跑，此时置空正好。
+                //   不释放的话 12MP（约 48MB）会一直挂着，低端机上会被系统回收相机预览。
+                .onDisappear { captureFlow.clearLastCaptured() }
+            }
+        }
+        .alert(
+            "这张没存进相册",
+            isPresented: Binding(
+                get: { captureFlow.lastError != nil },
+                // ★ `set` 分支必须写：`.alert` 关闭时会把它置回 false，
+                //   不在这里 `clearError()` 的话，`lastError` 一直非空，
+                //   下次拍照即使成功，这条告警也会立刻又弹出来。
+                set: { presented in if !presented { captureFlow.clearError() } }
+            )
+        ) {
+            Button("好", role: .cancel) { captureFlow.clearError() }
+        } message: {
+            Text(captureFlow.lastError ?? "")
+        }
+    }
+
+    /// 按快门。
+    ///
+    /// ★ 三件事的顺序有意义：
+    ///   ① 先算文案 —— 必须在拍照前取，拍的过程里画面还在变；
+    ///   ② 再中断任务卡 —— 与 Android 的 `abortMission(CAPTURE)` 对齐，
+    ///      否则「拍照」这个动作本身会被任务引擎当成一次普通的画面变化继续判定；
+    ///   ③ 最后发起拍照 —— `capture` 内部是异步的，回调回来才决定要不要开复盘卡。
+    private func capture() {
+        // 已经有一张在拍就直接丢弃这次点击：`CaptureFlow.capture` 会挡住重入
+        // 且**不回调**，这里再挡一次只是为了让「连点两下」连文案都不重算。
+        guard !captureFlow.isCapturing else { return }
+
+        reviewScoreText = ScoreWording.full(coordinator.score)
+        mission.abort("CAPTURE")
+
+        captureFlow.capture(
+            session: session,
+            // ★ 传的是**已经算好的文案**。要不要印数字、什么时候印「--」，
+            //   是产品的口径，判定点只能有一处（`ScoreWording`）；
+            //   `CaptureFlow` 只负责把它烧到图上。
+            scoreText: reviewScoreText
+        ) { result in
+            // 失败时 `captureFlow.lastError` 已经有中文说明了，
+            // 告警由上面的 `.alert` 弹；这里不再重复提示。
+            if case .success = result {
+                showingReview = true
+            }
+        }
     }
 
     /// 任务卡 / 成绩卡。两张卡的显示条件由 `MissionSnapshot` 算，这里不自己判。
@@ -229,7 +328,7 @@ struct ContentView: View {
     private var scorePanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(coordinator.score.hasTotal ? "参考分 \(coordinator.score.total)" : "参考分 --")
+                Text(ScoreWording.short(coordinator.score))
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(Palette.overlayText)
 
@@ -406,6 +505,42 @@ struct ContentView: View {
         coordinator.detach()
         session.stop()
         pipelineStarted = false
+    }
+}
+
+// MARK: - 参考分文案
+
+/// 「参考分」这一句话的**唯一**出处。
+///
+/// ★ 为什么要单独抽出来：这个 App 的核心产出就是这一个数字，而它有一套很硬的措辞规则 ——
+///   叫「参考分」不叫「得分 / 评分 / 评测」，任一维度未测时**必须显示 `--` 而不是数字**。
+///   原来这句文案在 `scorePanel` 里手写、在成绩卡里又手写一遍、水印还要再写一遍，
+///   三处只要有一处写错口径（比如「未测时印 0」），就是「拿半个数据骗人」。
+///
+/// ★ 为什么不放进 `Palette` 之类的地方：那不是配色，是产品措辞。
+///   放在 `ContentView.swift` 里是因为目前只有界面在用；将来若要给水印/分享复用，
+///   把它提到独立文件即可，改动只是换个文件位置。
+private enum ScoreWording {
+
+    /// 未测全时的占位。全仓只此一处，别再手写 `"参考分 --"`。
+    static let unmeasured = "参考分 --"
+
+    /// 面板用：`参考分 82` / `参考分 --`。满分数值（`/ 100`）由调用方另外渲染，
+    /// 因为它有自己的字号与颜色。
+    static func short(_ snapshot: ScoreSnapshot) -> String {
+        snapshot.hasTotal ? "参考分 \(snapshot.total)" : unmeasured
+    }
+
+    /// 烧进照片 / 分享文本用：`参考分 82 / 100` / `参考分 --`。
+    ///
+    /// ★ 已测全时走 Kotlin 的 `IosBridge.referenceScoreText`，不自己拼字符串 ——
+    ///   那是跨端唯一的口径来源，Android 的水印文案也是同一句。
+    ///   未测全时**不调它**：它的签名是 `(score: Double)`，只能表达「有一个分数」，
+    ///   传 0 就会印出「参考分 0 / 100」，正好违反上面那条规则。
+    static func full(_ snapshot: ScoreSnapshot) -> String {
+        snapshot.hasTotal
+            ? SharedKernelBridge.referenceScoreText(Double(snapshot.total))
+            : unmeasured
     }
 }
 
