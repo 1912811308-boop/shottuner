@@ -304,7 +304,9 @@ jobs:
       #   **静默挂错**比 404 更难发现。
       #   ⇒ 改成按 tag 查：发新版本时只需改这一行 tag，release id 由 API 现场解析。
       # ★ 这一行必须与 `ios/project.yml` 的 `MARKETING_VERSION` 保持同步。
-      RELEASE_TAG: "v1.0.1"
+      #   1.1.0 起有机器保障：本 job 的 `版本同源 · RELEASE_TAG 与 MARKETING_VERSION`
+      #   这个 step 会比对两者，不一致直接红 —— 不再靠人记。
+      RELEASE_TAG: "v1.1.0"
     steps:
       # ★ 前置检查：Release 必须**先**存在，否则本 job 会白烧约 20 分钟 macOS 配额。
       #
@@ -339,6 +341,29 @@ jobs:
           echo "::notice::Release ${RELEASE_TAG} 已存在，可以出包"
 
       - uses: actions/checkout@v4
+
+      # ★ 机器保障：`RELEASE_TAG` 与 `ios/project.yml` 的 `MARKETING_VERSION` 必须一致。
+      #
+      #   为什么需要它：这两个值一处在 workflow 的 `env`、一处在工程规格里，
+      #   改版本号时**很容易只改一处**。只改 project.yml 的后果是：
+      #   CI 把 1.1.0 的 ipa 挂到 v1.0.1 的 Release 上 —— API 不报错（旧 Release 还在），
+      #   产物名与 tag 对不上，而**没有任何一步会红**。
+      #   本文件里「tag 写死容易静默挂错」这句话已经出现过两次，一直靠人守；
+      #   这次把它变成构建失败。解析写法与下面「出 ipa」那步**逐字一致**，
+      #   避免两个地方对同一份 YAML 用两套正则。
+      - name: 版本同源 · RELEASE_TAG 与 MARKETING_VERSION
+        run: |
+          set -euo pipefail
+          MV="$(grep -E "^[[:space:]]*MARKETING_VERSION[[:space:]]*:" ios/project.yml | head -1 \
+            | sed -E 's/.*:[[:space:]]*//' | tr -d '"' | tr -d '[:space:]')"
+          [ -n "${MV}" ] || { echo "::error::从 ios/project.yml 里读不出 MARKETING_VERSION"; exit 1; }
+          if [ "v${MV}" != "${RELEASE_TAG}" ]; then
+            echo "::error::版本不同源：ios/project.yml 的 MARKETING_VERSION = ${MV}，而 ci-gates.yml 的 RELEASE_TAG = ${RELEASE_TAG}"
+            echo "         两者必须一致，否则 ipa 会被挂到旧 Release 上，而且不会报错。"
+            echo "         把 RELEASE_TAG 改成 v${MV}（或反过来改 project.yml）。"
+            exit 1
+          fi
+          echo "::notice::版本同源：MARKETING_VERSION=${MV} / RELEASE_TAG=${RELEASE_TAG}"
 
       - uses: actions/setup-java@v4
         with:
