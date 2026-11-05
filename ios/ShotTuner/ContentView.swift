@@ -65,6 +65,12 @@ struct ContentView: View {
     ///   回调直接写进 `ScoreCoordinator`。所以这里不能用 `@StateObject`。
     @State private var motion = MotionProvider()
 
+    /// 任务卡数据源。每 400ms 敲一次 commonMain 的 `MissionEngine`。
+    ///
+    /// ★ 它**自己不开定时器以外的逻辑**：判定、计时、文案全在 Kotlin。
+    ///   Swift 侧只负责「到点了，把当前 roll 送进去，把快照翻成值类型」。
+    @StateObject private var mission = MissionModel()
+
     /// 技法图鉴是否以模态呈现。
     @State private var showingTechniqueDex = false
 
@@ -91,12 +97,25 @@ struct ContentView: View {
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
-                // 只重起传感器，**不碰相机**：`CameraSession.start()` 不是幂等的
-                //（会重跑一遍 `configureAndStart`，重复加 outputs 会抛异常），
-                // 而相机从后台回来由系统自己恢复，不需要我们插手。
-                if cameraPermission.status.allowsCapture { startMotion() }
+                // ★ 这里必须走**完整**入口，不能只重起传感器：
+                //   用户第一次拒绝权限后，唯一的补救路径是「设置 → 隐私 → 相机」，
+                //   授权完切回来时 `onAppear` 不会重跑，只有 `scenePhase` 会变。
+                //   只 refresh 不 start 的话，权限已经是 granted、界面却还停在
+                //   「去设置里开启相机」那屏 —— 用户会以为授权没生效。
+                //   `startIfAllowed()` 已由 `pipelineStarted` 做成幂等，重入安全。
+                startIfAllowed()
             case .inactive, .background:
                 motion.stop()
+                // ★ 进后台要中断任务：`MissionEngine` 的超时是**按时间戳**算的，
+                //   定时器一停，回来时第一 tick 会把这段静默一次性算成超时，
+                //   用户看到的是一张突然消失的任务卡 + 一条莫名的超时记录。
+                //   Android 侧对应 `onPause` 里的 `abortMission(PAUSE)`。
+                //   `.inactive` 也一起处理（来电、下拉控制中心都会触发它）。
+                mission.abort("PAUSE")
+                // ★ 中断之后还要把定时器停掉 —— `abort` 只改状态机，不会停表。
+                //   留着一个 400ms 的定时器在后台空转，既是耗电，
+                //   也会让 `MissionEngine` 在用户看不见的时候继续派任务 / 记超时。
+                mission.stop()
             default:
                 // ★ 这里刻意用 `default` 而不是 `@unknown default`：
                 //   `@unknown default` 只对**枚举**合法，对结构体是编译错误。
@@ -128,14 +147,43 @@ struct ContentView: View {
     }
 
     // ── 界面控件 ────────────────────────────────────────────────────────────
+    /// 取景器上的全部 UI。
+    ///
+    /// ★ `horizontal` 内边距**按层给**，不再是整条 VStack 统一给：
+    ///   任务卡（`MissionCardView` / `MissionScoreCardView`）自带 16pt 外边距
+    ///   （它们的 `outerMargin`），如果在外面再套一层 16pt，卡片会被挤成 32pt 窄条，
+    ///   在窄屏上「主句 + 角标」会换行成三条。
     private var chromeLayer: some View {
         VStack(spacing: 0) {
             topBar
-            Spacer()
+                .padding(.horizontal, 16)
+            Spacer(minLength: 0)
+            missionLayer
             scorePanel
+                .padding(.horizontal, 16)
         }
-        .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// 任务卡 / 成绩卡。两张卡的显示条件由 `MissionSnapshot` 算，这里不自己判。
+    ///
+    /// ★ 没有任务时**整卡不画**（`MissionCardView` 内部 `if let task`），
+    ///   不显示「暂无任务」这类占位 —— 那会让用户以为功能坏了。
+    @ViewBuilder
+    private var missionLayer: some View {
+        if mission.snapshot.showsTaskCard {
+            MissionCardView(snapshot: mission.snapshot)
+                .padding(.bottom, 10)
+                // 卡片的入场/退场跟着状态机走，不用显式动画：
+                // 状态每 400ms 才可能变一次，插值反而会让「到位」的绿闪得滞后。
+        } else if mission.snapshot.showsScoreCard {
+            MissionScoreCardView(snapshot: mission.snapshot) {
+                // 「继续」＝ 主动收起成绩卡。走 `abort(USER)`：
+                // 与 Android 的「点继续就结束这一条」同语义，且自带 3s 重新派发节流。
+                mission.abort("USER")
+            }
+            .padding(.bottom, 10)
+        }
     }
 
     private var topBar: some View {
@@ -249,12 +297,57 @@ struct ContentView: View {
     }
 
     // ── 生命周期 ────────────────────────────────────────────────────────────
+    /// 采集管线是否已经起过。
+    ///
+    /// ★ 为什么需要这个标志：`startIfAllowed()` 现在有两个调用方 ——
+    ///   `onAppear` 和 `scenePhase == .active`，而 App 首次启动时**两者都会触发**。
+    ///   不加标志的话 `CameraSession.start()` 会被调两次，而
+    ///   `configureAndStart()` 里的 `installNotifications()` **没有去重**，
+    ///   会装两套通知观察者（`AVCaptureSessionWasInterrupted` 之类的回调翻倍）。
+    ///   `configure()` 有 `isConfigured` 挡着，`startRunning()` 也是无操作，
+    ///   唯独通知这一处会真的叠加 —— 这种「只在一个点上不幂等」最容易被忽略。
+    ///
+    /// ★ 用它而**不是**读 `session.isSessionRunning`：那个值在 `startRunning()`
+    ///   之后才置位，在权限对话框还没关掉的那段时间里是 `false`，
+    ///   正好是「用户连点两次」最容易撞上的窗口。
+    @State private var pipelineStarted = false
+
     private func startIfAllowed() {
         cameraPermission.refresh()
         guard cameraPermission.status.allowsCapture else { return }
+
+        // 已经起过就只补传感器与任务定时器，绝不重入相机链路。
+        guard !pipelineStarted else {
+            startMotion()
+            startMission()
+            return
+        }
+        pipelineStarted = true
         session.start()
         coordinator.attach(to: session)
         startMotion()
+        startMission()
+    }
+
+    /// 起任务卡的 400ms 驱动。
+    ///
+    /// ★ 为什么在**这里**起而不是在 `body` 里靠 `onChange` 起：
+    ///   `MissionEngine` 的第 1 条任务是 `resume()` 之后下一个 tick 才派的，
+    ///   越早起越早能派上；而且它依赖 `coordinator.attach` 之后才会有构图数据
+    ///   （`IosMissionBridge` 的缓存由 `analyzeFrame` 填），排在 attach 之后正好。
+    ///
+    /// ★ 姿态读数从 `coordinator.guide` 取，**不另存一份**：
+    ///   `updateMotion` 是姿态的唯一写入点，它在同一个方法里同时写
+    ///   `rollDegrees` 与 `pitchAvailable`，所以这两个值一定同帧。
+    ///   `pitchAvailable` 在这里当 `rollValid` 用 —— `ScoreCoordinator` 的注释
+    ///   写明了「一个采样只有一个有效性标志，`pitchAvailable` 也用 `rollValid`」。
+    private func startMission() {
+        mission.start { [coordinator] in
+            (
+                roll: coordinator.guide.rollDegrees,
+                valid: coordinator.guide.pitchAvailable
+            )
+        }
     }
 
     /// 起姿态采样，把读数直接喂进协调层。
@@ -283,13 +376,15 @@ struct ContentView: View {
     }
 
     private func stopEverything() {
-        // ★ 顺序：先停传感器，再断帧，最后停相机会话。
+        // ★ 顺序：先停传感器 / 定时器，再断帧，最后停相机会话。
         //   反过来先 `detach` 的话，`gate` 已经作废，可传感器还在发 —— 那几十毫秒里
         //   每一帧都会走一次 `updateMotion`，白改一次 `@Published`，
         //   页面都关了还会让 SwiftUI 重算一次 body。
         motion.stop()
+        mission.stop()
         coordinator.detach()
         session.stop()
+        pipelineStarted = false
     }
 }
 

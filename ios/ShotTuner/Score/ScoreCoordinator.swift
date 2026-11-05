@@ -724,7 +724,12 @@ final class ScoreCoordinator: ObservableObject {
         let raw = IosBridge.shared.sceneNames()
         let names = raw
             .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            // ★ `String($0)` 不能省：`split(separator:)` 返回 `[Substring]`，
+            //   而 `trimmingCharacters(in:)` 只定义在 `String` 上（`Substring` 没有继承它）。
+            //   直接写 `$0.trimmingCharacters(...)` 会报
+            //   "value of type 'Substring' has no member 'trimmingCharacters'"，
+            //   这是 Swift 字符串处理最常见的坑之一。
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         validSceneNames = Set(names)
 

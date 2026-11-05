@@ -423,7 +423,14 @@ final class CameraSession: NSObject {
                 return
             }
             let format = currentDevice.activeFormat
-            guard format.videoSupportedFrameRateRanges.contains({
+            // ★ `where:` 标签不能省：`Sequence.contains` 的两个重载分别是
+            //   `contains(_:)`（要求 Element: Equatable）与 `contains(where:)`。
+            //   写 `contains({ ... })` 两个都匹配不上 —— 前者会对闭包做
+            //   「`Element == (Range) -> Bool`？」的类型推断，推不出来就报
+            //   「Missing argument label 'where:' in call」。
+            //   本文件另两处（`:384`、`:642`）用的是尾随闭包 `contains { ... }`，
+            //   那种形式才是省略标签的合法写法，这里在 `guard` 条件里不好用尾随闭包。
+            guard format.videoSupportedFrameRateRanges.contains(where: {
                 $0.minFrameRate <= Double(frameRate) && $0.maxFrameRate >= Double(frameRate)
             }) else {
                 completion(.failure(.unsupportedFrameRate(frameRate)))
