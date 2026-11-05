@@ -16,7 +16,15 @@
 
 package com.shottuner.app.ios
 
+import com.shottuner.app.analysis.DimensionScore
+import com.shottuner.app.analysis.FrameStatsCore
 import com.shottuner.app.analysis.FrameStatsDump
+import com.shottuner.app.analysis.IosDimensionDto
+import com.shottuner.app.analysis.IosFrameAnalysisDto
+import com.shottuner.app.analysis.ScoreBoard
+import com.shottuner.app.analysis.ScoreDimension
+import com.shottuner.app.model.CompositionHint
+import com.shottuner.app.model.SceneType
 import com.shottuner.app.sensors.LevelMath
 import com.shottuner.app.text.NumFmt
 
@@ -155,4 +163,225 @@ object IosBridge {
         height = height,
         label = label
     )
+
+    /**
+     * 「一帧 YUV 进、四维参考分 + 一条提示 + 直方图出」——iOS 取景浮层的唯一入口。
+     *
+     * ## 为什么是一次调用出全部
+     *
+     * Swift 侧每秒要刷新 1 次浮层。如果拆成「先拿 stats、再拿分数、再拿提示」三次调用，
+     * 每次跨语言边界都是 ObjC 消息派发 + 可能的对象装箱；更要紧的是**三次调用之间
+     * 画面可能已经换帧**，拼出来的分数与直方图就对不上了。一次调用、一次快照。
+     *
+     * ## 参数口径（与 `FrameStatsDump.computeDump` 完全一致，不要各自演化）
+     *
+     * `yPixelStride = uPixelStride = vPixelStride = 1`、`vRowStride = uRowStride`、
+     * `rotationDegrees = 0`、`computeFocus = true`、`emitRgb = false`。
+     * 签名里没有 vRowStride / pixelStride，是因为 iOS 的 I420 平面恒为紧凑布局
+     * （8bit 每像素 1 字节、U/V 两平面尺寸相同），多传三个参数只会多三处出错机会。
+     *
+     * [focusFallback] 由调用方传：实时链路每 15 帧才实测一次清晰度，
+     * 没实测的帧必须沿用上一次的值，否则清晰度会在「未测」和「18」之间每 0.5 秒跳一次。
+     *
+     * ## 三个容易做错的点（都已在实现里钉住）
+     *
+     * 1. **`scoreNoTilt` 必须等于 [hintScore]。** 倾斜已经被「水平度」维度扣过一次分，
+     *    如果构图维度再用含倾斜的分数，同一处歪斜会被罚两遍，总分不可解释。
+     * 2. **`rollValid == false` 时给 `ScoreBoard.score` 传 `roll = null`。**
+     *    `ScoreBoard.level()` 正是靠 `roll == null`（且没有地平线）来判定
+     *    「两个源都没有」→ 记满分 + 标「未测」。传 0f 会变成「测了，很平」，
+     *    缺传感器就变成了假数据。
+     * 3. **`CompositionHint.tips` 传 `emptyList()` 是安全的。** `ScoreBoard` 的
+     *    建议生成完全不读 `hint.tips`（文案由 `ScoreBoard` 自己按四维分数产出），
+     *    所以不需要把 Swift 的提示文案再过一遍边界。
+     *
+     * ## 提示只给一条
+     *
+     * [IosFrameAnalysisDto.tipText] 取 `recommendations.firstOrNull()`。
+     * `ScoreBoard` 内部最多会给 3 条（每维度 1 条），但产品口径是
+     * 「提示卡只说一句话」：浮层空间有限，三条并列用户也不知道先做哪件。
+     * 需要完整清单时应当另开一次调用，而不是把这个字段改成数组。
+     *
+     * ## 数组边界
+     *
+     * 返回的 [IosFrameAnalysisDto] 里只有 `histogram` 一个数组，
+     * 理由见 `IosFrameAnalysisDto` 的 KDoc（`KotlinFloatArray.get(index)` 直读 C 数组，
+     * 不装箱；直方图是曝光面板必须画的）。其余字段全是标量。
+     *
+     * @param yPlane Y 平面字节（紧凑 I420）
+     * @param uPlane U 平面字节
+     * @param vPlane V 平面字节
+     * @param yRowStride Y 平面每行字节跨度（= 图像宽）
+     * @param uRowStride U 平面每行字节跨度（= 色度宽，V 平面沿用同一个值）
+     * @param width 图像宽（像素）
+     * @param height 图像高（像素）
+     * @param focusFallback 本帧没实测清晰度时沿用的上一次方差；0 表示整条会话还没测过
+     * @param roll 重力传感器横滚角（度），正值表示画面右侧偏低
+     * @param rollValid 传感器是否有有效值；false 时按「没有重力源」处理
+     * @param sceneName `SceneType` 的枚举名（`NIGHT` / `BACKLIT` / `PORTRAIT` /
+     *   `LANDSCAPE` / `INDOOR` / `ACTION` / `GENERAL`）；无法识别时按 `GENERAL` 处理
+     * @param hintScore 构图分（0..100，已剔除倾斜扣分的那一项）
+     * @param tiltDeg 地平线倾角（度）
+     * @param horizonDetected 是否检测到可信地平线
+     * @param horizonY 地平线纵向位置 0..1
+     * @param subjectX 主体重心横坐标 0..1
+     * @param subjectY 主体重心纵坐标 0..1
+     * @param subjectConfidence 主体显著性置信度 0..1
+     * @param subjectSize 主体占画面比例 0..1
+     * @param subjectLeft 主体外框左边界 0..1
+     * @param subjectTop 主体外框上边界 0..1
+     * @param subjectRight 主体外框右边界 0..1
+     * @param subjectBottom 主体外框下边界 0..1
+     * @param targetX 建议落点横坐标 0..1
+     * @param targetY 建议落点纵坐标 0..1
+     * @param suggestMove 是否有更适合移动到交点的建议
+     * @return 扁平分析结果；三平面无效 / 尺寸过小时返回 [IosFrameAnalysisDto.FAILED]
+     */
+    fun analyzeFrame(
+        yPlane: ByteArray,
+        uPlane: ByteArray,
+        vPlane: ByteArray,
+        yRowStride: Int,
+        uRowStride: Int,
+        width: Int,
+        height: Int,
+        focusFallback: Float,
+        roll: Float,
+        rollValid: Boolean,
+        sceneName: String,
+        hintScore: Int,
+        tiltDeg: Float,
+        horizonDetected: Boolean,
+        horizonY: Float,
+        subjectX: Float,
+        subjectY: Float,
+        subjectConfidence: Float,
+        subjectSize: Float,
+        subjectLeft: Float,
+        subjectTop: Float,
+        subjectRight: Float,
+        subjectBottom: Float,
+        targetX: Float,
+        targetY: Float,
+        suggestMove: Boolean
+    ): IosFrameAnalysisDto {
+        val result = FrameStatsCore.compute(
+            yPlane = yPlane,
+            uPlane = uPlane,
+            vPlane = vPlane,
+            yRowStride = yRowStride,
+            yPixelStride = 1,
+            uRowStride = uRowStride,
+            uPixelStride = 1,
+            vRowStride = uRowStride,
+            vPixelStride = 1,
+            width = width,
+            height = height,
+            rotationDegrees = 0,
+            computeFocus = true,
+            focusFallback = focusFallback,
+            emitRgb = false
+        ) ?: return IosFrameAnalysisDto.FAILED
+
+        val stats = result.stats
+
+        // tips 传空表是安全的：ScoreBoard 生成建议时不读 hint.tips（文案自己按四维分数产出）。
+        // scoreNoTilt = hintScore：倾斜已经由「水平度」扣过一次，构图不能再扣第二次。
+        val hint = CompositionHint(
+            score = hintScore,
+            tiltDeg = tiltDeg,
+            horizonDetected = horizonDetected,
+            horizonY = horizonY,
+            subjectX = subjectX,
+            subjectY = subjectY,
+            subjectConfidence = subjectConfidence,
+            subjectSize = subjectSize,
+            subjectLeft = subjectLeft,
+            subjectTop = subjectTop,
+            subjectRight = subjectRight,
+            subjectBottom = subjectBottom,
+            targetX = targetX,
+            targetY = targetY,
+            suggestMove = suggestMove,
+            tips = emptyList(),
+            scoreNoTilt = hintScore
+        )
+
+        // 未知场景名一律退到 GENERAL，不抛异常：跨语言边界上抛异常最难定位。
+        val scene = SceneType.entries.firstOrNull { it.name == sceneName } ?: SceneType.GENERAL
+
+        // rollValid == false 必须传 null 而不是 0f —— ScoreBoard.level() 靠 null 判定
+        // 「两个源都没有」，进而记满分 + 标「未测」；传 0f 会把缺数据伪装成「很平」。
+        val rollOrNull: Float? = if (rollValid) roll else null
+
+        val scoreResult = ScoreBoard.score(
+            stats = stats,
+            hint = hint,
+            roll = rollOrNull,
+            scene = scene
+        )
+
+        val dimensions = scoreResult.dimensions
+        // 产品口径：提示卡只说一条。ScoreBoard 最多给 3 条，这里只取最重要的一条。
+        val primaryTip = scoreResult.recommendations.firstOrNull()
+
+        return IosFrameAnalysisDto(
+            ok = true,
+            total = scoreResult.total,
+            grade = scoreResult.grade,
+            anyUnmeasured = dimensions.any { !it.measured },
+            level = dimensionDto(dimensions, ScoreDimension.LEVEL),
+            exposure = dimensionDto(dimensions, ScoreDimension.EXPOSURE),
+            composition = dimensionDto(dimensions, ScoreDimension.COMPOSITION),
+            clarity = dimensionDto(dimensions, ScoreDimension.CLARITY),
+            tipId = primaryTip?.tipId ?: "",
+            tipText = primaryTip?.text ?: "",
+            // lowercase() 在 Kotlin 里是 locale 无关的（等价于 Locale.ROOT），
+            // 不会在土耳其语环境下把 "LEVEL" 变成 "leveL" 之类的怪东西。
+            tipDimension = primaryTip?.dimension?.name?.lowercase() ?: "",
+            meanLuma = stats.meanLuma,
+            p05 = stats.p05,
+            p50 = stats.p50,
+            p95 = stats.p95,
+            highlightClip = stats.highlightClip,
+            shadowClip = stats.shadowClip,
+            histogram = stats.histogram
+        )
+    }
+
+    /**
+     * 场景枚举名清单，逗号分隔，供 Swift 侧填场景选择器。
+     *
+     * 为什么由 Kotlin 给而不是 Swift 写死：`SceneType` 在 commonMain，
+     * 将来加一个场景（比如 `MACRO`）时，只要改 Kotlin 一处，
+     * Swift 的选择器自动多一项；写死在 Swift 里就会悄悄少一个。
+     *
+     * @return 例如 `NIGHT,BACKLIT,PORTRAIT,LANDSCAPE,INDOOR,ACTION,GENERAL`
+     */
+    fun sceneNames(): String = SceneType.entries.joinToString(",") { it.name }
+
+    /**
+     * 按维度取一条扁平 DTO。
+     *
+     * `ScoreBoard.score` 一定会返回四个维度，理论上不会缺；但这里仍然给 `firstOrNull`
+     * + 兜底，理由和 [analyzeFrame] 里一样：**跨语言边界上抛异常最难定位**，
+     * 宁可返回「未测」也不要让 Swift 侧的整个取景浮层崩掉。
+     *
+     * @param dimensions 四维分数
+     * @param target 要取的那一维
+     * @return 对应的扁平 DTO；缺失时返回「未测」哨兵
+     */
+    private fun dimensionDto(
+        dimensions: List<DimensionScore>,
+        target: ScoreDimension
+    ): IosDimensionDto {
+        val found = dimensions.firstOrNull { it.dimension == target }
+            ?: return IosDimensionDto(label = "", score = 0, max = 0, measured = false)
+        return IosDimensionDto(
+            label = found.label,
+            score = found.score,
+            max = found.max,
+            measured = found.measured
+        )
+    }
 }
