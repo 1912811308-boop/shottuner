@@ -209,6 +209,21 @@ struct GuideSnapshot: Equatable {
     ///   `levelOkDegrees()` 让它真正单一来源，现在写在这里是为了先有唯一出处。
     static let levelOkDegrees: Float = 2.5
 
+    /// 是否已经收到可信的构图 / 姿态读数。
+    ///
+    /// 对应 Android `GuideOverlayView.onDraw` 开头的 `val hint = hint ?: return`。
+    ///
+    /// ★ **为什么必须有这个字段**：`isLevel` 是裸 `Bool`，分不出「已端平」和
+    ///   「还没收到数据」。而 `GuideSnapshot.empty` 里 `isLevel = true`
+    ///   （为了让刚启动时不闪黄色告警），于是视图会照规则画一条**绿色**参考线 ——
+    ///   等于在产品冷启动、一帧都没分析过的时候告诉用户「你已经端平了」。
+    ///   这跟 `pitchAvailable` 是同一类缺陷：**非可选量表达不了「未知」**。
+    ///
+    /// ★ 为 `false` 时视图**不画**：水平参考线、地平线倾斜线、主体标记、目标标记。
+    ///   网格（三分线 / 中心十字）和俯仰刻度**照画** —— 它们不依赖构图读数，
+    ///   这也是 Android 的行为（`hint ?: return` 发生在画完网格和刻度之后）。
+    var hasReading: Bool = false
+
     /// 手机的横滚角（度），**正值表示画面右侧偏低**。
     var rollDegrees: Float
 
@@ -271,6 +286,9 @@ struct GuideSnapshot: Equatable {
     var hasDrawableSubject: Bool { subjectConfidence > 0.30 }
 
     static let empty = GuideSnapshot(
+        // 冷启动没有任何读数 —— 视图据此不画参考线 / 地平线 / 主体
+        // （否则 isLevel 的默认 true 会让画面一上来就是绿的，等于撒谎）
+        hasReading: false,
         rollDegrees: 0,
         isLevel: true,
         horizonDetected: false,

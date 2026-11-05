@@ -157,8 +157,60 @@ final class GuideSnapshotTests: XCTestCase {
     }
 
     func testEmptyIsLevel() {
-        // 空快照当作「已平」，避免刚启动时闪一条黄色倾斜告警
+        // 空快照的 isLevel 是 true，但这**不代表**可以画绿线 ——
+        // 见 testEmptyHasNoReading：真正决定画不画的是 hasReading。
         XCTAssertTrue(GuideSnapshot.empty.isLevel)
         XCTAssertEqual(GuideSnapshot.empty.rollDegrees, 0)
+    }
+
+    /// 冷启动不能画参考线。
+    ///
+    /// 这个用例守的是一个很具体的 bug：`GuideSnapshot.empty` 的 `isLevel = true`
+    /// （为了让启动瞬间不闪黄色倾斜告警），而裸 `Bool` 分不出「已端平」和「没数据」。
+    /// 视图照着 `isLevel` 画，就会在产品还没分析过一帧的时候显示一条**绿色**参考线，
+    /// 等于告诉用户「你已经端平了」——那是撒谎。
+    ///
+    /// 对应 Android `GuideOverlayView.onDraw` 开头那句 `val hint = hint ?: return`。
+    func testEmptyHasNoReading() {
+        XCTAssertFalse(GuideSnapshot.empty.hasReading, "冷启动不能有构图读数")
+        XCTAssertFalse(GuideSnapshot.empty.pitchAvailable, "冷启动不能有俯仰读数")
+    }
+
+    /// 两个「有没有数据」的开关必须都是默认 false。
+    ///
+    /// 理由：契约里任何新增的非可选量，默认值都应该落在「不画」这一侧。
+    /// 画错一个假的读数，比少画一个真读数严重得多 —— 前者会让用户相信错误结论。
+    func testAvailabilityFlagsDefaultToFalse() {
+        // 只写必填参数，让两个可选开关走默认值
+        let guide = GuideSnapshot(
+            rollDegrees: 0,
+            isLevel: true,
+            horizonDetected: false,
+            horizonY: 0.5,
+            tiltDeg: 0,
+            subjectX: 0.5,
+            subjectY: 0.5,
+            subjectLeft: 0.4,
+            subjectTop: 0.4,
+            subjectRight: 0.6,
+            subjectBottom: 0.6,
+            subjectConfidence: 0,
+            targetX: 0.6667,
+            targetY: 0.3333,
+            suggestMove: false,
+            pitchDegrees: 0
+        )
+        XCTAssertFalse(guide.hasReading)
+        XCTAssertFalse(guide.pitchAvailable)
+    }
+
+    /// 覆盖层转绿阈值是 2.5°，不是 `LevelMath` 的 1°。
+    ///
+    /// ★ 必须与 Kotlin `MissionThresholds.LEVEL_ENTER_DEG = 2.5f` 同值。
+    ///   两端不一致会出现「线已经绿了，但任务卡判定你没做到」——
+    ///   用户会觉得 App 在耍他。（Swift 侧测不到 Kotlin 的常量，
+    ///   所以这条只能守 Swift 侧的值，跨端一致靠 code review。）
+    func testLevelOkDegreesIsTwoPointFive() {
+        XCTAssertEqual(GuideSnapshot.levelOkDegrees, 2.5, accuracy: 1e-6)
     }
 }
