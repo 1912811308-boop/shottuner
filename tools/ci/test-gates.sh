@@ -55,6 +55,7 @@ mkdir -p "${REPO}/ios" "${REPO}/shared/src" "${REPO}/docs" "${REPO}/tools/ci"
 cp -r "${SCRIPT_DIR}/lib" "${SCRIPT_DIR}/patterns" "${REPO}/tools/ci/"
 cp "${SCRIPT_DIR}/check-no-network.sh" "${SCRIPT_DIR}/check-no-network-config.sh" \
    "${SCRIPT_DIR}/check-apple-credentials.sh" "${SCRIPT_DIR}/check-ios-project-spec.sh" \
+   "${SCRIPT_DIR}/check-swift-contract-args.sh" \
    "${REPO}/tools/ci/"
 chmod +x "${REPO}/tools/ci/"*.sh
 
@@ -339,6 +340,99 @@ printf 'kotlin {\n    iosArm64().binaries.framework {\n        baseName = "Share
   > "${REPO}/shared/build.gradle.kts"
 write_export_opts
 expect pass "导出选项恢复未签名口径 → 规格门禁绿" "${SPEC}" "${REPO}"
+
+# ── Swift 契约参数名门禁（单向）────────────────────────────────────────────
+# ★ 这道门禁守的坑：Windows 上 CI 只跑 shell 门禁、不编 Swift，
+#   所以「契约把字段改名、调用点还写着旧名字」这类硬错会静默通过，
+#   一路潜伏到 Mac 第一次 build。
+#
+# ★ 它自己也会坏：括号配平写错 → 一个调用点都扫不到 → 永远绿（最坏的形态）。
+#   所以下面这几条用例**必须包含"期望红"**，其中第 ② 和 ⑦ 条正好能抓住那种坏法。
+ci_info ""
+ci_info "【Swift 契约参数名门禁】"
+CONTRACT="${REPO}/tools/ci/check-swift-contract-args.sh"
+
+mkdir -p "${REPO}/ios/ShotTuner/Score" "${REPO}/ios/ShotTuner/Mission"
+
+# 契约 fixture：故意把四种"不是初始化参数"的东西都摆进来
+#   · beta        带默认值 → 调用点可以跳过（用来证明本门禁**不比参数个数**）
+#   · computed    计算属性   → 不是参数
+#   · zero        static 成员 → 不是参数
+#   · Nested.inner 嵌套类型成员 → 不是参数
+cat > "${REPO}/ios/ShotTuner/Score/ScoreTypes.swift" <<'SWIFT'
+struct SampleSnapshot: Equatable {
+    var alpha: Float
+    var beta: Bool = false
+    var child: OtherSnapshot?
+
+    var computed: Bool { alpha > 0 }
+    static let zero: Float = 0
+
+    struct Nested {
+        var inner: Int
+    }
+}
+SWIFT
+
+printf 'struct OtherSnapshot {\n    var gamma: Int\n}\n' \
+  > "${REPO}/ios/ShotTuner/Mission/MissionTypes.swift"
+
+CALLER="${REPO}/ios/Caller.swift"
+
+# ① 合规：只传必填、跳过带默认值的 beta → 绿（证明不比个数）
+printf 'let a = SampleSnapshot(alpha: 1)\n' > "${CALLER}"
+expect pass "契约 + 只传必填参数（跳过带默认值的字段）→ 契约门禁绿" "${CONTRACT}" "${REPO}"
+
+# ①-b 全字段都传 → 绿
+printf 'let a = SampleSnapshot(alpha: 1, beta: true, child: nil)\n' > "${CALLER}"
+expect pass "契约 + 全字段都传 → 契约门禁绿" "${CONTRACT}" "${REPO}"
+
+# ② 不存在的名字 → 红（核心用例：契约改了名、调用点没跟上）
+printf 'let a = SampleSnapshot(alpha: 1, delta: true)\n' > "${CALLER}"
+expect fail "调用点用了契约里没有的参数名 → 契约门禁红" "${CONTRACT}" "${REPO}"
+
+# ③ 计算属性当参数 → 红
+printf 'let a = SampleSnapshot(alpha: 1, computed: true)\n' > "${CALLER}"
+expect fail "把计算属性当初始化参数 → 契约门禁红" "${CONTRACT}" "${REPO}"
+
+# ④ static 成员当参数 → 红
+printf 'let a = SampleSnapshot(alpha: 1, zero: 0)\n' > "${CALLER}"
+expect fail "把 static 成员当初始化参数 → 契约门禁红" "${CONTRACT}" "${REPO}"
+
+# ⑤ 嵌套类型的成员当参数 → 红
+printf 'let a = SampleSnapshot(alpha: 1, inner: 2)\n' > "${CALLER}"
+expect fail "把嵌套类型的成员当初始化参数 → 契约门禁红" "${CONTRACT}" "${REPO}"
+
+# ⑥ 坏名字只出现在注释里 → 绿（剥注释是前提，否则会误报）
+printf '// 反例：SampleSnapshot(omega: 1)\nlet a = SampleSnapshot(alpha: 1)\n' > "${CALLER}"
+expect pass "坏参数名只出现在注释里 → 契约门禁绿" "${CONTRACT}" "${REPO}"
+
+# ⑦ 跨行 + 嵌套调用里的坏名字 → 红
+#    这一条同时验证两件事：多行调用能被合并，嵌套调用里的参数不会被外层吞掉。
+printf 'let b = SampleSnapshot(\n    alpha: 1,\n    child: OtherSnapshot(gamma: 1, oops: 2)\n)\n' > "${CALLER}"
+expect fail "跨行嵌套调用里的坏参数名 → 契约门禁红" "${CONTRACT}" "${REPO}"
+
+# ⑧ 第二个契约文件里的结构体也要被覆盖 → 红
+printf 'let c = OtherSnapshot(gamma: 1, oops: 2)\n' > "${CALLER}"
+expect fail "第二个契约文件里的结构体同样受检 → 契约门禁红" "${CONTRACT}" "${REPO}"
+
+# ⑨ 类型标注不是构造点 → 绿
+printf 'var typed: SampleSnapshot { SampleSnapshot(alpha: 3) }\n' > "${CALLER}"
+expect pass "类型标注 + 内部的合法构造 → 契约门禁绿" "${CONTRACT}" "${REPO}"
+
+# ⑩ ContentView.swift 临时排除（★绊线）
+#    接线期间它被排除在扫描之外。等 team-lead 把它从 EXCLUDED_WHILE_EDITING 里删掉，
+#    这条「期望绿」会自动变成红 —— 那是故意的：逼改的人把本条一起改成 expect fail。
+rm -f "${CALLER}"
+printf 'let z = SampleSnapshot(omega: 1)\n' \
+  > "${REPO}/ios/ShotTuner/ContentView.swift"
+expect pass "ContentView.swift 在临时排除表里 → 契约门禁绿" "${CONTRACT}" "${REPO}"
+rm -f "${REPO}/ios/ShotTuner/ContentView.swift"
+
+# ⑪ 排除表清空后，同一个坏调用必须变红（证明 ⑩ 的绿是「被排除」而不是「扫不到」）
+printf 'let z = SampleSnapshot(omega: 1)\n' > "${CALLER}"
+expect fail "同一个坏调用放在被扫文件里 → 契约门禁红" "${CONTRACT}" "${REPO}"
+rm -f "${CALLER}"
 
 ci_log ""
 if [ "${FAIL}" -gt 0 ]; then
