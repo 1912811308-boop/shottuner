@@ -19,6 +19,10 @@
 //   ⑥ 俯仰刻度    右侧竖轴，中心 h/2，±30°，5° 一格，当前角度用 `warnStrong` 加粗
 //                 （仅 `snapshot.pitchAvailable == true` 时画）
 //
+//   ★ 依赖关系：① ② 只要开关打开就画（不依赖任何读数），⑥ 只看 `pitchAvailable`；
+//     ③ ④ ⑤ 额外要求 `snapshot.hasReading == true` —— 冷启动一帧都没分析过时，
+//     一层都不画。画错一个假读数比少画一个真读数严重得多。
+//
 // ── 为什么三分线要画两遍 ────────────────────────────────────────────────────
 //   只画一条白 18% 的 1px 线时，叠在亮度 0.9 的天空上反差只有 0.018 —— 用户以为开了网格，
 //   实际看不见线，这是功能性失效。双描边（黑底 + 白面）对**任何**背景都保证约 ±40% 的
@@ -179,15 +183,26 @@ struct GuideOverlayView: View {
             // ② 中心十字
             drawCenterCross(&context, size: size)
 
-            // ③ 水平参考线
-            drawLevelReference(&context, size: size)
+            // ③④⑤ —— 全部依赖构图读数。
+            //
+            // ★ 没有读数（冷启动 / 一帧都还没分析）就一层都不画。
+            //   不这么守的话，`GuideSnapshot.empty`（`isLevel == true`）会画出**绿色**
+            //   参考线，等于在产品还没测过任何东西时告诉用户"你已经端平了"。
+            //   对应 Android `onDraw` 开头的 `val hint = hint ?: return`。
+            //
+            //   注意它**不是**提前 return：网格（①②）在上面已经画完，俯仰刻度（⑥）
+            //   也还要照画 —— 它们不依赖构图读数，Android 同样是这个顺序。
+            if snapshot.hasReading {
+                // ③ 水平参考线
+                drawLevelReference(&context, size: size)
 
-            // ④ 地平线倾角线
-            drawHorizonTilt(&context, size: size)
+                // ④ 地平线倾角线
+                drawHorizonTilt(&context, size: size)
 
-            // ⑤ 主体标记 + 目标交点
-            if showsSubjectMarks, snapshot.hasDrawableSubject {
-                drawSubjectMarks(&context, size: size)
+                // ⑤ 主体标记 + 目标交点
+                if showsSubjectMarks, snapshot.hasDrawableSubject {
+                    drawSubjectMarks(&context, size: size)
+                }
             }
 
             // ⑥ 俯仰刻度（只有真的收到姿态读数才画）
@@ -276,6 +291,9 @@ struct GuideOverlayView: View {
     /// ★ 判定源是 Kotlin 侧算好的 `isLevel`，本视图**不自己判** —— 否则会出现
     ///   「线绿了但任务环没绿」。Android 侧曾在这里写死 `horizonDetected && |tilt| <= 1.8`，
     ///   结果对着没有地平线的白墙时参考线永远是白的（用户端平了也得不到确认）。
+    ///
+    /// ★ 调用前提：`snapshot.hasReading`（见 `body`）。没有读数就**不画**这条线 ——
+    ///   `.empty` 的 `isLevel` 是 `true`，画出来就是冷启动即"已端平"的假读数。
     private func drawLevelReference(_ context: inout GraphicsContext, size: CGSize) {
         let width = size.width
         let height = size.height
@@ -309,8 +327,12 @@ struct GuideOverlayView: View {
     ///
     /// 只在 `horizonDetected && !isLevel` 时画 —— 画面已经端平时这条线会和绿色参考线
     /// 完全重合，画出来只是让绿色变成"绿里透橙"。
+    ///
+    /// ★ 还要求 `hasReading`：调用方已经在外层守过一次，这里再守一次是因为
+    ///   `horizonDetected` 本身也可能是**脏的**（上游换算法时给了 `true` 却没给位置）。
+    ///   宁可少画一条，不可画错一条 —— 画错的线会让人相信一个不存在的结论。
     private func drawHorizonTilt(_ context: inout GraphicsContext, size: CGSize) {
-        guard snapshot.horizonDetected, !snapshot.isLevel else { return }
+        guard snapshot.hasReading, snapshot.horizonDetected, !snapshot.isLevel else { return }
 
         let pivotX = size.width * 0.5
         let pivotY = clampedUnit(snapshot.horizonY) * size.height
@@ -340,6 +362,10 @@ struct GuideOverlayView: View {
     /// 主体重心（实心点 + 圈），以及"该挪到哪个三分交点"（目标圈 + 虚线连线）。
     ///
     /// 显著性低于 0.30 时调用方已经拦掉了（`hasDrawableSubject`）：画了就是瞎指。
+    ///
+    /// ★ 调用前提：`snapshot.hasReading` 且 `snapshot.hasDrawableSubject`（见 `body`）。
+    ///   主体坐标在 `GuideSnapshot.empty` 里是 0.5/0.5，没有读数时画出来就是画面正中
+    ///   一个圈住空气的准星。
     private func drawSubjectMarks(_ context: inout GraphicsContext, size: CGSize) {
         let width = size.width
         let height = size.height
@@ -530,10 +556,17 @@ struct GuideOverlayView: View {
 
 /// 一个"什么都开"的快照：地平线偏低、歪 3.5°、主体在左侧、建议挪到右上交点。
 ///
-/// - Parameter pitchAvailable: 是否带上姿态读数。`false` 用来验证「有构图、没姿态」时
-///   俯仰刻度确实不画（对应 Android 的 `pitchDeg == null`）。
-private func makeGuidePreviewSnapshot(pitchAvailable: Bool = true) -> GuideSnapshot {
+/// - Parameters:
+///   - hasReading: 是否已收到可信的构图读数。`false` 时 ③④⑤ 三层都不该出现
+///     （对应 Android 的 `hint == null`）。
+///   - pitchAvailable: 是否带上姿态读数。`false` 时右侧俯仰刻度不画
+///     （对应 Android 的 `pitchDeg == null`）。
+private func makeGuidePreviewSnapshot(
+    hasReading: Bool = true,
+    pitchAvailable: Bool = true
+) -> GuideSnapshot {
     GuideSnapshot(
+        hasReading: hasReading,
         rollDegrees: 0.8,
         isLevel: false,
         horizonDetected: true,
@@ -554,20 +587,27 @@ private func makeGuidePreviewSnapshot(pitchAvailable: Bool = true) -> GuideSnaps
     )
 }
 
-#Preview("覆盖层 · 无数据（不画俯仰刻度）") {
-    GuideOverlayView(snapshot: .empty)
+// 四态 → 三个预览：第一行的「冷启动」和 `.empty` 测的是同一件事，
+// 留 `.empty` 直出（它守的是真实调用路径：`GuideOverlayView()` 不带参数就是这个状态），
+// 另外两态用手造数据。
+
+/// 冷启动：只有三分线 + 中心十字。没有参考线、没有地平线、没有主体、右侧空着。
+#Preview("覆盖层 · 冷启动（只有网格 + 十字）") {
+    GuideOverlayView()
         .frame(width: 260, height: 460)
         .background(Color(white: 0.35))
 }
 
-#Preview("覆盖层 · 有数据 + 有姿态") {
-    GuideOverlayView(snapshot: makeGuidePreviewSnapshot())
+/// 有构图没姿态：参考线 + 地平线 + 主体 + 目标连线都在，右侧俯仰刻度空着。
+#Preview("覆盖层 · 有构图没姿态（右侧应当空着）") {
+    GuideOverlayView(snapshot: makeGuidePreviewSnapshot(hasReading: true, pitchAvailable: false))
         .frame(width: 260, height: 460)
         .background(Color(white: 0.35))
 }
 
-#Preview("覆盖层 · 有构图但没姿态（右侧应当空着）") {
-    GuideOverlayView(snapshot: makeGuidePreviewSnapshot(pitchAvailable: false))
+/// 全都有：六层齐全，橙色刻度停在中线上方 12° 处，标注 `+12°`。
+#Preview("覆盖层 · 全都有（六层齐）") {
+    GuideOverlayView(snapshot: makeGuidePreviewSnapshot(hasReading: true, pitchAvailable: true))
         .frame(width: 260, height: 460)
         .background(Color(white: 0.35))
 }
