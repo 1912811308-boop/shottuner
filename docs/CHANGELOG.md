@@ -8,6 +8,39 @@
 > ★ 但内部 `versionCode` **仍然单调递增**（Android 的 33、iOS 的 1，两端独立）：
 > 系统靠 versionCode 判断能不能覆盖安装，**回退会导致装不上**。它与用户看到的版本号是两回事。
 
+## 未发布（版本号待定） - 2026-11-05 - 「iOS 补齐四块够不着的功能」
+
+**只有 iOS 变。Android 源码不动** —— 1.0.1 的 APK 仍是当前 Android 产物。
+
+### 真正的原因：不是 UI 没写，是够不着
+
+`shared/src/iosMain` 原来只有 4 个跨语言门面（`IosBridge` / `IosMissionBridge` /
+`IosMissionDto` / `TechniqueDexBridge`）。commonMain 里那批「写完、有测试、Android 在用」的模块，
+iOS 侧**一个函数都调不到** —— 这才是「iOS 版功能残缺」的真正原因。
+
+### 补了四个门面
+
+| 门面 | 打通的东西 |
+|---|---|
+| `IosFrameCache` | 全仓**唯一**的 `FrameStats` 缓存。没有它，Swift 要调建议就得自己传统计量，而 `FrameStats` 有 20 个必填字段 —— 只传被读到的 6 个、其余填 0，就等着某天有人多读一个字段时**静默拿到假 0** |
+| `IosFeatureBridge` | 「这会儿该开什么」：光线 + 场景 → 该开夜景 / HDR / 人像 / RAW |
+| `IosVideoBridge` | 8 种意图 → 分辨率 / 帧率 / 快门 / 码率 / 防抖 / LOG 方案 + 一键复制 |
+| `IosGrowthBridge` | 参考分历史（环形 500 条）+ 首末与最佳对比 |
+| `IosSceneBridge` | 融合场景判定，复用 common 的 `SceneClassifier`（不在 Swift 里重写第二份规则） |
+
+### 新页面（已写完，**入口尚未接线**）
+
+`FeatureView`（功能页）/ `VideoPlanView`（录像方案）/ `GrowthView`（成长页，折线自绘、零图表库）。
+
+### 这一版仍然缺的（列清楚，别当成有）
+
+- **ISO / 快门 / 白平衡 / EV 的「照拨」建议还没接**。那是 Recommendation 引擎；
+  功能页给的是「该开哪个模式」，**不是**「该拨几档」，两者不是一回事。
+- **场景识别 `VisionSceneDetector` 仍是 0 调用点**。因此功能页拿不到「AI 看到 …」后缀，
+  `needsTripod` 只能传 `false` —— 具体后果是「夜景长曝：别用手指戳快门」这条建议不出现。
+- **手动曝光 `setManualExposure` 仍是 0 调用点**。
+- 上面三个页面的**导航入口未接进 `ContentView`**，装到手机上暂时看不到它们。
+
 ## 1.0.1 (versionCode 34 / iOS build 2) - 2026-11-05 - 「iOS 首次真正能拍」
 
 **Android：与 1.0.0 功能一致，无用户可见变化。** 这一版的 Android 包是**重新构建的同源代码**，
