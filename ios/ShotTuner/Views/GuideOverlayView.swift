@@ -17,6 +17,7 @@
 //   ④ 地平线倾角  仅 `horizonDetected && !isLevel` 时画，橙色虚线 2pt
 //   ⑤ 主体标记    实心点 r3.2 + 圈 r13；`suggestMove` 时加目标圈 r17 + 连线
 //   ⑥ 俯仰刻度    右侧竖轴，中心 h/2，±30°，5° 一格，当前角度用 `warnStrong` 加粗
+//                 （仅 `snapshot.pitchAvailable == true` 时画）
 //
 // ── 为什么三分线要画两遍 ────────────────────────────────────────────────────
 //   只画一条白 18% 的 1px 线时，叠在亮度 0.9 的天空上反差只有 0.018 —— 用户以为开了网格，
@@ -59,8 +60,13 @@ struct GuideOverlayView: View {
     ///   一致（那条 return 在 `drawPitchGauge` 之前）。
     var showsGuides: Bool = true
 
-    /// 俯仰刻度条。沉浸档关掉：它只是右侧一段没人读的刻度线。
-    var showsPitchGauge: Bool = true
+    // 俯仰刻度**没有**独立开关：它由 `snapshot.pitchAvailable` 决定。
+    //
+    // 早先这里有个 `var showsPitchGauge: Bool = true`，是拿开关去顶「没有姿态数据」的坑 ——
+    // 裸 `Float` 的 `pitchDegrees` 分不出「恰好 0°」和「还没收到读数」，硬画就会在画面右侧
+    // 出现一根假的 0° 线（Android 用 `pitchDeg != null` 守这条）。
+    // 现在契约里有了 `pitchAvailable`，语义归数据、开关归 UI，不再叠两个真相。
+    // 沉浸档要藏刻度时，由调用方自己决定传不传可用性，或整体关掉 `showsGuides`。
 
     /// 主体圈 + 目标交点。沉浸档关掉：这两个圈会在人脸 / 主体上压出两个圆，抢画面。
     var showsSubjectMarks: Bool = true
@@ -90,8 +96,12 @@ struct GuideOverlayView: View {
         // ── ③ 水平参考线 ────────────────────────────────────────────────────
         /// `levelPaint.strokeWidth = dp(1.5f)`
         static let levelLineWidth: CGFloat = 1.5
-        /// 短段近端到中心的距离。任务书给的 20pt（Android 是 `w * 0.09f`，见报告）。
-        static let levelArmLength: CGFloat = 20
+        /// 短段近端到中心的距离 = `w * 0.09`（Android `val arm = w * 0.09f`）。
+        ///
+        /// ★ 必须是**比例**而不是定值：390pt 宽屏下 0.09w ≈ 35pt、段长 42pt；
+        ///   写死 20pt 的话段长只有 24pt，在横屏 / 大屏上会缩成一根小横杠，
+        ///   「一眼看出歪了几度」的用途就没了。
+        static let levelArmWidthRatio: CGFloat = 0.09
         /// 短段远端 = `arm * 2.2`（Android `arm * 2.2f`）。
         static let levelArmGapRatio: CGFloat = 2.2
 
@@ -180,8 +190,8 @@ struct GuideOverlayView: View {
                 drawSubjectMarks(&context, size: size)
             }
 
-            // ⑥ 俯仰刻度
-            if showsPitchGauge {
+            // ⑥ 俯仰刻度（只有真的收到姿态读数才画）
+            if snapshot.pitchAvailable {
                 drawPitchGauge(&context, size: size)
             }
         }
@@ -274,7 +284,7 @@ struct GuideOverlayView: View {
             ? clampedUnit(snapshot.horizonY) * height
             : height * 0.5
 
-        let arm = Metrics.levelArmLength
+        let arm = width * Metrics.levelArmWidthRatio
         let centerX = width * 0.5
         let outer = arm * Metrics.levelArmGapRatio
 
@@ -385,14 +395,17 @@ struct GuideOverlayView: View {
         )
 
         // 连线：把「往哪挪」变成一条可见的位移。
-        // Android 用的是同一支白色虚线笔；T13-B 任务书要求用 `warn`，
-        // 理由是「该挪」是待办提示、不是已完成的主体提示，橙色比白色先被看见。
+        //
+        // ★ 与目标圈**共用同一支笔**（59% 白虚线 6/6）：Android 那边圈和线就是同一支
+        //   `targetPaint`。曾经想改成 `warn` 橙色让它更醒目，但橙色在这个界面里已经承担
+        //   「倾斜告警」和「该挪到这里」两种语义，再借给连线就糊了 —— 而且圈是白的、
+        //   线是橙的，看起来像两个不相干的标注。
         var connectorPath = Path()
         connectorPath.move(to: CGPoint(x: subjectX, y: subjectY))
         connectorPath.addLine(to: CGPoint(x: targetX, y: targetY))
         context.stroke(
             connectorPath,
-            with: .color(Palette.warn),
+            with: .color(Color.white.opacity(Metrics.targetWhiteAlpha)),
             style: StrokeStyle(lineWidth: Metrics.targetLineWidth, dash: Metrics.targetDash)
         )
     }
@@ -403,7 +416,10 @@ struct GuideOverlayView: View {
     ///
     /// 正值向上（手机往上抬），负值向下。当前角度用 `warnStrong` 加粗刻度 + 等宽数字标出。
     ///
-    /// ★ 与 Android 的差异（任务书要求，非疏漏）：Android 是 0°→90° 的**绝对**刻度
+    /// ★ 调用条件：`snapshot.pitchAvailable`（对应 Android 的 `pitchDeg != null`）。
+    ///   `.empty` 快照**不画**这支刻度 —— 缺省 0° 会画出一根"手机明明歪着却显示 0°"的假线。
+    ///
+    /// ★ 与 Android 的差异（已确认保留，非疏漏）：Android 是 0°→90° 的**绝对**刻度
     ///   （底部「腰以下」、中点「45°」、顶部「90°」，另有一个绕底端旋转的指针）。
     ///   iOS 这套改成以中线为 0 的**相对**刻度 —— 拍照时真正要读的是"还差几度到水平"，
     ///   绝对值还得用户自己做减法。
@@ -513,7 +529,10 @@ struct GuideOverlayView: View {
 // MARK: - 预览
 
 /// 一个"什么都开"的快照：地平线偏低、歪 3.5°、主体在左侧、建议挪到右上交点。
-private func makeGuidePreviewSnapshot() -> GuideSnapshot {
+///
+/// - Parameter pitchAvailable: 是否带上姿态读数。`false` 用来验证「有构图、没姿态」时
+///   俯仰刻度确实不画（对应 Android 的 `pitchDeg == null`）。
+private func makeGuidePreviewSnapshot(pitchAvailable: Bool = true) -> GuideSnapshot {
     GuideSnapshot(
         rollDegrees: 0.8,
         isLevel: false,
@@ -530,18 +549,25 @@ private func makeGuidePreviewSnapshot() -> GuideSnapshot {
         targetX: 0.6667,
         targetY: 0.3333,
         suggestMove: true,
-        pitchDegrees: 12
+        pitchDegrees: 12,
+        pitchAvailable: pitchAvailable
     )
 }
 
-#Preview("覆盖层 · 无数据") {
+#Preview("覆盖层 · 无数据（不画俯仰刻度）") {
     GuideOverlayView(snapshot: .empty)
         .frame(width: 260, height: 460)
         .background(Color(white: 0.35))
 }
 
-#Preview("覆盖层 · 有数据") {
+#Preview("覆盖层 · 有数据 + 有姿态") {
     GuideOverlayView(snapshot: makeGuidePreviewSnapshot())
+        .frame(width: 260, height: 460)
+        .background(Color(white: 0.35))
+}
+
+#Preview("覆盖层 · 有构图但没姿态（右侧应当空着）") {
+    GuideOverlayView(snapshot: makeGuidePreviewSnapshot(pitchAvailable: false))
         .frame(width: 260, height: 460)
         .background(Color(white: 0.35))
 }
