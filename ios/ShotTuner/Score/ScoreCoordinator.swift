@@ -338,11 +338,15 @@ final class ScoreCoordinator: ObservableObject {
     ///
     /// ★ 除了摘掉回调，还要**换代次**：已经排在 `gate.queue` 里的帧算完回来时
     ///   代次对不上就会被丢弃，否则页面都关了还会往 `@Published` 写一次旧数据。
+    ///
+    /// ★ 把 `hasReading` 落回 `false`：复用了同一个 coordinator 再进页面时，
+    ///   覆盖层在新一轮读数到齐之前不该拿上一轮的几何画线。
     func detach() {
         gate.invalidate()
         gate.clearClarity()
         session?.onFrame = nil
         session = nil
+        guide.hasReading = false
     }
 
     // MARK: - 传感器与构图入口
@@ -369,6 +373,10 @@ final class ScoreCoordinator: ObservableObject {
         guide.rollDegrees = rollDegrees
         guide.pitchDegrees = pitchDegrees
         guide.pitchAvailable = rollValid
+        // 姿态读数也是「真实测到的量」：收到它就允许覆盖层开始画（见 hasReading 的注释）。
+        if rollValid {
+            guide.hasReading = true
+        }
         guide.isLevel = resolveIsLevel(rollValid: rollValid)
     }
 
@@ -442,6 +450,10 @@ final class ScoreCoordinator: ObservableObject {
         guide.targetX = targetX
         guide.targetY = targetY
         guide.suggestMove = suggestMove
+        // ★ 走到这里说明手上有一份真实的构图读数 —— 覆盖层可以开始画了。
+        //   这是「不撒谎」的另一半：`hasReading == false` 时视图一条参考线都不画，
+        //   而不是拿 `GuideSnapshot.empty` 里的默认值画一条绿色的「你已端平」。
+        guide.hasReading = true
         guide.isLevel = resolveIsLevel(rollValid: gate.currentInputs.rollValid)
     }
 
