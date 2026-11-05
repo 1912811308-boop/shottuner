@@ -309,10 +309,22 @@ final class ScoreCoordinator: ObservableObject {
     ///
     /// ★ 这里**只做接线 + 合法性校验**，不在主线程构建任何 UI 列表 ——
     ///   场景清单是给 `setScene(_:)` 兜底用的，UI 要不要列出来是界面的事。
+    ///
+    /// ★ ★ **已知限制（刻意写死在这里，别当它不存在）：本方法会「独占」
+    ///   `session.onFrame`。** `CameraSession.onFrame` 是**单槽回调**，
+    ///   赋值即覆盖。若将来要在同一个 session 上并行挂第二个消费者
+    ///   （例如实时 Vision 检测），**必须先把 `onFrame` 改成回调数组 / 一对多广播**，
+    ///   不能在这里直接赋值 —— 直接赋值会**静默杀死**前一个消费者：
+    ///   不崩、不报错，只是帧不来了，而且极难查到是谁覆盖的（半年后有人加了个
+    ///   Vision 消费者发现帧不来，查两天）。改成数组时记得连 `CameraSession.detach`
+    ///   一侧的清理一起改。
     /// - Parameter session: 相机会话。
     func attach(to session: CameraSession) {
         if let old = self.session, old !== session {
             old.onFrame = nil
+            // 换了会话就是换了画面：上一份几何（主体框 / 地平线 / 横滚角）全部作废。
+            // 不清的话，新会话第一份读数到达之前，覆盖层会照着旧画面的坐标画。
+            guide = .empty
         }
         self.session = session
         refreshValidSceneNames()
@@ -339,14 +351,20 @@ final class ScoreCoordinator: ObservableObject {
     /// ★ 除了摘掉回调，还要**换代次**：已经排在 `gate.queue` 里的帧算完回来时
     ///   代次对不上就会被丢弃，否则页面都关了还会往 `@Published` 写一次旧数据。
     ///
-    /// ★ 把 `hasReading` 落回 `false`：复用了同一个 coordinator 再进页面时，
-    ///   覆盖层在新一轮读数到齐之前不该拿上一轮的几何画线。
+    /// ★ `guide` **整份落回 `.empty`**（不只是翻 `hasReading`）：
+    ///   覆盖层上残留的任何几何量都是上一轮画面的 —— 主体框、地平线位置、三分交点、
+    ///   横滚角，只要留下来，下次进页面、新一轮读数到齐之前就会照着画一遍。
+    ///   整份重置比逐个字段清零更难漏。
+    ///
+    /// ★ `score` / `histogram` **故意不重置**：它们是「上一次分析的结果」，
+    ///   页面还在退场动画里时抽掉数字会闪一下空白；而 `guide` 是**实时**几何，
+    ///   留一帧就是错一帧。两者的时效性不一样，处理也就不一样。
     func detach() {
         gate.invalidate()
         gate.clearClarity()
         session?.onFrame = nil
         session = nil
-        guide.hasReading = false
+        guide = .empty
     }
 
     // MARK: - 传感器与构图入口
@@ -360,6 +378,13 @@ final class ScoreCoordinator: ObservableObject {
     ///
     /// ★ 一个采样只有一个有效性标志：`roll` 与 `pitch` 同帧同源，
     ///   所以 `pitchAvailable` 也用 `rollValid`（对应 Android 的 `pitchDeg != null`）。
+    ///
+    /// ★ 为什么这里也置 `hasReading = true`：`hasReading` 的契约文字是
+    ///   「是否已经收到可信的**构图 / 姿态**读数」—— 一次 `rollValid == true` 的
+    ///   CoreMotion 采样就是一份实测姿态，拿它画一条水平参考线不算撒谎。
+    ///   若只认构图读数（严格对齐 Android 的 `hint != null`），那么 Vision 还没吐出
+    ///   第一帧之前，手机明明端平了、线也是白的 —— 用户会以为功能坏了。
+    ///   两条入口谁先到，覆盖层就从谁开始画；**任何一条都没到时一条线都不画**。
     /// - Parameters:
     ///   - rollDegrees: 横滚角（度），正值表示画面右侧偏低。
     ///   - pitchDegrees: 俯仰角（度）。
@@ -450,7 +475,9 @@ final class ScoreCoordinator: ObservableObject {
         guide.targetX = targetX
         guide.targetY = targetY
         guide.suggestMove = suggestMove
-        // ★ 走到这里说明手上有一份真实的构图读数 —— 覆盖层可以开始画了。
+        // ★ 走到这里说明构图分析确实给了结果，覆盖层可以开始画了。
+        //   注意：**主体置信度为 0 也算「有读数」** —— 那是「测了，画面里没有显著主体」，
+        //   不是「还没测」。契约里区分的是「有没有测」，不是「测出来好不好」。
         //   这是「不撒谎」的另一半：`hasReading == false` 时视图一条参考线都不画，
         //   而不是拿 `GuideSnapshot.empty` 里的默认值画一条绿色的「你已端平」。
         guide.hasReading = true
@@ -740,9 +767,17 @@ final class ScoreCoordinator: ObservableObject {
     ///   2.5° 是**覆盖层 + 任务环**口径（`MissionThresholds.LEVEL_ENTER_DEG`）。
     ///   拿 1° 画线会让 iOS 的线比 Android 晚 1.5° 变绿，也会出现「线绿了但任务环不绿」。
     ///   两个口径各有各的消费者，混用哪一边都是错。
+    ///
+    /// ★ 开头那道 `hasReading` 闸门是**唯一的「没有读数就不许绿」保证点**：
+    ///   `updateMotion` / `updateComposition` 里都可能是「刚挂上、还没收到采样」的状态，
+    ///   那时 `guide` 里的角度是 `.empty` 的缺省值（0°），算出来必然是 `true`。
+    ///   与其在两个入口各判一次（漏一处就漏一条假绿线），不如把判据收在这里一处 ——
+    ///   **没有任何读数 ⇒ 不可能给出 `true`**。
     /// - Parameter rollValid: 本次横滚角是否可信。
-    /// - Returns: 是否已端平。
+    /// - Returns: 是否已端平；无读数时恒为 `false`。
     private func resolveIsLevel(rollValid: Bool) -> Bool {
+        guard guide.hasReading else { return false }
+
         let theta: Float
         if guide.horizonDetected {
             theta = guide.tiltDeg
