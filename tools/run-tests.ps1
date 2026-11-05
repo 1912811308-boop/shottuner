@@ -75,5 +75,68 @@ try {
     }
 }
 
+# -- Test count summary --------------------------------------------------------
+# Why this block exists:
+#   `gradle test` prints only "BUILD SUCCESSFUL"; it never says how many cases
+#   ran. Counting build/test-results by hand goes wrong in two ways, both seen
+#   for real during acceptance:
+#     1) testDebugUnitTest and testReleaseUnitTest run the SAME cases twice;
+#        adding both up doubles the total (105 + 172 gets reported as 554);
+#     2) a class marked @Ignore still appears in the XML as tests=N / skipped=N,
+#        so summing `tests` alone silently counts skipped cases as executed.
+#   => count the debug variant only, and report executed = tests - skipped.
+#   Keep this block ASCII-only: PS 5.1 reads .ps1 as ANSI when there is no BOM.
+function Write-TestCountSummary {
+    param([string]$ProjectDir)
+
+    $rows = @()
+    foreach ($module in @('app', 'shared')) {
+        $resultDir = Join-Path (Join-Path $ProjectDir $module) 'build\test-results\testDebugUnitTest'
+        if (-not (Test-Path -LiteralPath $resultDir)) { continue }
+
+        $classes = 0; $tests = 0; $skipped = 0; $failures = 0; $errors = 0
+        foreach ($xmlFile in (Get-ChildItem -LiteralPath $resultDir -Filter 'TEST-*.xml' -File)) {
+            $suite = ([xml](Get-Content -LiteralPath $xmlFile.FullName -Raw -Encoding UTF8)).testsuite
+            if ($null -eq $suite) { continue }
+            $classes = $classes + 1
+            $tests = $tests + [int]$suite.tests
+            $skipped = $skipped + [int]$suite.skipped
+            $failures = $failures + [int]$suite.failures
+            $errors = $errors + [int]$suite.errors
+        }
+        $rows += [pscustomobject]@{
+            Module   = $module
+            Classes  = $classes
+            Tests    = $tests
+            Skipped  = $skipped
+            Executed = $tests - $skipped
+            Failures = $failures
+            Errors   = $errors
+        }
+    }
+
+    ""
+    "================ TEST COUNT (testDebugUnitTest only) ================"
+    if ($rows.Count -eq 0) {
+        "no test-results found -- did the test task actually run?"
+        return
+    }
+    foreach ($row in $rows) {
+        "{0,-6} classes={1,-3} tests={2,-4} skipped={3,-3} executed={4,-4} failures={5} errors={6}" -f `
+            $row.Module, $row.Classes, $row.Tests, $row.Skipped, $row.Executed, $row.Failures, $row.Errors
+    }
+    $sumClasses = ($rows | Measure-Object -Property Classes -Sum).Sum
+    $sumTests = ($rows | Measure-Object -Property Tests -Sum).Sum
+    $sumSkipped = ($rows | Measure-Object -Property Skipped -Sum).Sum
+    $sumFailures = ($rows | Measure-Object -Property Failures -Sum).Sum
+    $sumErrors = ($rows | Measure-Object -Property Errors -Sum).Sum
+    "{0,-6} classes={1,-3} tests={2,-4} skipped={3,-3} executed={4,-4} failures={5} errors={6}" -f `
+        "TOTAL", $sumClasses, $sumTests, $sumSkipped, ($sumTests - $sumSkipped), $sumFailures, $sumErrors
+    "NOTE: release variant runs the SAME cases -- never add debug + release."
+    "NOTE: executed = tests - skipped (@Ignore manual tools are not executed)."
+}
+
+Write-TestCountSummary -ProjectDir $project
+
 "GRADLE_EXIT=$code"
 exit $code
