@@ -4,10 +4,21 @@
   ios/ShotTuner/PrivacyInfo.xcprivacy —— 隐私清单（Privacy Manifest）。
 
   ★ 为什么需要：iOS 17+ 要求 App 声明隐私实践，缺失会被 App Store Connect 拦下。
-  ★ 为什么这份是空的：**我们零数据采集、零网络**。
+  ★ 数据采集与网络：仍然是**零**。
     · NSPrivacyTracking = false        —— 没有跨 App 追踪
+    · NSPrivacyTrackingDomains = []    —— 不连任何域名（零网络承诺）
     · NSPrivacyCollectedDataTypes = [] —— 不采集任何用户数据（照片只在本机分析）
-    · NSPrivacyAccessedAPITypes = []    —— 未使用需要声明的「必需理由 API」
+  ★ NSPrivacyAccessedAPITypes 从「空」变成「一条」（T17 补齐，2026 批次）：
+    `CaptureFlow.watermarkEnabled` 用 `UserDefaults` 存水印开关（键名 `watermark_enabled`，
+    与 Android 侧 KEY_WATERMARK 逐字一致），而 **UserDefaults 属于 Apple 的
+    「必需理由 API」**（required reason API），必须声明类别与理由码。
+    · 类别：NSPrivacyAccessedAPICategoryUserDefaults
+    · 理由：CA92.1 —— 仅本 App 自身访问自己写入的偏好
+  ★ 为什么必须补：这份文件此前写着「未使用需要声明的 API」，
+    而实际代码已经在用 UserDefaults —— 那是一条**自相矛盾的合规陈述**。
+    本产品不采集、不上传，隐私口径是核心资产；清单里出现一句不成立的话，
+    比缺一条声明更伤。所以这里补齐，而不是留着等上架前再审。
+    其余键一个都没动（只改了 NSPrivacyAccessedAPITypes 这一项）。
 -->
 <plist version="1.0">
 <dict>
@@ -18,6 +29,15 @@
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array/>
 	<key>NSPrivacyAccessedAPITypes</key>
-	<array/>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

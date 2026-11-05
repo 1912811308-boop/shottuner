@@ -80,8 +80,13 @@ private let watermarkDefaultsKey = "watermark_enabled"
 ///     ? "参考分 \(coordinator.score.total) / 100"
 ///     : "参考分 --"
 /// captureFlow.capture(session: camera, scoreText: text) { result in
-///     // 已经在主线程；成功后 captureFlow.lastSavedAt 也被更新（缩略图飞入靠它）
+///     // 已经在主线程；成功后 lastSavedAt / lastCapturedImage 都已被更新：
+///     //   · lastSavedAt        → 缩略图飞入动画的触发点
+///     //   · lastCapturedImage  → 缩略图 / 复盘卡大图 / 分享的源（只在内存里）
 /// }
+/// ...
+/// // 复盘卡关闭后**必须**调，把 12MP 位图从内存放掉：
+/// captureFlow.clearLastCaptured()
 /// ```
 @MainActor
 final class CaptureFlow: ObservableObject {
@@ -107,10 +112,22 @@ final class CaptureFlow: ObservableObject {
     /// 最近一次成功保存到相册的时刻。
     ///
     /// ★ 缩略图飞入（`matchedGeometryEffect`，T17 验收② ≤400ms）靠它触发：
-    ///   调用方 `onChange(of: captureFlow.lastSavedAt)` 开始动画，动画起点用的是
-    ///   「自己手里的那张缩略图」，不是从相册读回来的图 —— 验证过要读相册就得多要
-    ///   `.readWrite` 权限，而本 App 不读相册，所以缩略图用刚拍的内存图。
+    ///   调用方 `onChange(of: captureFlow.lastSavedAt)` 开始动画，动画用的图是
+    ///   `lastCapturedImage`（刚拍的内存图），不是从相册读回来的图 ——
+    ///   要读相册就得多要 `.readWrite` 权限，而本 App 不读相册。
     @Published private(set) var lastSavedAt: Date? = nil
+
+    /// 刚拍下（且已完成水印）的图。**只在内存里**，用于缩略图 / 复盘卡 / 分享。
+    ///
+    /// ★ 相册里那份才是权威副本，App 不保留任何文件 —— 这是 T17 验收①
+    ///   「照片写入相册，App 不保留副本」的内存侧另一半：
+    ///   文件删干净了，但复盘卡与分享面板还需要一张图，所以图在内存里活到复盘卡关闭为止。
+    /// ★ 生命周期约定（调用方照这个来，否则 12MP 位图会一直挂着）：
+    ///   · 每次 `capture()` 入口清成 `nil`（新的一次拍照不能先闪一下上一张）；
+    ///   · 成功保存到相册那一刻**一定有值**（两条路径都做了，见 `applyWatermarkIfNeeded`）；
+    ///   · **复盘卡关闭时调 `clearLastCaptured()`** 把它放掉。
+    /// ★ 12MP 位图约 48MB。低端机上这 48MB 是实打实的压力，所以「什么时候放」不是可选项。
+    @Published private(set) var lastCapturedImage: UIImage?
 
     // MARK: - 水印开关
 
@@ -187,6 +204,19 @@ final class CaptureFlow: ObservableObject {
         lastError = nil
     }
 
+    /// 放掉内存里那张复盘图（**复盘卡关闭时调**）。
+    ///
+    /// ★ 为什么必须有这个入口：`lastCapturedImage` 是一张 12MP 位图（约 48MB），
+    ///   只要它还挂在 `@Published` 上就不会被回收。复盘卡是「看一眼就关」的界面，
+    ///   关闭之后这张图没有任何用途 —— 留着就是拿 48MB 换一个「下次打开更快」的错觉，
+    ///   而在低端机上 48MB 足够让相机预览被系统回收。
+    /// ★ 传 `nil` 会触发一次 `objectWillChange`，SwiftUI 会把复盘卡的大图按空处理 ——
+    ///   所以**要在卡片已经关掉之后再调**（`onDisappear` 或关闭动画结束后），
+    ///   不要在关闭动画进行中调，否则用户会看到大图先消失、卡片再收起。
+    func clearLastCaptured() {
+        lastCapturedImage = nil
+    }
+
     // MARK: - 入口
 
     /// 拍一张 →（可选）烧水印 → 写入系统相册 → 删掉 App 侧临时文件。
@@ -209,6 +239,9 @@ final class CaptureFlow: ObservableObject {
         isCapturing = true
         // 每次进入清一次错误：上一张的失败不该污染这一张的提示条。
         lastError = nil
+        // ★ 同时放掉上一张的复盘图：新的一次拍照如果先闪一下上一张，
+        //   用户会以为「刚拍的还是那张」，而且这 48MB 会在整个流程期间白挂着。
+        lastCapturedImage = nil
 
         // ① 临时文件：`temporaryDirectory` 下唯一文件名。
         //    ★ 用 UUID 而不是时间戳：同一毫秒内连点两次时时间戳会撞名，
@@ -263,6 +296,14 @@ final class CaptureFlow: ObservableObject {
         // ★ 不重新编码是刻意的：多一次 JPEG 往返就多一次画质损失，
         //   而「不开水印」时用户期待的就是相机原样输出的那张。
         guard watermarkEnabled else {
+            // ★★ 但复盘图**必须在这里解码**，而且必须赶在 `finish` 删 tmp 之前。
+            //   为什么不能省：① 复盘卡与分享面板要一张图，不存文件就只能留在内存里；
+            //   ② 不能拿取景帧凑数 —— 预览是 1280 长边的分析帧、且是拍照前那一瞬，
+            //      构图与实际成片差一点，用户会觉得「我拍的跟刚才看到的不是一张」。
+            //   为什么放在这里而不是更早：这条路径**不重编码**（原图直进相册），
+            //   所以解码只发生在「需要复盘图」这一件事上，且解码失败也不该
+            //   把一张已经拍成的照片作废 —— `job.image` 留 nil，相册照写。
+            job.image = UIImage(contentsOfFile: originalURL.path)
             saveToPhotoLibrary(originalURL, job: job)
             return
         }
@@ -272,6 +313,9 @@ final class CaptureFlow: ObservableObject {
             return
         }
         let marked = WatermarkRenderer.render(image, text: scoreText)
+        // ★ 复盘图就是这张：已经解码完、也烧好水印了，直接挂上 ——
+        //   不再多解码一次，也保证它在 `finish` 删文件之后依然有效。
+        job.image = marked
         guard let data = marked.jpegData(compressionQuality: 0.95) else {
             finish(.failure(CaptureFailure.renderFailed), job: job)
             return
@@ -378,6 +422,11 @@ final class CaptureFlow: ObservableObject {
         isCapturing = false
         switch result {
         case .success:
+            // ★ 复盘图**在这里才公开**：图在流程中途解好挂在 `job` 上，
+            //   到「已确认进相册」这一刻才写成 `@Published`。
+            //   顺序上确实晚于临时文件删除 —— 但图早在解码时就已进内存，
+            //   删文件不影响它（这正是「解码必须发生在 `finish` 之前」的原因）。
+            lastCapturedImage = job.image
             lastSavedAt = Date()
         case .failure(let error):
             lastError = Self.userMessage(for: error)
@@ -405,7 +454,7 @@ final class CaptureFlow: ObservableObject {
 
     // MARK: - 一次拍照的批次状态
 
-    /// 一次拍照的批次状态：临时文件登记表 + 调用方回调。
+    /// 一次拍照的批次状态：临时文件登记表 + 复盘图 + 调用方回调。
     ///
     /// ★ 为什么需要这个对象：临时文件清单在流程中途会变（水印路径会多出第二个文件），
     ///   而流程被拆成了几个方法 + 几次异步跳转。用局部变量就得把清单塞进每个闭包
@@ -415,6 +464,14 @@ final class CaptureFlow: ObservableObject {
 
         /// 本次拍照产生过的所有临时文件（可能被提前删掉其中一部分）。
         var tempURLs: [URL]
+
+        /// 复盘图（缩略图 / 复盘卡 / 分享共用）。
+        ///
+        /// ★ 存在这里的唯一理由是**时序**：`finish` 一进门就把 tmp 删光，
+        ///   所以图必须在调用 `finish` 之前就解好、挂在这个对象上带进去。
+        ///   在 `finish` 里再去 `UIImage(contentsOfFile:)` 只会拿到 nil（文件已删），
+        ///   那就成了「照片存进去了、复盘卡空着」——最难查的一类时序 bug。
+        var image: UIImage?
 
         /// 调用方的回调（主 actor 上调用，恰好一次）。
         let completion: @MainActor (Result<Void, Error>) -> Void
