@@ -9,17 +9,30 @@
 //   Android 侧用的是同一份实现 —— 本文件只渲染，一行统计都不写。
 //
 // ★ 三条不可违反的显示铁律（`IosGrowthDto` 的 KDoc 里逐条写了理由）：
-//   1. `hasGrowth == false` ⇒ **整张对比卡不显示**。不是显示一堆 `--`：
-//      一张写着「首次 -- / 最佳 --」的卡片除了让用户以为坏了，没有任何信息量。
-//   2. `hasGrowth == true` 时，每个数值**单独看自己的有效性标志**才决定要不要印。
-//      ★ 现状（写这份代码时的真实签名）：`IosGrowthDto` **没有** per-field 的
-//        `firstValid` / `bestValid` / `deltaValid` 三个标志，只有 `hasGrowth` 一个总闸。
-//        门面在 `growth()` 里保证：`hasGrowth == true` 蕴含「首张有分、存在有分记录、
-//        delta 可算」，三者同时成立 —— 所以现在一个总闸就够。
-//        将来若给 DTO 补上三个 `xxxValid`，只需在 `growthCard` 里加三条 `if`，
-//        渲染结构不用改。
-//   3. **任何情况下都不许把 invalid 的 0 印出来。** 本仓已经因为「缺数据伪装成 0」
-//      被打回两次（成绩卡印假分数、`hasTotal` 口径），这里是第三个入口。
+//
+//   1. **整卡总闸**：`hasGrowth == false`（= 记录数不够 `MIN_RECORDS_FOR_GROWTH`）
+//      ⇒ 整张对比卡不显示。`--` 堆一行出来只会让用户以为坏了，没有任何信息量。
+//      ★ `hasGrowth` 现在**只表达「凑够记录数了没」**，不再兼职「数值能不能显示」——
+//      那是三个 `xxxValid` 各自的职责（`IosGrowthBridge.growth()` 的 KDoc 写明了）。
+//   2. **逐字段判**：`hasGrowth == true` 时，
+//      `firstTotal` 看 `firstTotalValid`、`bestTotal` 看 `bestTotalValid`、
+//      `delta` 看 `deltaValid`；invalid 的印 `--`，而 `delta` invalid 时
+//      **整段「（+20）」不渲染**（既不印 `（+0）` 也不印 `（--）`：
+//      「提高了多少」这个说法在起点未知时本来就不成立）。
+//      ★ 契约现状（别照旧注释写）：DTO 现在是 **9 个字段**，三个 `xxxValid`
+//      **已经存在**（`9119b47` 之后）。本文件早前那版注释写的是「将来补上标志位
+//      再加三条 `if`」—— 那段描述已经过期，删掉了。
+//   3. **永不印 invalid 的 0**：`xxxValid == false` 时对应字段的值是 0，
+//      那**不是分数、也不是差值**（只是 `Int?` 拆包时的占位）。
+//      本仓已经因为「缺数据伪装成 0」被打回两次（成绩卡印假分数、`hasTotal` 口径），
+//      这里是第三个入口。
+//
+// ★ 一个必须写下来的边界（**代码不许依赖它**）：
+//   `firstVsBest()` 的语义决定了 `bestTotalValid == false` 时 `firstTotalValid`
+//   必然也是 `false`（一条有分记录都没有，首张自然也没分）。
+//   但本文件仍然**逐字段判**，绝不写成 `if summary.bestTotalValid { 两个一起印 }`
+//   那样一把兜住 —— 因为将来 common 侧改口径（例如「只统计最近 90 天」）时，
+//   这个蕴含关系会**悄悄**不成立，而届时报错的不会是这里，只会是用户看到的假数字。
 //
 // ★ 为什么 `NavigationView` 而不是 `NavigationStack`：
 //   照既有先例（`ios/ShotTuner/TechniqueDexView.swift:55`）。本工程部署目标是 16.0，
@@ -129,9 +142,20 @@ struct GrowthView: View {
 
     /// 首末对比卡。
     ///
-    /// ★ `hasGrowth == false` 时**不渲染任何东西**（`@ViewBuilder` 里只有 `if` 没有
-    ///   `else`，等价于 `EmptyView`）。这就是铁律 1：不是显示 `--`，是整张卡不存在。
+    /// ★ 铁律 1（整卡总闸）：`hasGrowth == false` 时**不渲染任何东西**
+    ///   （`@ViewBuilder` 里只有 `if` 没有 `else`，等价于 `EmptyView`）。
     ///   记录数那一行在卡片**外面**（见 `countLine`）—— 那一行永远有意义。
+    ///
+    /// ★ 铁律 2（逐字段判）：三个数值各自走 `scoreValue` / `deltaBadge`，
+    ///   由它们自己看 `xxxValid`。这里**不预判**「首张有分就一定有最佳」之类的
+    ///   蕴含关系（理由见文件头那个边界）。
+    ///
+    /// ★ 三种输入下的样子：
+    ///   · 首张未测 + 有最佳 → `首次 -- → 最佳 82`（无增量段）
+    ///   · 两者都有         → `首次 62 → 最佳 82（+20）`
+    ///   · 两者都没有       → `首次 -- → 最佳 --`（无增量段；此时唯一的信息量是
+    ///                        卡片下方那行「已记 N / 500 张」，这是刻意的：
+    ///                        藏掉整卡会与「`hasGrowth` 只表达凑够记录数」冲突）
     ///
     /// - Parameter summary: 门面给的成长摘要。
     @ViewBuilder
@@ -139,31 +163,28 @@ struct GrowthView: View {
         if summary.hasGrowth {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("首次")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.overlayTextSecondary)
-                    Text("\(summary.firstTotal)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(Palette.overlayText)
-                        .monospacedDigit()
+                    caption("首次")
+                    scoreValue(
+                        summary.firstTotal,
+                        valid: summary.firstTotalValid,
+                        highlight: false
+                    )
 
                     Text("→")
                         .font(.system(size: 12))
                         .foregroundStyle(Palette.overlayTextSecondary)
                         .padding(.horizontal, 2)
 
-                    Text("最佳")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.overlayTextSecondary)
-                    Text("\(summary.bestTotal)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(Palette.accent)
-                        .monospacedDigit()
+                    caption("最佳")
+                    scoreValue(
+                        summary.bestTotal,
+                        valid: summary.bestTotalValid,
+                        highlight: true
+                    )
 
-                    Text(deltaLabel(summary.delta))
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Palette.accent)
-                        .monospacedDigit()
+                    // ★ 只传整个 DTO：`deltaValid` 的判断被关在这个函数内部，
+                    //   外面**没有**任何一处能直接把 `summary.delta` 印出去。
+                    deltaBadge(summary)
                 }
 
                 Text("参考分是同一套算法在两端给的估价，不是评测结论")
@@ -183,16 +204,83 @@ struct GrowthView: View {
         }
     }
 
+    /// 小标题（「首次」/「最佳」）。
+    /// - Parameter text: 标题文案。
+    /// - Returns: 统一字号与颜色的标题。
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(Palette.overlayTextSecondary)
+    }
+
+    /// 一个分数位：`valid` 才印数字，否则印 `--`。
+    ///
+    /// ★ 铁律 3 的唯一落点：**这里没有第二条把 `value` 印出来**的路径。
+    ///
+    /// ★ `--` 用 `Palette.overlayTextSecondary` 而不是 `accent`：
+    ///   `accent` 在这张卡上是「好数字」的颜色（最佳分、增量都用它），
+    ///   而 `--` 既不是好消息也不是坏消息，用强调色等于在强调「没有数据」。
+    ///
+    /// ★ 两个分支的**字号、字重、`.monospacedDigit()` 完全一致**：
+    ///   `--` 与 `82` 切换时宽度不抖，卡片不会左右跳一下。
+    ///
+    /// - Parameters:
+    ///   - value: 门面给的分数（无效时是占位的 0，**不会被印出来**）。
+    ///   - valid: 这个分数是否真的测出来了。
+    ///   - highlight: 是否用主色（最佳分用，首次分不用）。
+    /// - Returns: 分数位。
+    @ViewBuilder
+    private func scoreValue(_ value: Int32, valid: Bool, highlight: Bool) -> some View {
+        if valid {
+            Text("\(value)")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(highlight ? Palette.accent : Palette.overlayText)
+                .monospacedDigit()
+        } else {
+            Text("--")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(Palette.overlayTextSecondary)
+                .monospacedDigit()
+        }
+    }
+
+    /// 增量段（`（+20）` / `（-5）` / `（0）`）。
+    ///
+    /// ★ 参数是**整个 DTO**，不是 `delta` 数值 —— 这是刻意的防误用设计：
+    ///   `deltaValid` 的检查被关在函数体内部，调用方想「只印数字」也印不出来。
+    ///   如果签名是 `deltaLabel(_ delta: Int)`，下一个人从 `summary.delta` 取到
+    ///   `Int32` 之后只要 `Int(...)` 一下就能绕过这道闸，而假 0 就是这么印出来的。
+    ///
+    /// ★ `deltaValid == false` 时**整段不渲染**（`@ViewBuilder` 只有 `if`）：
+    ///   不印 `（+0）`（会被读成「一点没进步」）、也不印 `（--）`
+    ///   （「提高了多少」这个说法在没有起点时本来就不成立）。
+    ///
+    /// - Parameter summary: 门面给的成长摘要。
+    /// - Returns: 增量段；无效时什么都不画。
+    @ViewBuilder
+    private func deltaBadge(_ summary: IosGrowthDto) -> some View {
+        if summary.deltaValid {
+            Text(deltaText(Int(summary.delta)))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Palette.accent)
+                .monospacedDigit()
+        }
+    }
+
     /// 增量文案：`（+20）` / `（-5）` / `（0）`。
     ///
-    /// ★ 正数才补 `+`：写下 `（20）` 会让人以为「总和是 20」，
-    ///   而 `（0）` 不写成 `（+0）` —— 「没有变化」是一种有意义的结果，不是进步。
+    /// ★ 参数是 Swift `Int`（不是 `Int32`）：DTO 的 `delta` 是 `Int32`，
+    ///   两者**没有隐式转换**，所以 `deltaText(summary.delta)` 直接写出来是编译错 ——
+    ///   必须先在 `deltaBadge` 里判过 `deltaValid` 才能走到这一步。
+    ///   这是「用类型挡住误用」的第二道。
     ///
-    /// - Parameter delta: `bestTotal - firstTotal`。
+    /// ★ 正数才补 `+`：写下 `（20）` 会让人以为「总和是 20」；
+    ///   `（0）` 不写成 `（+0）` ——「没有变化」是一种有意义的结果，不是进步。
+    ///
+    /// - Parameter value: 已经确认有效的差值。
     /// - Returns: 带中文括号的增量文案。
-    private func deltaLabel(_ delta: Int32) -> String {
-        let value = Int(delta)
-        return value > 0 ? "（+\(value)）" : "（\(value)）"
+    private func deltaText(_ value: Int) -> String {
+        value > 0 ? "（+\(value)）" : "（\(value)）"
     }
 
     // MARK: - 记录数
