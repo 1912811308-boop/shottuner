@@ -196,10 +196,27 @@ struct HistogramSnapshot: Equatable {
 /// 对应 Android `GuideOverlayView` 收到的 `CompositionHint` + `roll`。
 struct GuideSnapshot: Equatable {
 
+    /// 覆盖层的「端平了没」阈值（度）。
+    ///
+    /// ★ **2.5°，不是 1°。** 这是两个不同的口径，别混：
+    ///   · `LevelMath.LEVEL_TOLERANCE_DEG = 1°` 是 `LevelMath.isLevel(roll)` 的口径；
+    ///   · 覆盖层参考线转绿用的是 `GuideOverlayView.LEVEL_OK_DEG = 2.5°`，
+    ///     它**必须与 `MissionThresholds.LEVEL_ENTER_DEG = 2.5°` 同值** ——
+    ///     否则会出现「线已经绿了，但任务卡判定你没做到」这种自相矛盾的画面。
+    ///     Android 侧那句注释写得很清楚：「判定用的圈就是画出来的圈」。
+    ///
+    /// ★ 这个值暂时硬编码在 Swift 侧；T13 收尾时应由 Kotlin 导出
+    ///   `levelOkDegrees()` 让它真正单一来源，现在写在这里是为了先有唯一出处。
+    static let levelOkDegrees: Float = 2.5
+
     /// 手机的横滚角（度），**正值表示画面右侧偏低**。
     var rollDegrees: Float
 
-    /// 是否已经端平（由 Kotlin `LevelMath.isLevel` 判定，容差 1°）。
+    /// 是否已经端平。判据见 [`GuideSnapshot.levelOkDegrees`]（2.5°）。
+    ///
+    /// 双数据源：`horizonDetected` 为真时看 `tiltDeg`（画面里的结构线真歪没歪，
+    /// 最准），否则看 `rollDegrees`（手机歪不等于画面歪）。
+    /// ★ 这个选择由 `ScoreCoordinator` 做，**不是**由视图做。
     var isLevel: Bool
 
     /// 是否检测到可信的地平线 / 水平结构线。
@@ -238,7 +255,17 @@ struct GuideSnapshot: Equatable {
     var suggestMove: Bool
 
     /// 俯仰角（度），用于俯仰刻度条。
+    ///
+    /// ★ 只在 `pitchAvailable == true` 时有意义。裸的 `Float` 分不出
+    ///   「恰好水平（0°）」和「还没收到姿态数据（0）」—— 前者要画刻度，
+    ///   后者不能画（画一条 0° 的刻度等于告诉用户"你已经平了"，那是撒谎）。
     var pitchDegrees: Float
+
+    /// 是否有可用的俯仰角读数。
+    ///
+    /// 对应 Android `GuideOverlayView` 里 `pitchDeg != null` 那个判断。
+    /// ★ 默认 `false`：宁可先不画，也不要画一条假的 0° 刻度。
+    var pitchAvailable: Bool = false
 
     /// 主体标记是否可以画。
     var hasDrawableSubject: Bool { subjectConfidence > 0.30 }
@@ -259,6 +286,8 @@ struct GuideSnapshot: Equatable {
         targetX: 0.6667,
         targetY: 0.3333,
         suggestMove: false,
-        pitchDegrees: 0
+        pitchDegrees: 0,
+        // 空快照没有姿态数据 —— 不画俯仰刻度（见 pitchAvailable 的注释）
+        pitchAvailable: false
     )
 }
