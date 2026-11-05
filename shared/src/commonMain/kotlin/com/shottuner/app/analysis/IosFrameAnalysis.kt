@@ -96,6 +96,13 @@ class IosFrameAnalysisDto(
 ) {
     companion object {
 
+        /** 直方图桶数。Kotlin 与 Swift 都按这个常量对齐，不写死 256。 */
+        const val HISTOGRAM_BINS: Int = 256
+
+        /** 「未测」维度：分值 0、满分 0、`measured = false`。 */
+        private val EMPTY_DIMENSION: IosDimensionDto =
+            IosDimensionDto(label = "", score = 0, max = 0, measured = false)
+
         /**
          * 算不出来时的哨兵值。
          *
@@ -105,6 +112,11 @@ class IosFrameAnalysisDto(
          *
          * ★ `histogram` 给 256 个 0 而不是空数组：Swift 侧画柱状图时可以
          *   直接按下标遍历，不必先判空 —— 少一个分支就少一处越界机会。
+         *
+         * ★★ 声明顺序有讲究：Kotlin 的 `companion object` 按**书写顺序**初始化，
+         *   [FAILED] 引用了 [EMPTY_DIMENSION] 与 [HISTOGRAM_BINS]，所以这两个必须
+         *   写在它**前面**。反过来写会得到 "Variable 'EMPTY_DIMENSION' must be
+         *   initialized" 的编译错（踩过一次）。
          */
         val FAILED: IosFrameAnalysisDto = IosFrameAnalysisDto(
             ok = false,
@@ -126,12 +138,5 @@ class IosFrameAnalysisDto(
             shadowClip = 0f,
             histogram = FloatArray(HISTOGRAM_BINS)
         )
-
-        /** 直方图桶数。Kotlin 与 Swift 都按这个常量对齐，不写死 256。 */
-        const val HISTOGRAM_BINS: Int = 256
-
-        /** 「未测」维度：分值 0、满分 0、`measured = false`。 */
-        private val EMPTY_DIMENSION: IosDimensionDto =
-            IosDimensionDto(label = "", score = 0, max = 0, measured = false)
     }
 }
