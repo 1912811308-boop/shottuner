@@ -72,7 +72,35 @@ class IosDimensionDto(
  * @param p95 95% 分位亮度 0..1（高光代表值）
  * @param highlightClip 高光溢出占比 0..1
  * @param shadowClip 暗部死黑占比 0..1
+ * @param hintScore 构图分（已剔除倾斜扣分，对应 `CompositionHint.scoreNoTilt`）。
+ *   倾斜已经由「水平度」扣过一次，构图不能再扣第二次，否则同一处歪斜被罚两遍，
+ *   总分不可解释
+ * @param tiltDeg 地平线倾角（度），正值表示画面右侧偏低
+ * @param horizonDetected 是否检测到可信的地平线 / 水平结构线
+ * @param horizonY 地平线纵向位置 0..1
+ * @param subjectX 主体重心横坐标 0..1
+ * @param subjectY 主体重心纵坐标 0..1
+ * @param subjectConfidence 主体显著性置信度 0..1，低于 0.30 时 UI 不该画主体标记 ——
+ *   画了就是瞎指
+ * @param subjectSize 主体占画面比例 0..1
+ * @param subjectLeft 主体外框左边界 0..1
+ * @param subjectTop 主体外框上边界 0..1
+ * @param subjectRight 主体外框右边界 0..1
+ * @param subjectBottom 主体外框下边界 0..1
+ * @param targetX 三分交点建议落点横坐标 0..1
+ * @param targetY 三分交点建议落点纵坐标 0..1
+ * @param suggestMove 是否有「该把主体挪到交点」的建议
  * @param histogram 256 桶归一化亮度直方图（每桶 0..1，总和为 1）
+ *
+ * ## 为什么构图字段在 Kotlin 侧算，而不是让 Swift 传进来
+ *
+ * `CompositionAnalyzer.analyze(s: FrameStats)` 只吃 `FrameStats` ——
+ * 和 `ScoreBoard` 一样是纯函数，两端共用同一份实现。
+ * 所以 Swift 侧**不需要**先把 hint 算出来再传回去：那等于要求 Swift 重写一遍
+ * 构图分析，或者在 Swift 里维护一份「传什么参数」的映射，两端必然走样。
+ *
+ * Android 的链路是 `FrameStatsCore.compute → CompositionAnalyzer.analyze →
+ * ScoreBoard.score`，iOS 走**同一条**链，只是入口在 [IosBridge.analyzeFrame]。
  */
 class IosFrameAnalysisDto(
     val ok: Boolean,
@@ -92,6 +120,21 @@ class IosFrameAnalysisDto(
     val p95: Float,
     val highlightClip: Float,
     val shadowClip: Float,
+    val hintScore: Int,
+    val tiltDeg: Float,
+    val horizonDetected: Boolean,
+    val horizonY: Float,
+    val subjectX: Float,
+    val subjectY: Float,
+    val subjectConfidence: Float,
+    val subjectSize: Float,
+    val subjectLeft: Float,
+    val subjectTop: Float,
+    val subjectRight: Float,
+    val subjectBottom: Float,
+    val targetX: Float,
+    val targetY: Float,
+    val suggestMove: Boolean,
     val histogram: FloatArray
 ) {
     companion object {
@@ -136,6 +179,23 @@ class IosFrameAnalysisDto(
             p95 = 0f,
             highlightClip = 0f,
             shadowClip = 0f,
+            // 构图字段全部给 CompositionHint.EMPTY 的同款默认值：
+            // 外框默认铺满整幅（0,0,1,1）、三分交点默认右下交点、置信度 0（不画主体）。
+            hintScore = 0,
+            tiltDeg = 0f,
+            horizonDetected = false,
+            horizonY = 0.5f,
+            subjectX = 0.5f,
+            subjectY = 0.5f,
+            subjectConfidence = 0f,
+            subjectSize = 0f,
+            subjectLeft = 0f,
+            subjectTop = 0f,
+            subjectRight = 1f,
+            subjectBottom = 1f,
+            targetX = 0.6667f,
+            targetY = 0.3333f,
+            suggestMove = false,
             histogram = FloatArray(HISTOGRAM_BINS)
         )
     }

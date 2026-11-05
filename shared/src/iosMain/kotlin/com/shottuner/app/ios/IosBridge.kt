@@ -16,6 +16,7 @@
 
 package com.shottuner.app.ios
 
+import com.shottuner.app.analysis.CompositionAnalyzer
 import com.shottuner.app.analysis.DimensionScore
 import com.shottuner.app.analysis.FrameStatsCore
 import com.shottuner.app.analysis.FrameStatsDump
@@ -23,7 +24,6 @@ import com.shottuner.app.analysis.IosDimensionDto
 import com.shottuner.app.analysis.IosFrameAnalysisDto
 import com.shottuner.app.analysis.ScoreBoard
 import com.shottuner.app.analysis.ScoreDimension
-import com.shottuner.app.model.CompositionHint
 import com.shottuner.app.model.SceneType
 import com.shottuner.app.sensors.LevelMath
 import com.shottuner.app.text.NumFmt
@@ -185,15 +185,15 @@ object IosBridge {
      *
      * ## 三个容易做错的点（都已在实现里钉住）
      *
-     * 1. **`scoreNoTilt` 必须等于 [hintScore]。** 倾斜已经被「水平度」维度扣过一次分，
-     *    如果构图维度再用含倾斜的分数，同一处歪斜会被罚两遍，总分不可解释。
+     * 1. **构图分用 `hint.scoreNoTilt`，不是 `hint.score`。** 倾斜已经被「水平度」
+     *    维度扣过一次分，如果构图维度再用含倾斜的分数，同一处歪斜会被罚两遍，
+     *    总分不可解释。`CompositionAnalyzer` 同时给出这两个值，别拿错。
      * 2. **`rollValid == false` 时给 `ScoreBoard.score` 传 `roll = null`。**
      *    `ScoreBoard.level()` 正是靠 `roll == null`（且没有地平线）来判定
      *    「两个源都没有」→ 记满分 + 标「未测」。传 0f 会变成「测了，很平」，
      *    缺传感器就变成了假数据。
-     * 3. **`CompositionHint.tips` 传 `emptyList()` 是安全的。** `ScoreBoard` 的
-     *    建议生成完全不读 `hint.tips`（文案由 `ScoreBoard` 自己按四维分数产出），
-     *    所以不需要把 Swift 的提示文案再过一遍边界。
+     * 3. **构图提示由本函数内部算，不接受外部传入。** 见下面「构图为什么不再由
+     *    Swift 传入」一节 —— 上一版有 15 个 hint 参数，那是设计错误。
      *
      * ## 提示只给一条
      *
@@ -220,22 +220,24 @@ object IosBridge {
      * @param rollValid 传感器是否有有效值；false 时按「没有重力源」处理
      * @param sceneName `SceneType` 的枚举名（`NIGHT` / `BACKLIT` / `PORTRAIT` /
      *   `LANDSCAPE` / `INDOOR` / `ACTION` / `GENERAL`）；无法识别时按 `GENERAL` 处理
-     * @param hintScore 构图分（0..100，已剔除倾斜扣分的那一项）
-     * @param tiltDeg 地平线倾角（度）
-     * @param horizonDetected 是否检测到可信地平线
-     * @param horizonY 地平线纵向位置 0..1
-     * @param subjectX 主体重心横坐标 0..1
-     * @param subjectY 主体重心纵坐标 0..1
-     * @param subjectConfidence 主体显著性置信度 0..1
-     * @param subjectSize 主体占画面比例 0..1
-     * @param subjectLeft 主体外框左边界 0..1
-     * @param subjectTop 主体外框上边界 0..1
-     * @param subjectRight 主体外框右边界 0..1
-     * @param subjectBottom 主体外框下边界 0..1
-     * @param targetX 建议落点横坐标 0..1
-     * @param targetY 建议落点纵坐标 0..1
-     * @param suggestMove 是否有更适合移动到交点的建议
      * @return 扁平分析结果；三平面无效 / 尺寸过小时返回 [IosFrameAnalysisDto.FAILED]
+     *
+     * ## 构图为什么不再由 Swift 传入
+     *
+     * 上一版这里有 15 个 hint 参数（`hintScore` / `tiltDeg` / `subjectX` …），
+     * 要求 Swift 侧先算好构图提示再传回来。**那是设计错误**：
+     *
+     * `CompositionAnalyzer.analyze(s: FrameStats)` 只吃 `FrameStats`，是纯函数。
+     * 让 Swift 传 hint 等于要求它在 Swift 里重写一遍构图分析，或者在 Swift 里
+     * 维护一份「这些参数该从哪来」的映射 —— 两端必然走样，而且走样了没人会发现
+     * （构图分只是少几分的差别，不像崩溃那样显眼）。
+     *
+     * 现在链路和 Android 完全一致：
+     * `FrameStatsCore.compute → CompositionAnalyzer.analyze → ScoreBoard.score`，
+     * 三步都在 commonMain，iOS 只是从 [analyzeFrame] 这一个入口进。
+     *
+     * ⇒ 参数从 26 个降到 11 个。少 15 个跨语言参数，就少 15 处「传错顺序」
+     *   或「传了默认值忘了改」的机会。
      */
     fun analyzeFrame(
         yPlane: ByteArray,
@@ -248,22 +250,7 @@ object IosBridge {
         focusFallback: Float,
         roll: Float,
         rollValid: Boolean,
-        sceneName: String,
-        hintScore: Int,
-        tiltDeg: Float,
-        horizonDetected: Boolean,
-        horizonY: Float,
-        subjectX: Float,
-        subjectY: Float,
-        subjectConfidence: Float,
-        subjectSize: Float,
-        subjectLeft: Float,
-        subjectTop: Float,
-        subjectRight: Float,
-        subjectBottom: Float,
-        targetX: Float,
-        targetY: Float,
-        suggestMove: Boolean
+        sceneName: String
     ): IosFrameAnalysisDto {
         val result = FrameStatsCore.compute(
             yPlane = yPlane,
@@ -285,27 +272,11 @@ object IosBridge {
 
         val stats = result.stats
 
-        // tips 传空表是安全的：ScoreBoard 生成建议时不读 hint.tips（文案自己按四维分数产出）。
-        // scoreNoTilt = hintScore：倾斜已经由「水平度」扣过一次，构图不能再扣第二次。
-        val hint = CompositionHint(
-            score = hintScore,
-            tiltDeg = tiltDeg,
-            horizonDetected = horizonDetected,
-            horizonY = horizonY,
-            subjectX = subjectX,
-            subjectY = subjectY,
-            subjectConfidence = subjectConfidence,
-            subjectSize = subjectSize,
-            subjectLeft = subjectLeft,
-            subjectTop = subjectTop,
-            subjectRight = subjectRight,
-            subjectBottom = subjectBottom,
-            targetX = targetX,
-            targetY = targetY,
-            suggestMove = suggestMove,
-            tips = emptyList(),
-            scoreNoTilt = hintScore
-        )
+        // 构图分析与 Android 走同一份实现：只吃 FrameStats，纯函数。
+        // 算不出来时 analyze() 自己返回 CompositionHint.EMPTY（全 0 / 置信度 0），
+        // 不是 null，所以这里不需要判空 —— 构图维度会按 0 分算，
+        // 主体标记因置信度 0 不画，这是「没构图数据」应有的表现。
+        val hint = CompositionAnalyzer.analyze(stats)
 
         // 未知场景名一律退到 GENERAL，不抛异常：跨语言边界上抛异常最难定位。
         val scene = SceneType.entries.firstOrNull { it.name == sceneName } ?: SceneType.GENERAL
@@ -345,6 +316,23 @@ object IosBridge {
             p95 = stats.p95,
             highlightClip = stats.highlightClip,
             shadowClip = stats.shadowClip,
+            // 构图字段全部来自上面那一次 CompositionAnalyzer.analyze(stats)。
+            // Swift 侧拿去做覆盖层（主体圈、地平线、三分交点），不需要再算一遍。
+            hintScore = hint.scoreNoTilt,
+            tiltDeg = hint.tiltDeg,
+            horizonDetected = hint.horizonDetected,
+            horizonY = hint.horizonY,
+            subjectX = hint.subjectX,
+            subjectY = hint.subjectY,
+            subjectConfidence = hint.subjectConfidence,
+            subjectSize = hint.subjectSize,
+            subjectLeft = hint.subjectLeft,
+            subjectTop = hint.subjectTop,
+            subjectRight = hint.subjectRight,
+            subjectBottom = hint.subjectBottom,
+            targetX = hint.targetX,
+            targetY = hint.targetY,
+            suggestMove = hint.suggestMove,
             histogram = stats.histogram
         )
     }
