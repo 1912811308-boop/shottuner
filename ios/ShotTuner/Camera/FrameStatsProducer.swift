@@ -637,7 +637,12 @@ enum FrameStatsProducer {
     /// ★ Kotlin 的 `Byte` 是**有符号**的，Kotlin 侧用 `toInt() and 0xFF` 还原。
     ///   所以这里必须存**位模式**：`255` 要变成 `-1`，用 `Int8(bitPattern:)`，
     ///   绝不能写 `Int8(255)`（会 trap）。
-    private static func kotlinByteArray(_ bytes: [UInt8]) -> KotlinByteArray {
+    ///
+    /// ★ `internal` 而不是 `private`：`ScoreCoordinator` 的实时链路
+    ///   （`handleFrame` → `IosBridge.analyzeFrame`）要传同样三个平面。
+    ///   让两边共用这一个函数，是为了守住「全仓只有一处写 `KotlinByteArray`
+    ///   的构造 / 写入方法名」这条纪律 —— 复制一份出来，就等于多一处会失配的地方。
+    static func kotlinByteArray(_ bytes: [UInt8]) -> KotlinByteArray {
         let array = KotlinByteArray(size: Int32(bytes.count))
         for (index, byte) in bytes.enumerated() {
             array.set(index: Int32(index), value: Int8(bitPattern: byte))
