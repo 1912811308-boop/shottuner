@@ -8,6 +8,66 @@
 > ★ 但内部 `versionCode` **仍然单调递增**（Android 的 33、iOS 的 1，两端独立）：
 > 系统靠 versionCode 判断能不能覆盖安装，**回退会导致装不上**。它与用户看到的版本号是两回事。
 
+## 1.0.1 (versionCode 34 / iOS build 2) - 2026-11-05 - 「iOS 首次真正能拍」
+
+**Android：与 1.0.0 功能一致，无用户可见变化。** 这一版的 Android 包是**重新构建的同源代码**，
+只多了共享模块里给 iOS 用的扁平 DTO 与任务引擎的时间查询方法 —— 都不进 Android 的调用路径，
+R8 会整条裁掉。重出的理由是让产物与 tag 指向同一个提交，不是修 bug。
+
+**iOS：从「工程骨架」变成「能看画面、能出分」。** 1.0.0 的 iOS 包界面里写着
+「本版本只搭骨架」，这一版把**取景与评分这条主链**接上了线：
+
+- **相机取景接线完成**：`AVCaptureSession` + `AVCaptureVideoDataOutput` 取帧，
+  预览层与覆盖层分离，覆盖层是透明 `Canvas`，不挡取景
+- **四维参考分接线完成**：iOS 把 YUV420 三平面直接送进 `shared` 的同一份
+  `FrameStatsCore → CompositionAnalyzer → ScoreBoard` 链路 —— 与 Android 是**同一份实现**，
+  不是照抄一套。未测全时显示「参考分 --」，不印假数字
+- **构图引导层**：三分线 / 中心十字 / 水平参考线 / 地平线倾角 / 主体标记 / 俯仰刻度六层。
+  其中**后三层**（水平参考线、地平线倾角、俯仰刻度）挂 `hasReading` 闸门 ——
+  冷启动还没读到画面时**一条线都不画**，而不是拿默认值画一条「你已经端平了」的绿线
+- **实时直方图**：64 桶，`sqrt` 压缩动态范围（不压缩的话夜景会全挤在最左边一条）
+- **首屏任务卡**：`MissionEngine` 与 Android 共用。Swift 侧每 400ms 送一次
+  `now` / `roll` / `rollValid` 三个标量过去，判定、计时、文案全在 Kotlin。
+  **频率必须 400ms 而不是跟着 10fps 走** —— 引擎内部是逐 tick 的 EMA 平滑，
+  按 10fps 喂会让收敛快 4 倍，且两端分叉不会有任何报错
+- **83 条技法图鉴**：与 Android 同源（`PhotographyBook`）
+
+**⚠️ 这一版 iOS 仍然不完整，别当成功能对齐：**
+
+- **没有快门** —— `CameraSession.capturePhoto(to:)` 写好了但没接 UI，**当前 iOS 包拍不了照**
+- **场景识别没接线** —— `VisionSceneDetector`（466 行）写完了但零调用，场景恒为默认值
+- **参数建议没接线** —— `setManualExposure` 零调用，ISO / 快门 / WB / EV 那套「照拨」建议还没进 UI
+- **没有分数历史、没有录像页、没有关于页**
+
+上面这些是 T17–T20，排在下一批。这一版刻意只验证「主链能编出来」——
+6 949 行从未编译过的 Swift，一次验三件事不如一次验一件。
+
+**零网络**：iOS 侧无 `URLSession` / `NSURLConnection` / `CFStream`，无第三方依赖
+（无 CocoaPods、无 SPM），与 Android 同一条承诺。
+
+**这一版最值得记的不是功能，是方法。** iOS 侧 6 949 行 Swift 在发布前**一次都没被编译过**
+（开发机是 Windows，没有 Xcode；唯一能编的是 CI 的 macOS runner，按分钟计费所以攒着跑）。
+Windows 上那 6 道 CI 门禁**一道都不编 Swift**，所以编译错误可以完整地躺在仓库里。
+
+对策是**盲编译静态审计**：不靠编译器，靠读代码按八类高频错误逐条核 ——
+不存在的类型（`Boolean`）、缺 `import`、`@MainActor` 隔离、`onChange` 形态、
+`@Published` 可见性、`CaseIterable` rawValue 的可选性、Kotlin↔Swift 符号逐参数对照、
+`Float` 与 `CGFloat` 不隐式提升。两轮审出 3 个确定性编译错误：
+
+- `CameraSession` 里写成 `contains({...})` —— `Sequence.contains` 的两个重载
+  分别是 `contains(_:)` 与 `contains(where:)`，省掉 `where:` 标签两个都匹配不上
+- `ScoreCoordinator` 对 `split` 出来的 `Substring` 调 `trimmingCharacters` ——
+  该方法只定义在 `String` 上
+- `MissionModel` 用了 `ObservableObject` / `@Published` 却没 `import Combine` ——
+  一个 import 决定整个任务卡功能能不能编译
+
+另外抓出两条**不报错但会让功能静默失效**的：
+
+- `updateMotion` 零调用 ⇒ `rollValid` 恒 false ⇒ 水平维度永远「未测」⇒
+  **总分永远显示 `--`**。全程不崩、不报错、日志干净，肉眼回归抓不住
+- 成绩卡把「四维不齐」标志在最后一米丢了 ⇒ 到位那一刻约 14/15 概率印出
+  **偏低的假分数**。主面板守住了「未测就不印数字」这条线，成绩卡漏了
+
 ## 1.0.0 (versionCode 33) - 2026-10-29 - 「Android + iOS 双端」
 
 **Android：功能完整版。** 横屏可用 + 数值口径修复。
