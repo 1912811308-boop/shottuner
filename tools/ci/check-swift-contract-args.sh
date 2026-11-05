@@ -34,10 +34,11 @@
 #   ⑤ `.init(` 形式不支持（本项目没用；将来若用，这里会漏检而不是误报）。
 #
 # ── 临时排除 ─────────────────────────────────────────────────────────────────
-#   ContentView.swift 正在接线（team-lead 改完会挪出排除表）。
-#   ★ 一旦它从 EXCLUDED_WHILE_EDITING 里删掉，tools/ci/test-gates.sh 里
-#     「ContentView 里的坏参数名 → 绿」那条用例会跟着变红 —— 那是**故意的绊线**，
-#     提醒改的人把用例一起改掉，而不是让排除表 quietly 留下来。
+# ★ 现在**空的**。此前 ContentView.swift 在接线，被短期排除；
+#   team-lead 接线完成后已挪出，tools/ci/test-gates.sh 里那条绊线也同步改成了
+#   「期望红」。留着这个空数组是为了让结构不变 —— 下次有人要临时排除时，
+#   往这里加一项，并**同时**在 test-gates.sh 加一条「期望绿」的绊线，
+#   删的时候两处一起删。
 #
 # 用法： tools/ci/check-swift-contract-args.sh [仓库根目录]
 # 退出码： 0 = 通过；1 = 有违规；2 = 门禁自身出错。
@@ -60,10 +61,8 @@ CONTRACTS=(
 )
 
 # ── 临时排除 ─────────────────────────────────────────────────────────────────
-# ★ 见文件头「临时排除」。删掉这一行的人，请同步改 tools/ci/test-gates.sh 的对应用例。
-EXCLUDED_WHILE_EDITING=(
-  "ios/ShotTuner/ContentView.swift"
-)
+# ★ 见文件头「临时排除」。删掉某一项的人，请同步改 tools/ci/test-gates.sh 的对应用例。
+EXCLUDED_WHILE_EDITING=()
 
 for contract in "${CONTRACTS[@]}"; do
   [ -f "${ROOT}/${contract}" ] || ci_die "缺少契约文件：${contract}（清单写错了，或被移动了）"

@@ -420,13 +420,14 @@ expect fail "第二个契约文件里的结构体同样受检 → 契约门禁�
 printf 'var typed: SampleSnapshot { SampleSnapshot(alpha: 3) }\n' > "${CALLER}"
 expect pass "类型标注 + 内部的合法构造 → 契约门禁绿" "${CONTRACT}" "${REPO}"
 
-# ⑩ ContentView.swift 临时排除（★绊线）
-#    接线期间它被排除在扫描之外。等 team-lead 把它从 EXCLUDED_WHILE_EDITING 里删掉，
-#    这条「期望绿」会自动变成红 —— 那是故意的：逼改的人把本条一起改成 expect fail。
+# ⑩ ContentView.swift 已移出排除表（★原绊线的落点）
+#    接线期间它被排除在扫描之外，那条「期望绿」就是绊线：谁把排除表清空却忘了
+#    改用例，这里会立刻红。team-lead 接线完成后两处一起改了 —— 现在它和普通
+#    .swift 一样受检，坏参数名必须红。
 rm -f "${CALLER}"
 printf 'let z = SampleSnapshot(omega: 1)\n' \
   > "${REPO}/ios/ShotTuner/ContentView.swift"
-expect pass "ContentView.swift 在临时排除表里 → 契约门禁绿" "${CONTRACT}" "${REPO}"
+expect fail "ContentView.swift 已纳入扫描 → 契约门禁红" "${CONTRACT}" "${REPO}"
 rm -f "${REPO}/ios/ShotTuner/ContentView.swift"
 
 # ⑪ 排除表清空后，同一个坏调用必须变红（证明 ⑩ 的绿是「被排除」而不是「扫不到」）
