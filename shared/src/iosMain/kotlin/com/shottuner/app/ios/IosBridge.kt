@@ -301,6 +301,12 @@ object IosBridge {
         // 正是这次 analyzeFrame 内部算出来的东西 —— 丢掉了就得跨语言重传整帧字节。
         IosMissionBridge.rememberAnalysis(stats, hint, scoreResult)
 
+        // 参数建议（IosFeatureBridge）与录像方案（IosVideoBridge）都吃 `FrameStats?`。
+        // 这里存下**这一帧的真实例**，是全仓唯一写 `IosFrameCache.latest` 的地方 ——
+        // 门面读缓存，Swift 一个统计量都不用传，也就没有「其余 14 个字段填 0」
+        // 从而把缺数据伪装成 0 的机会。理由详见 IosFrameCache.kt 文件头。
+        IosFrameCache.latest = stats
+
         return IosFrameAnalysisDto(
             ok = true,
             total = scoreResult.total,
