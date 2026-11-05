@@ -209,9 +209,17 @@ struct GuideSnapshot: Equatable {
     ///   `levelOkDegrees()` 让它真正单一来源，现在写在这里是为了先有唯一出处。
     static let levelOkDegrees: Float = 2.5
 
-    /// 是否已经收到可信的构图 / 姿态读数。
+    /// 是否已经收到可信的**构图**读数。
     ///
-    /// 对应 Android `GuideOverlayView.onDraw` 开头的 `val hint = hint ?: return`。
+    /// 对应 Android `GuideOverlayView.onDraw` 开头的 `val hint = hint ?: return`，
+    /// 也就是「`CompositionHint` 到手了没」。由 `ScoreCoordinator.land(...)`
+    /// 在从 DTO 填完构图字段后置 `true`。
+    ///
+    /// ★ **姿态读数（`rollDegrees` / `pitchDegrees`）不置这个标志。**
+    ///   姿态先到、构图还没算出来时，覆盖层仍然不该画参考线 —— 因为主体框、
+    ///   地平线、三分交点全都来自构图读数，半份数据画出来是错位的。
+    ///   姿态只影响 `isLevel`（而且 `resolveIsLevel` 里还有 `guard hasReading`，
+    ///   没构图读数时直接给 `false`，不可能出现"姿态一到位就变绿"）。
     ///
     /// ★ **为什么必须有这个字段**：`isLevel` 是裸 `Bool`，分不出「已端平」和
     ///   「还没收到数据」。而 `GuideSnapshot.empty` 里 `isLevel = true`
