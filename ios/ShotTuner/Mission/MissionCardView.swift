@@ -17,7 +17,9 @@
 //   本文件里出现的文案只有两处是我们自己加的（「到位了」「继续」），
 //   其余全部来自 Kotlin 侧下发的字符串，不在 Swift 里拼中文。
 //
-// ★ 无障碍：按项目约定**一律不加** `.accessibility*` 修饰符，这里刻意不写。
+// ★ 无障碍：按项目约定一律不加相关修饰符。这里连它们的名字都不写出来 ——
+//   本项目已经有过一次「门禁用关键字扫源码，结果扫到了自己注释里那个词」
+//   的先例，注释里留个词面量就是给将来的门禁埋雷。
 
 import SwiftUI
 
@@ -222,8 +224,12 @@ struct MissionCardView: View {
                 .frame(width: 6, height: 6)
 
             Text("\(snapshot.remainingSeconds)s")
+                .font(.caption2.weight(.semibold))
                 // 等宽数字：15s → 9s 时宽度不变，右侧不会抖。
-                .font(.caption2.monospacedDigit().weight(.semibold))
+                // ★ 用 `View.monospacedDigit()`（iOS 15+）而不是 `Font.monospacedDigit()`：
+                //   前者是公开文档里明确标了 iOS 15.0+ 的那个重载，后者在旧 SDK 上
+                //   是否存在过版本差异，没必要拿编译门禁去赌。
+                .monospacedDigit()
                 .foregroundStyle(urgent ? Palette.warn : Palette.overlayTextSecondary)
                 // 定宽：秒数换行成两行是最难看的破相。
                 .fixedSize()
@@ -300,7 +306,9 @@ struct MissionScoreCardView: View {
     private var scoreRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Text("\(snapshot.awardedScore)")
-                .font(.system(size: 46, weight: .bold, design: .rounded).monospacedDigit())
+                .font(.system(size: 46, weight: .bold, design: .rounded))
+                // 等宽数字：82 → 100 时数字位宽固定，卡片不会左右抖。
+                .monospacedDigit()
                 .foregroundStyle(Palette.accent)
 
             // 「分」比数字小两档并与基线对齐：它是单位，不是第二个读数。
