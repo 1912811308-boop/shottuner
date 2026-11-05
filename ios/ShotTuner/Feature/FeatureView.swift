@@ -25,7 +25,7 @@
 //      `VisionSceneDetector`。iOS 侧的 Vision 场景检测还没接线，Swift 手里
 //      根本没有这份 tags。**所以 iOS 侧不拼这个后缀** —— 注意不是「拼一个空串」，
 //      是不拼；缺数据的正确表现是「少一句话」，不是「多一句『AI 看到 』」。
-//      等 Vision 接线后，网关应该把 tags 从 Kotlin 侧下发（与建议同一批），
+//      等 Vision 接线后，应该把 tags 从 Kotlin 侧下发（与建议同一批数据），
 //      而不是在 Swift 里重算一份场景识别 —— 重算必然与建议用的场景不同源。
 //   2) `needsTripod` 恒为 `false`：Android 传的是
 //      `lastRecommendation?.needsTripod == true`，那个值来自参数建议引擎
@@ -105,6 +105,19 @@ private struct AdviceRow: Identifiable {
 /// 调用方（`ContentView`）负责：把这个页面放进 `.sheet` 或取景层上的按钮里、
 /// 在关闭时把 `onClose` 接回自己的 `@State`。本视图自己**不持有**任何
 /// 「是否显示」的状态 —— 显示与否是调用方的决定，这里只画内容。
+///
+/// ★ 为什么整个 struct 标 `@MainActor`（这不是多余的装饰，去掉就是编译错）：
+///   观察对象 `ScoreCoordinator` 本身是 `@MainActor` 的，而本文件里
+///   `rebuild()` 要读它的 `lastAnalysisAt` / `sceneName`。
+///   `rebuild()` 是**普通实例方法**（不是 `body`，也拿不到 `body` 的隐式隔离），
+///   在非隔离上下文里读主 actor 隔离的属性，Swift 5.9 会报
+///   "Main actor-isolated property 'sceneName' can not be referenced from a
+///   nonisolated context"。
+///   把隔离提到 struct 上，`rebuild()`、`card(for:)`、静态常量全都跟着落在主 actor，
+///   一次解决；顺带保证 `onAppear` / `onChange` 这些回调里的写状态也在主线程。
+///   这与 `ContentView.swift`（同一句注释）和 `VideoPlanView.swift` 是同一个套路
+///   —— 本仓三个页面共用「协调器是 @MainActor」这一个事实，处理方式必须一致。
+@MainActor
 struct FeatureView: View {
 
     /// 评分协调器。**只读两个东西**：`lastAnalysisAt`（有没有过读数）
