@@ -53,54 +53,60 @@ import kotlin.concurrent.Volatile
 /**
  * 成长摘要的跨语言形状 —— `ScoreHistory.firstVsBest()` 的拍平版。
  *
- * | 字段 | 口径 |
- * |---|---|
- * | [hasGrowth] | **有一份可直接显示的成长对比**时为 true。false → 四个数值全部不可显示 |
- * | [firstTotal] | 第一张（时间最旧）的总分 |
- * | [bestTotal] | 历史最好总分 |
- * | [delta] | `bestTotal - firstTotal` |
- * | [shotCount] | 记录条数（含未测记录），**这一项永远是真值** |
+ * ## 字段表（每个 `xxxValid` 的口径）
  *
- * ## ★ [hasGrowth] == false 时，四个数值**不是 0，是「没有」**
- * Swift 侧必须写成：
+ * | 字段 | 真值来源 | `xxxValid` 的含义 |
+ * |---|---|---|
+ * | [hasGrowth] | `firstVsBest() != null`，即「凑够 [MIN_RECORDS_FOR_GROWTH] 条记录」 | （本身就是标志位）false → 整张卡不显示 |
+ * | [firstTotal] | `GrowthSummary.firstTotal` | `firstTotal != null`：第一张（时间最旧）的总分是**测出来的**。false → 0 不是分数 |
+ * | [bestTotal] | `GrowthSummary.bestTotal` | `bestTotal != null`：**至少有一条**四维齐全的记录，历史最好分存在。false → 0 不是分数 |
+ * | [delta] | `GrowthSummary.delta` | `delta != null`：即 `firstTotalValid && bestTotalValid`。false → 0 不是差值 |
+ * | [shotCount] | `size()` / `GrowthSummary.shotCount` | **没有 valid 标志，永远是真值**，与 [hasGrowth] 无关 |
  *
- * ```
- * let g = IosGrowthBridge.shared.growth()
- * if g.hasGrowth { Text("首次 \(g.firstTotal) → 最佳 \(g.bestTotal)（+\(g.delta)）") }
- * else { Text("参考分 --") }        // 不许把 0 印出来
- * ```
+ * ## ★ 三条使用规则（Swift 侧照这个写，不要自己推断）
+ *
+ * 1. **`hasGrowth == false` → 整张成长卡不显示**（不是显示一堆 `--`）。
+ *    记录数不够时拿不出任何一条有意义的对比，画一张全是破折号的卡只是噪音。
+ * 2. **`hasGrowth == true` 时，每个数值必须单独看自己的 `xxxValid`**：
+ *    invalid 就印 `--`，并且把**依赖它的文案一起拿掉**。
+ *    例如「首次 \(first) → 最佳 \(best)（+\(delta)）」在首张未测时要写成
+ *    「首次 -- → 最佳 \(best)」，**整句的 `（+delta）` 必须去掉**（见规则 3）。
+ * 3. **`delta` 只有 `firstTotalValid && bestTotalValid` 才为 valid**。
+ *    一个「从 -- 到 82」的差值不是 82，是**没有差值** ——
+ *    把它算成「+82 分」是在编造进步幅度，比不显示伤害大得多。
+ *
+ * ## ★ 为什么每个数值要配一个 valid，而不是用 null
+ * `Int?` 不许裸过跨语言边界（`Int?` 会变成 `KotlinInt?`，Swift 侧每次都要 `.intValue`
+ * 拆包，而且极易把 nil 当成 0 用 —— 这正是本仓最忌讳的「缺数据伪装成 0」）。
+ * ⇒ `Int` + 显式 `Boolean`，把「有没有」和「是多少」拆成两个字段，编译器逼着调用方先问前者。
  *
  * 「首次 0 分」和「首次没测到」在用户眼里是两件事：前者说明他拍废了，
  * 后者说明我们没测出来。把后者显示成 0，就是在冤枉用户 ——
  * 本仓已经因为「成绩卡印假分数」被打回过一次（见 `IosMissionDto.scoreMeasured`），
  * 这里是同一个坑的第二个入口。
  *
- * ## ★ 为什么 `hasGrowth` 的含义比「记录数 ≥ 2」更严
- *
- * `firstVsBest()` 在记录数 ≥ 2 时返回非 null，但它的 `firstTotal` / `bestTotal` /
- * `delta` **仍可能是 null**（首张四维不全 / 一条有分记录都没有）。
- * 而本 DTO 的四个数值字段是非空 `Int`（理由见文件头第 3 条：`Int?` 不许过边界）。
- * 于是「记录数够了但首张未测」这个组合下，只有两种写法：
- *   · 返回 `hasGrowth = true` + `firstTotal = 0` → **印出假分数**，禁止；
- *   · 返回 `hasGrowth = false` → 这次不显示成长卡，但一个假数字都不会出现。
- * ⇒ 选后者。`hasGrowth` 的语义因此是「**有一份可以直接显示的对比**」，
- *   而不是「记录数够了」。记录数本身随时可以用 [IosGrowthBridge.count] 取。
- *
- * 代价：首张恰好未测的用户，会看不到「最佳 82」这条信息（Android 侧可以显示
- * 「首次 -- / 最佳 82」）。若要补齐，正确做法是给本 DTO 增加
- * `firstTotalValid` / `bestTotalValid` / `deltaValid` 三个标志位 ——
- * 那是契约变更，需要与 Swift 侧同步改，不在本次授权范围内。
+ * ## ★ 为什么不把「首张未测」整个吞掉（`hasGrowth = false`）
+ * 这是上一版的写法，**已按产品口径废弃**：用户首张恰好没测全、后面拍出了 82 分时，
+ * 「最佳 82」对他是**有价值的信息**，Android 侧也能显示「首次 -- / 最佳 82」。
+ * 拿「藏掉整张卡」去换「不印假数字」是让产品功能给实现方便让路 ——
+ * 现在三个 `xxxValid` 同时满足两个要求：既印不出假数字，也不丢信息。
  */
 class IosGrowthDto(
-    /** 是否有一份可直接显示的成长对比。false → 下面四个数值不可显示。 */
+    /** `firstVsBest() != null`（凑够记录数）。false → **整张成长卡不显示**。 */
     val hasGrowth: Boolean,
-    /** 第一张的总分。[hasGrowth] == false 时为 0，**不是真实值，不可显示**。 */
+    /** 第一张的总分。[firstTotalValid] 为 false 时这个 0 **不是分数**，必须印 `--`。 */
     val firstTotal: Int,
-    /** 历史最好总分。[hasGrowth] == false 时为 0，不可显示。 */
+    /** [firstTotal] 是否是测出来的真分数（首张四维齐全）。 */
+    val firstTotalValid: Boolean,
+    /** 历史最好总分。[bestTotalValid] 为 false 时这个 0 **不是分数**，必须印 `--`。 */
     val bestTotal: Int,
-    /** `bestTotal - firstTotal`。[hasGrowth] == false 时为 0，不可显示。 */
+    /** [bestTotal] 是否真的存在（至少一条四维齐全的记录）。 */
+    val bestTotalValid: Boolean,
+    /** `bestTotal - firstTotal`。[deltaValid] 为 false 时这个 0 **不是差值**，整句「提高了 N 分」都要去掉。 */
     val delta: Int,
-    /** 记录条数（含未测记录）。**永远是真值**，可以显示「已记 N 张」。 */
+    /** [delta] 是否存在，即 `firstTotalValid && bestTotalValid`。 */
+    val deltaValid: Boolean,
+    /** 记录条数（含未测记录）。**永远是真值**，可以显示「已记 N 张」，与 [hasGrowth] 无关。 */
     val shotCount: Int
 )
 
@@ -299,30 +305,44 @@ object IosGrowthBridge {
     /**
      * 成长摘要：第一张 vs 历史最好。
      *
-     * [IosGrowthDto.hasGrowth] 为 false 时**四个数值全部不可显示**（详见 DTO 的 KDoc，
-     * 那里写了为什么这个标志比「记录数 ≥ 2」更严）。
+     * ★ 三个 `xxxValid` 直接从 common 侧的三个 `Int?` 取「是不是 null」，
+     *   **不做任何额外推断**（比如「记录数够就假设首张有分」）——
+     *   `firstVsBest()` 在记录数 ≥ 2 时返回非 null，但它内部的 `firstTotal` /
+     *   `bestTotal` / `delta` 仍可能各自为 null。这里逐个如实搬运，
+     *   让 UI 自己决定哪一项印 `--`（规则见 [IosGrowthDto] 的 KDoc）。
+     *
+     * ★ [IosGrowthDto.hasGrowth] 只表达「凑够记录数了没」，**不再兼职**
+     *   「数值能不能显示」—— 那是三个 valid 标志各自的职责。
      */
     fun growth(): IosGrowthDto {
         val summary = history.firstVsBest()
-        val delta = summary?.delta
-        // delta == null 蕴含 firstTotal 或 bestTotal 为 null：此时没有任何一组数字
-        // 既能填满四个字段又不造假，所以整张卡不显示（见 DTO KDoc 的两种写法对比）。
-        if (summary == null || delta == null) {
+        if (summary == null) {
+            // 记录数不够（< MIN_RECORDS_FOR_GROWTH）：整张卡不显示。
             return IosGrowthDto(
                 hasGrowth = false,
                 firstTotal = 0,
+                firstTotalValid = false,
                 bestTotal = 0,
+                bestTotalValid = false,
                 delta = 0,
+                deltaValid = false,
                 // 条数永远是真值，与 count() 一致 —— Swift 仍可显示「已记 N 张」。
                 shotCount = history.size()
             )
         }
+        val first = summary.firstTotal
+        val best = summary.bestTotal
+        val delta = summary.delta
         return IosGrowthDto(
             hasGrowth = true,
-            // 走到这里 delta != null 已经蕴含两者非空，`?: 0` 只是为了从 Int? 拆包。
-            firstTotal = summary.firstTotal ?: 0,
-            bestTotal = summary.bestTotal ?: 0,
-            delta = delta,
+            // `?: 0` 只是为了从 Int? 拆包；这 0 由旁边的 valid 标志兜住，不会被当成分数。
+            firstTotal = first ?: 0,
+            firstTotalValid = first != null,
+            bestTotal = best ?: 0,
+            bestTotalValid = best != null,
+            delta = delta ?: 0,
+            // common 侧已经保证 delta 只在两端都有值时非空，这里如实透传即可。
+            deltaValid = delta != null,
             shotCount = summary.shotCount
         )
     }
