@@ -62,11 +62,9 @@ private enum ScoreDefaults {
     ///   而**评分是慢变量**（手抖 0.3° 不该让分数跳），10fps 已经比人眼快得多。
     static let minimumInterval: CFTimeInterval = 0.1
 
-    /// 判定「地平线方向已经端平」的角度容差（度）。
-    ///
-    /// ★ 与 common 的 `LevelMath` 容差同口径（1°）。这里是**画面内结构线**的判据，
-    ///   不是手机姿态的判据 —— 两者数据源不同，不能互相顶替。
-    static let horizonLevelTolerance: Float = 1.0
+    // ★ 「端平了没」的阈值**不在这里**：它由 `GuideSnapshot.levelOkDegrees`（2.5°）
+    //   单点持有，理由见那个常量的注释（必须与 `MissionThresholds.LEVEL_ENTER_DEG` 同值）。
+    //   本文件不再自带一份，避免出现「覆盖层绿了、任务卡说不达标」的分叉。
 }
 
 // MARK: - 跨线程的分析输入
@@ -352,8 +350,12 @@ final class ScoreCoordinator: ObservableObject {
     /// 传感器喂入（横滚角 / 俯仰角，单位：度）。
     ///
     /// ★ `rollValid == false` 表示这一次没有可信读数（刚拿起手机、CoreMotion 还没收敛）。
-    ///   此时**保留上一次的 `isLevel`**，不要因为「没数据」就翻成「已端平」——
-    ///   那等于给用户一个假的「可以按快门」信号。
+    ///   此时 `isLevel` 直接给 `false`（参考线保持白色），**不是**沿用上一次的绿色 ——
+    ///   沿用旧值等于在「没有数据」的时候告诉用户「已经端平了」，那是假信号。
+    ///   与 Android `GuideOverlayView` 的 `rollDeg ?: Float.NaN → levelOk = false` 同口径。
+    ///
+    /// ★ 一个采样只有一个有效性标志：`roll` 与 `pitch` 同帧同源，
+    ///   所以 `pitchAvailable` 也用 `rollValid`（对应 Android 的 `pitchDeg != null`）。
     /// - Parameters:
     ///   - rollDegrees: 横滚角（度），正值表示画面右侧偏低。
     ///   - pitchDegrees: 俯仰角（度）。
@@ -366,6 +368,7 @@ final class ScoreCoordinator: ObservableObject {
 
         guide.rollDegrees = rollDegrees
         guide.pitchDegrees = pitchDegrees
+        guide.pitchAvailable = rollValid
         guide.isLevel = resolveIsLevel(rollValid: rollValid)
     }
 
@@ -710,22 +713,33 @@ final class ScoreCoordinator: ObservableObject {
         return validSceneNames.contains(name) ? name : ScoreDefaults.scene
     }
 
-    /// 判定「画面是否已端平」。
+    /// 判定「画面是否已端平」——**覆盖层参考线该不该变绿**。
     ///
-    /// ★ 双数据源规则（与 Android `ScoreBoard.level()` 同口径）：
-    ///   · 有可信地平线 ⇒ 用**画面内结构线**的倾角（`tiltDeg`），容差 1°；
-    ///   · 没有地平线   ⇒ 只能退到**手机姿态**（`roll`），走 common 的 `LevelMath`。
-    ///   两者不能互相顶替：结构线的角度与手机横滚角是两回事（对着斜墙拍照时，
-    ///   手机端平了结构线仍然歪，反之亦然）。
+    /// ★ 逐行照抄 Android `GuideOverlayView` 的 `levelOk` 判据，不要各写一套：
+    /// ```kotlin
+    /// val theta = if (hint.horizonDetected) hint.tiltDeg else (rollDeg ?: Float.NaN)
+    /// val levelOk = theta.isFinite() && abs(theta) <= LEVEL_OK_DEG   // 2.5
+    /// ```
+    /// 对应到 Swift 就是下面四行：有地平线看**画面结构线倾角**（最准），
+    /// 没有地平线退到**手机横滚角**，两个源都没有 ⇒ `false`（线保持白色）。
     ///
-    /// ★ `rollValid == false` 且无地平线时返回**上一次的值** —— 没有数据就不改口。
+    /// ★ 阈值用 `GuideSnapshot.levelOkDegrees`（2.5°），**不是** `LevelMath` 的 1°：
+    ///   1° 是**评分**口径（`ScoreBoard.level` 走 `LevelMath.isLevel`），
+    ///   2.5° 是**覆盖层 + 任务环**口径（`MissionThresholds.LEVEL_ENTER_DEG`）。
+    ///   拿 1° 画线会让 iOS 的线比 Android 晚 1.5° 变绿，也会出现「线绿了但任务环不绿」。
+    ///   两个口径各有各的消费者，混用哪一边都是错。
     /// - Parameter rollValid: 本次横滚角是否可信。
     /// - Returns: 是否已端平。
     private func resolveIsLevel(rollValid: Bool) -> Bool {
+        let theta: Float
         if guide.horizonDetected {
-            return abs(guide.tiltDeg) <= ScoreDefaults.horizonLevelTolerance
+            theta = guide.tiltDeg
+        } else if rollValid {
+            theta = guide.rollDegrees
+        } else {
+            // 两个源都没有：不绿。不要沿用上一次的值 —— 那是「假装有数据」。
+            return false
         }
-        guard rollValid else { return guide.isLevel }
-        return IosBridge.shared.isLevel(roll: Double(guide.rollDegrees))
+        return abs(theta) <= GuideSnapshot.levelOkDegrees
     }
 }
