@@ -124,6 +124,20 @@ struct ContentView: View {
             }
         }
         .onAppear(perform: startIfAllowed)
+        // ★ 这条是「权限刚被授予」的兜底，不依赖 `scenePhase`。
+        //
+        //   用户的真实路径是：首次启动 → `onAppear` 时还是 `.notDetermined` 直接返回
+        //   → 点「申请相机权限」→ 系统弹窗 → 授权 → `status` 变 `.authorized`
+        //   → `body` 重算、界面切到取景层，但 **`onAppear` 不会重跑**
+        //   （ZStack 的身份没变，只是内部 `if/else` 换了分支）。
+        //   默认情况下系统权限弹窗会把 App 打成 `.inactive` 再回 `.active`，
+        //   所以上面那条 `onChange(of: scenePhase)` 能兜住 —— 但那是**隐含契约**：
+        //   iPad 分屏 / Stage Manager / 某些模拟器版本下弹窗不一定改变 scenePhase，
+        //   一旦不改变，用户授权后就是永久黑屏且没有任何提示。
+        //   直接盯 `status` 才是因果正确的那条线，`scenePhase` 那条退化成保险。
+        .onChange(of: cameraPermission.status) { status in
+            if status.allowsCapture { startIfAllowed() }
+        }
         .onDisappear(perform: stopEverything)
         .sheet(isPresented: $showingTechniqueDex) {
             TechniqueDexView()
@@ -317,9 +331,16 @@ struct ContentView: View {
         guard cameraPermission.status.allowsCapture else { return }
 
         // 已经起过就只补传感器与任务定时器，绝不重入相机链路。
+        //
+        // ★ 这里要判各自的「已在跑」标志，不能无条件重起：
+        //   `MotionProvider.start()` 第一句就是 `stop()`，而 `stop()` 会清掉
+        //   `warmUpStartedAt` —— 每次走到这条分支都把 200ms 预热窗口从头算，
+        //   接下来约 6 帧 `rollValid` 为 false（`roll = null`），水平维度白等一次。
+        //   同理 `MissionModel.start()` 会先把 `snapshot` 打回 `.idle`，卡片会闪一下。
+        //   两个现成的闸门（`motion.isAvailable` / `mission.isRunning`）就是为这个准备的。
         guard !pipelineStarted else {
-            startMotion()
-            startMission()
+            if !motion.isAvailable { startMotion() }
+            if !mission.isRunning { startMission() }
             return
         }
         pipelineStarted = true

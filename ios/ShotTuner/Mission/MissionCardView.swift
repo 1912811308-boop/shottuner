@@ -305,16 +305,23 @@ struct MissionScoreCardView: View {
     /// 用来当 Aha 时刻的主视觉偏小；60pt 以上在 4.7 吋屏上会让 message 掉出卡片。
     private var scoreRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
-            Text("\(snapshot.awardedScore)")
+            // ★ 四维不齐时印「--」而不是数字。判据来自 `snapshot.scoreMeasured`，
+            //   它是 Kotlin 在到位那一刻冻结的 `allMeasured` —— 不要在这里
+            //   拿 `awardedScore > 0` 之类去猜：0 分和「未测」是两件事，
+            //   非可选量表达不了「未知」，本仓已经在这上面栽过（`pitchAvailable`）。
+            Text(snapshot.scoreMeasured ? "\(snapshot.awardedScore)" : "--")
                 .font(.system(size: 46, weight: .bold, design: .rounded))
                 // 等宽数字：82 → 100 时数字位宽固定，卡片不会左右抖。
                 .monospacedDigit()
                 .foregroundStyle(Palette.accent)
 
             // 「分」比数字小两档并与基线对齐：它是单位，不是第二个读数。
-            Text("分")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(Palette.overlayTextSecondary)
+            // 未测时不显示单位 —— 「-- 分」读起来像「零分」。
+            if snapshot.scoreMeasured {
+                Text("分")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Palette.overlayTextSecondary)
+            }
         }
     }
 

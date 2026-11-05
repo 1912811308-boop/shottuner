@@ -16,6 +16,13 @@
 // ★ 这一层只做三件事：拿当前 roll → 调 Kotlin → 把 DTO 翻成 Swift 值类型。
 //   任何判定、计时、文案都不在这里写。写了就是第二份实现。
 
+// ★ `import Combine` 不能省：`ObservableObject` 与 `@Published` 都定义在 Combine 里，
+//   `Foundation` 不会替它递过来，KMP 的 `Shared` 框架更不会。
+//   本仓另外两个用同样符号的文件（`ScoreCoordinator.swift:54`、
+//   `CameraPermissionModel.swift:10`）都显式写了这一行 —— 漏了就是
+//   "cannot find type 'ObservableObject' in scope" + "unknown attribute 'Published'"，
+//   而且会连带把 `ContentView` 里的 `@StateObject private var mission` 一起拖红。
+import Combine
 import Foundation
 import Shared
 
@@ -52,7 +59,12 @@ final class MissionModel: ObservableObject {
     ///   `ScoreCoordinator.updateMotion` 写的那份 `guide` 里。
     ///   本类再存一份自己的 roll 就成了第二个来源，两份一定会不同步
     ///   （时序上必然有几十毫秒的窗口）—— 而水平任务的判定就吃这个值。
-    private var rollProvider: (() -> (roll: Float, valid: Bool))?
+    ///
+    /// ★ 属性类型上的 `@MainActor` **不能省**：`start(rollProvider:)` 的形参是
+    ///   `@escaping @MainActor () -> ...`，若这里写成裸 `() -> ...`，
+    ///   赋值那一步就是「丢掉全局 actor」的转换（该告警在 Swift 6 会升级成错误）。
+    ///   同仓 `MotionProvider.swift:112` 的 `onSample` 就是正确写法，照着来的。
+    private var rollProvider: (@MainActor () -> (roll: Float, valid: Bool))?
 
     // MARK: - 生命周期
 
@@ -166,6 +178,10 @@ final class MissionModel: ObservableObject {
             ringProgress: dto.ringProgress,
             remainingSeconds: Int(dto.remainingSeconds),
             awardedScore: Int(dto.awardedScore),
+            // ★ 这个标志必须透传，不能丢：它决定成绩卡印数字还是「参考分 --」。
+            //   到位那一刻四维大概 14/15 概率不齐（清晰度每 15 帧才实测一次），
+            //   丢掉它就会把一个偏低的残缺总分当成真分印出来。
+            scoreMeasured: dto.scoreMeasured,
             message: dto.message
         )
     }

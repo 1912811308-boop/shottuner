@@ -122,6 +122,18 @@ struct MissionSnapshot: Equatable {
     /// 成绩卡得分（0..100）。仅 `phase == .scored` 时有意义。
     var awardedScore: Int
 
+    /// 冻结那一刻的四维是否齐全。
+    ///
+    /// ★ 铁律同 `ScoreSnapshot.hasTotal`：为 `false` 时成绩卡必须显示「参考分 --」，
+    ///   **不能印 `awardedScore`**。
+    ///   理由不是洁癖：清晰度每 15 帧才实测一次，到位那一刻大约 14/15 的概率
+    ///   是「清晰度未测」，此时 Kotlin 给的 `total` 是「清晰度按 0 分算」的残缺和，
+    ///   比真实分低一截。印出来就是拿半个数据骗人 —— 而这正是整个 App 反复守的那条线。
+    ///
+    /// ★ 默认 `true`：本字段之前不存在，`MissionCardPreviews` 里那批构造函数
+    ///   都不传它；给默认值就不会为了一个标志去改 8 处预览。
+    var scoreMeasured: Bool = true
+
     /// 成绩卡文案。仅 `phase == .scored` 时有意义。
     var message: String
 
