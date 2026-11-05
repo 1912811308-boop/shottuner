@@ -96,6 +96,44 @@ class MissionEngine {
         return TaskPicker.progressOf(stateValue, task.kind, smoothed)
     }
 
+    /**
+     * 当前阶段的剩余毫秒数 —— **全工程唯一的倒计时口径**，iOS 侧的倒计时读的也是它。
+     *
+     * ## 为什么做成状态机的只读访问器，而不是让调用方自己算
+     *
+     * 「到什么时候算超时 / 到什么时候收成绩卡」三个截止时刻分别由 `shownAtMs` /
+     * `achievedAtMs` / `scoredAtMs` 这三个私有字段加 [MissionThresholds] 的常量决定。
+     * 一旦某个调用方照着阈值常量自己再算一遍，就必然漏掉这里的细节，例如：
+     * 超时是**从 `shownAtMs`（派发时刻）起算**的，不是从 `IN_PROGRESS` 起算
+     * （`TASK_SHOWN` 那 800ms 缓冲也占用 20 秒预算），也不是从第一次判定的时刻起算。
+     * 漏掉任何一条，两端倒计时就会**静默**漂移 —— 400ms 一 tick，20 秒窗口里差一帧
+     * 就是 0.4 秒，不会有任何报错，用户只会觉得「倒计时不准」。
+     *
+     * ⇒ 计时只写在这一个地方。Android 将来若要显示倒计时，也读这个函数，不要另算。
+     *
+     * ## 时间基准
+     *
+     * 用的是 [lastNowMs]（最近一次 [onSample] 传入的 `now`），所以**必须在
+     * `onSample()` 之后调用**。在 [abort] / [resume] 之后、下一次 tick 之前调用时，
+     * 读到的是上一次 tick 的时刻，误差最多一个 tick（400ms），对倒计时无影响。
+     *
+     * @return `IDLE` 恒为 0；其余状态为「距本阶段结束还有多少毫秒」，已夹到 ≥ 0
+     */
+    fun remainingMs(): Long = when (stateValue) {
+        // 没有任务就没有倒计时。不能返回负数：UI 会把负数直接印出来。
+        MissionState.IDLE -> 0L
+        // TASK_SHOWN 与 IN_PROGRESS 共用同一个截止时刻：超时判定就是
+        // `s.now - shownAtMs > TASK_TIMEOUT_MS`（见 tickProgress）。
+        MissionState.TASK_SHOWN, MissionState.IN_PROGRESS ->
+            (shownAtMs + MissionThresholds.TASK_TIMEOUT_MS - lastNowMs).coerceAtLeast(0L)
+        // 到位后 1.2s 转成绩卡（见 tickAchieved）。
+        MissionState.ACHIEVED ->
+            (achievedAtMs + MissionThresholds.ACHIEVE_TO_SCORE_MS - lastNowMs).coerceAtLeast(0L)
+        // 成绩卡停留 8s 后自动收起（见 tickScored）。
+        MissionState.SCORED ->
+            (scoredAtMs + MissionThresholds.SCORE_CARD_MS - lastNowMs).coerceAtLeast(0L)
+    }
+
     // ── 各状态的 tick ──────────────────────────────────────────────────────────
 
     private fun tickIdle(s: MissionSample): MissionEvent {

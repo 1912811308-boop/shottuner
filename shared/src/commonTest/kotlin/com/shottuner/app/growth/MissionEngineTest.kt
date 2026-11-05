@@ -429,4 +429,66 @@ class MissionEngineTest {
         assertEquals(MissionState.IDLE, engine.state)
         assertNull(engine.current)
     }
+
+    // ── 14. 倒计时口径（remainingMs）───────────────────────────────────────────
+
+    @Test
+    fun remainingMsIsZeroWhenIdle() {
+        // 一个 tick 都没喂过：lastNowMs = 0，绝不能返回负数或 20s
+        assertEquals(0L, MissionEngine().remainingMs(), "IDLE 没有倒计时")
+    }
+
+    @Test
+    fun remainingMsCountsDownFromDispatchNotFromProgress() {
+        val engine = dispatchComposition(now = 1_000L)
+        // 派发那一刻：整整 20s。TASK_SHOWN 的 800ms 缓冲也吃这 20s 预算，
+        // 所以倒计时从 shownAtMs 起算，而不是从进 IN_PROGRESS 的那一刻起算。
+        assertEquals(MissionThresholds.TASK_TIMEOUT_MS, engine.remainingMs())
+
+        engine.onSample(sample(now = 6_000L, atTarget = true))
+        assertEquals(15_000L, engine.remainingMs(), "5s 后应该剩 15s")
+
+        // 恰好 20s：仍未超时（判定用的是 `>`），剩余夹到 0，不能是负数
+        engine.onSample(sample(now = 21_000L, atTarget = true))
+        assertEquals(MissionState.IN_PROGRESS, engine.state, "恰好 20s 还不算超时")
+        assertEquals(0L, engine.remainingMs(), "剩余必须夹到 ≥ 0")
+    }
+
+    @Test
+    fun remainingMsFollowsAchievedAndScoredWindows() {
+        val engine = dispatchComposition(now = 1_000L)
+        var now = 1_000L
+        var event = MissionEvent.NONE
+        while (event != MissionEvent.ACHIEVED && now < 20_000L) {
+            now += TICK
+            event = engine.onSample(sample(now = now, atTarget = true))
+        }
+        assertEquals(MissionEvent.ACHIEVED, event)
+        // ACHIEVED 阶段的"剩余"是「还有多久转成绩卡」，不是任务超时
+        assertEquals(MissionThresholds.ACHIEVE_TO_SCORE_MS, engine.remainingMs())
+        val achievedAt = now
+
+        engine.onSample(sample(now = achievedAt + MissionThresholds.ACHIEVE_TO_SCORE_MS))
+        assertEquals(MissionState.SCORED, engine.state)
+        // SCORED 阶段的"剩余"是成绩卡还要停留多久
+        assertEquals(MissionThresholds.SCORE_CARD_MS, engine.remainingMs())
+
+        engine.onSample(sample(now = achievedAt + MissionThresholds.ACHIEVE_TO_SCORE_MS + 3_000L))
+        assertEquals(5_000L, engine.remainingMs(), "8s 里过了 3s")
+
+        // 成绩卡收完之后回到 IDLE → 0
+        engine.onSample(
+            sample(now = achievedAt + MissionThresholds.ACHIEVE_TO_SCORE_MS + MissionThresholds.SCORE_CARD_MS)
+        )
+        assertEquals(MissionState.IDLE, engine.state)
+        assertEquals(0L, engine.remainingMs(), "任务结束后回到 0")
+    }
+
+    @Test
+    fun abortZeroesRemainingMs() {
+        val engine = dispatchComposition(now = 1_000L)
+        assertEquals(MissionThresholds.TASK_TIMEOUT_MS, engine.remainingMs(), "派发后有倒计时")
+        engine.abort(AbortReason.TAB)
+        assertEquals(0L, engine.remainingMs(), "中断后没有倒计时")
+    }
 }

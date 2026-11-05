@@ -296,6 +296,11 @@ object IosBridge {
         // 产品口径：提示卡只说一条。ScoreBoard 最多给 3 条，这里只取最重要的一条。
         val primaryTip = scoreResult.recommendations.firstOrNull()
 
+        // 任务卡的数据源复用这一次分析，不重新算一遍：Swift 的 400ms tick
+        // （IosMissionBridge.tick）要组装 MissionSample，而 stats / hint / recs
+        // 正是这次 analyzeFrame 内部算出来的东西 —— 丢掉了就得跨语言重传整帧字节。
+        IosMissionBridge.rememberAnalysis(stats, hint, scoreResult)
+
         return IosFrameAnalysisDto(
             ok = true,
             total = scoreResult.total,
