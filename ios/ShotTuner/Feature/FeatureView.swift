@@ -27,20 +27,17 @@
 //      是不拼；缺数据的正确表现是「少一句话」，不是「多一句『AI 看到 』」。
 //      等 Vision 接线后，应该把 tags 从 Kotlin 侧下发（与建议同一批数据），
 //      而不是在 Swift 里重算一份场景识别 —— 重算必然与建议用的场景不同源。
-//   2) `needsTripod` 恒为 `false`：Android 传的是
-//      `lastRecommendation?.needsTripod == true`，那个值来自参数建议引擎
-//      （曝光 / 快门 / 三脚架判定）。iOS 侧还没接那个引擎，Swift 手里没有这个布尔。
-//      ⇒ 代价（必须写清楚，别当它不存在）：`FeatureAdvisor` 里有一条
-//        「1b. 夜景长曝：别用手指戳快门」（`if (dark && needsTripod)`，约 60 行），
-//        传 `false` 就是**这条永远不会出现**，其余规则一条都不受影响。
-//        这是**已知的、可接受的缺失**：少一条建议，好过多一条用不上的建议。
-//      ⇒ 两条禁令：
-//        · **不许**为了「让 1b 出现」猜一个 `true` —— 会在根本不需要三脚架的
-//          明亮场景里也给用户一条「按快门别用手指戳」，那是噪音，比缺失更糟。
-//        · **不许**为了「补上这条建议」在 Swift 里自己重算「是否需要三脚架」——
-//          那是把 `RecommendationEngine` 的一半逻辑搬进 Swift，
-//          它会和 Kotlin 侧的定义慢慢分叉，而且分叉后不会报错。
-//        正确做法是等参数建议引擎接线，把这个值从 `Recommendation` 搬过来。
+//   2) `needsTripod` **由调用方传入**（`ParamAdvisor` 从 `ParamRecommender` 拿到）。
+//      这条曾经是「恒为 false」的已知缺失 —— iOS 侧没接参数建议引擎，Swift 手里
+//      没有这个布尔，代价是「1b. 夜景长曝：别用手指戳快门」这条建议永远不出现。
+//      现在 `IosParamBridge` 补上了那个引擎，`Recommendation.needsTripod` 有了来源，
+//      所以它变成**输入参数**而不是常量。
+//      ⇒ 两条禁令仍然有效，只是理由变了：
+//        · **不许**在拿不到真实值时猜 `true` —— 明亮场景里给一条「按快门别用手指戳」
+//          是噪音，比缺失更糟。拿不到就传 `false`（`ParamAdvice.none.needsTripod` 就是 false）。
+//        · **不许**在这个文件里自己重算「是否需要三脚架」—— 那是把
+//          `RecommendationEngine` 的一半逻辑搬进 Swift，它会和 Kotlin 侧慢慢分叉，
+//          而且分叉后不会报错。
 //
 // ★ 跨语言规则（详见 SharedKernelBridge.swift 文件头）
 //   · Kotlin `object` → Swift `Xxx.shared`，**不是** `Xxx()`
@@ -138,6 +135,16 @@ struct FeatureView: View {
     ///   探测频率就由调用方一次性决定（Android 侧也是 Activity 持有一份 profile）。
     ///   本视图把它当**只读、不可变**的输入用，不做任何字段判断。
     let profile: DeviceProfile
+
+    /// 当前是否需要三脚架。
+    ///
+    /// ★ 来源是 `ParamAdvisor` 发布的那份建议（`ParamAdvice.needsTripod`），
+    ///   由 `Recommendation.needsTripod` 逐字搬过来 —— 与 Android 完全同源。
+    ///   拿不到读数时调用方传 `false`：少一条建议，好过多一条用不上的建议。
+    ///
+    /// ★ 为什么不在这里自己算：那是把 `RecommendationEngine` 的一半逻辑搬进 Swift，
+    ///   会和 Kotlin 侧慢慢分叉，而且分叉后不会报错。
+    let needsTripod: Bool
 
     /// 关闭回调。调用方在这里把自己的 sheet 状态置回 `false`。
     var onClose: () -> Void
@@ -293,13 +300,13 @@ struct FeatureView: View {
             //   Swift 侧**不要**在这里做 trim / 大小写规整 —— 两处口径一旦不同，
             //   同一帧画面的「建议说夜景、评分说通用」就会同时出现，而两边都不认为自己错。
             //
-            // ★ `needsTripod: false` —— 见文件头第 2 条已知差异：参数建议引擎
-            //   还没接线，因此「1b. 夜景长曝：别用手指戳快门」这一条不会出现。
-            //   这是有意的缺失，不是 bug；不许猜 `true`，也不许在 Swift 里重算。
+            // ★ `needsTripod` 直接透传调用方给的值 —— 它来自
+            //   `Recommendation.needsTripod`（经 `ParamAdvisor` 搬过来），
+            //   与 Android 完全同源。见文件头第 2 条。
             bridge.adviseRefresh(
                 profile: profile,
                 sceneName: coordinator.sceneName,
-                needsTripod: false
+                needsTripod: needsTripod
             )
         } else {
             bridge.capabilityRefresh(profile: profile)

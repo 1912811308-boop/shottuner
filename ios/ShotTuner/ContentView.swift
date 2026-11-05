@@ -74,6 +74,13 @@ struct ContentView: View {
     /// 拍照 → 落相册 →（可选）水印 的流水线。
     @StateObject private var captureFlow = CaptureFlow()
 
+    /// 「照拨」参数建议。每 500ms 从 `ParamRecommender` 取一次。
+    ///
+    /// ★ 这是本产品名字的由来：ISO / 快门 / 色温 / EV 该拨到多少。
+    ///   引擎在 commonMain，之前 iOS 侧一次都没调过（没有门面），所以
+    ///   iOS 版能打分、能给模式建议，唯独不给「该拨几档」。
+    @StateObject private var paramAdvisor = ParamAdvisor()
+
     /// 复盘卡是否展开。
     @State private var showingReview = false
 
@@ -209,6 +216,10 @@ struct ContentView: View {
                 FeatureView(
                     coordinator: coordinator,
                     profile: session.currentDeviceProfile(),
+                    // ★ 「要不要三脚架」来自参数建议引擎，与 Android 同源。
+                    //   拿不到读数时 `ParamAdvice.none.needsTripod` 是 false ——
+                    //   少一条建议，好过多一条用不上的建议。
+                    needsTripod: paramAdvisor.advice.needsTripod,
                     onClose: { activePage = nil }
                 )
             case .video:
@@ -458,6 +469,17 @@ struct ContentView: View {
                 }
             }
 
+            // 「照拨」：ISO / 快门 / 色温 / EV 该拨到多少。
+            //
+            // ★ 这块是本产品的名字（光影调参），也是 Android 一直有、
+            //   iOS 之前完全没有的那一块。
+            // ★ `advice.valid == false` 时**整块不画**：那时的 0 不是「ISO 0」，
+            //   是「还没读到画面」。印出来会被读成「这台机器坏了」。
+            //   本仓在这一点上栽过三次，所以这里用 `if valid` 而不是判某个数。
+            if paramAdvisor.advice.valid {
+                paramRow
+            }
+
             // 提示卡：只说一条，只给动作
             if !coordinator.score.tipText.isEmpty {
                 Text(coordinator.score.tipText)
@@ -472,6 +494,39 @@ struct ContentView: View {
         // ★ 材质会自适应明暗，亮背景（天空/白墙）上它会变成白色，
         //   白字直接消失。把局部配色锁成深色，材质恒定渲成深色底。
         .environment(\.colorScheme, .dark)
+    }
+
+    /// 一行「照拨」：`ISO 400 · 1/60 · 5200K · EV +1.3`。
+    ///
+    /// ★ 整行文案直接取 `ParamAdvice.summary`，**不在 Swift 里拼**：
+    ///   快门吸附（`1/60` 而不是 `1/63`）、EV 的 `±0` 与负号 U+2212，
+    ///   三条都是口径，`IosParamBridge` 已按 Android 的 `tvParamsSummary` 生成。
+    ///   Swift 再拼一遍就是第二份实现，必然漂移。
+    ///
+    /// ★ 为什么只给一行摘要、不铺四个大数字：
+    ///   取景器上的空间要留给画面。一行等宽数字足够「照着拨」，
+    ///   而四个独立数字块会把提示卡挤下去 —— 那条才是「现在该做什么」。
+    ///   想看细节的走功能页（那里有完整理由）。
+    private var paramRow: some View {
+        HStack(spacing: 8) {
+            Text("照拨")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.overlayTextSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Palette.overlayText.opacity(0.10), in: Capsule())
+
+            Text(paramAdvisor.advice.summary)
+                // 等宽：数值每 500ms 可能变一次，非等宽会让整行左右抽动。
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(Palette.overlayText)
+                .lineLimit(1)
+                // 小屏上「ISO 12800 · 1/8 · 7800K · EV −2.5」会顶到边，
+                // 缩一点比截断好 —— 截断会丢掉 EV，那是最该看到的一项。
+                .minimumScaleFactor(0.75)
+
+            Spacer(minLength: 0)
+        }
     }
 
     // ── 权限门 ──────────────────────────────────────────────────────────────
@@ -541,6 +596,10 @@ struct ContentView: View {
         guard !pipelineStarted else {
             if !motion.isAvailable { startMotion() }
             if !mission.isRunning { startMission() }
+            // ★ 参数建议表也要判：`ParamAdvisor.start` 虽然自身幂等，
+            //   但这里多判一次能让「谁在跑」这件事在调用点一眼可见，
+            //   与上面两行的写法保持一致。
+            if !paramAdvisor.isRunning { startParamAdvisor() }
             return
         }
         pipelineStarted = true
@@ -548,6 +607,24 @@ struct ContentView: View {
         coordinator.attach(to: session)
         startMotion()
         startMission()
+        startParamAdvisor()
+    }
+
+    /// 起「照拨」建议的 500ms 驱动。
+    ///
+    /// ★ 为什么 `profile` 在这里取一次就够：本 App 只用后置主摄，
+    ///   换镜头（超广/长焦）不在本期范围。`currentDeviceProfile()` 要读设备能力，
+    ///   每 500ms 调一次是白烧 CPU。
+    ///
+    /// ★ 为什么把 `sceneName` 做成闭包而不是传值：场景每帧都可能变，
+    ///   传值就只能拿到「启动那一刻」的场景，功能页的「该开夜景/HDR」会永远按
+    ///   第一帧算。闭包每次取样时现读 `ScoreCoordinator` 的 `@Published`，
+    ///   保证建议与评分用的是**同一个场景**。
+    private func startParamAdvisor() {
+        paramAdvisor.start(
+            profile: session.currentDeviceProfile(),
+            sceneNameProvider: { [coordinator] in coordinator.sceneName }
+        )
     }
 
     /// 起任务卡的 400ms 驱动。
@@ -603,6 +680,7 @@ struct ContentView: View {
         //   页面都关了还会让 SwiftUI 重算一次 body。
         motion.stop()
         mission.stop()
+        paramAdvisor.stop()
         coordinator.detach()
         session.stop()
         pipelineStarted = false
