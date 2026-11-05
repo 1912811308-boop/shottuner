@@ -39,6 +39,9 @@ import UIKit
 @MainActor
 struct ContentView: View {
 
+    /// 前后台状态。用于在切后台时停掉姿态采样（见 `body` 里的 `onChange`）。
+    @Environment(\.scenePhase) private var scenePhase
+
     /// 相机权限状态机（只负责要权限，不碰任何图像数据）。
     @StateObject private var cameraPermission = CameraPermissionModel()
 
@@ -51,6 +54,16 @@ struct ContentView: View {
 
     /// 评分协调层。它是**唯一**持有 `ScoreCoordinator` 的地方。
     @StateObject private var coordinator = ScoreCoordinator()
+
+    /// 姿态采样（重力 → 横滚 / 俯仰）。
+    ///
+    /// ★ 必须是 `@State` 而不是每次 `onAppear` 现 `new` 一个：`CMMotionManager`
+    ///   是系统级单例代理，重复实例化会让回调节奏变得不可预期；`@State` 保证
+    ///   视图重建（横竖屏、分屏、SwiftUI 重算 body）时拿到的是同一个对象。
+    ///
+    /// ★ 它不是 `ObservableObject`：本类不发布 `@Published`，读数通过 `start` 的
+    ///   回调直接写进 `ScoreCoordinator`。所以这里不能用 `@StateObject`。
+    @State private var motion = MotionProvider()
 
     /// 技法图鉴是否以模态呈现。
     @State private var showingTechniqueDex = false
@@ -71,6 +84,26 @@ struct ContentView: View {
             }
         }
         .statusBarHidden(true)
+        // ★ 前后台切换**必须**在这里管：SwiftUI 的 `onDisappear` 在「App 切到后台」
+        //   时并**不会**被调用（视图还在层级里，只是被盖住了），
+        //   只靠它的话 `CMMotionManager` 会一直以 30Hz 跑到用户手动杀进程 ——
+        //   既是耗电问题，也是审核问题（`MotionProvider.stop()` 的文档里写死了这条）。
+        .onChange(of: scenePhase) { phase in
+            switch phase {
+            case .active:
+                // 只重起传感器，**不碰相机**：`CameraSession.start()` 不是幂等的
+                //（会重跑一遍 `configureAndStart`，重复加 outputs 会抛异常），
+                // 而相机从后台回来由系统自己恢复，不需要我们插手。
+                if cameraPermission.status.allowsCapture { startMotion() }
+            case .inactive, .background:
+                motion.stop()
+            default:
+                // ★ 这里刻意用 `default` 而不是 `@unknown default`：
+                //   `@unknown default` 只对**枚举**合法，对结构体是编译错误。
+                //   本仓从未编译过 iOS，写 `default` 是两种声明形式下都成立的那个。
+                break
+            }
+        }
         .onAppear(perform: startIfAllowed)
         .onDisappear(perform: stopEverything)
         .sheet(isPresented: $showingTechniqueDex) {
@@ -221,9 +254,40 @@ struct ContentView: View {
         guard cameraPermission.status.allowsCapture else { return }
         session.start()
         coordinator.attach(to: session)
+        startMotion()
+    }
+
+    /// 起姿态采样，把读数直接喂进协调层。
+    ///
+    /// ★ 为什么这一段不能省（`0f89dd3` 之前就是漏了它）：
+    ///   `ScoreCoordinator` 的 `level` 维度只在 `rollValid == true` 时才算得出来。
+    ///   没人调 `updateMotion` ⇒ `rollValid` 恒 `false` ⇒ Kotlin 侧收到 `roll = null`
+    ///   ⇒ `level.measured = false` ⇒ `ScoreSnapshot.hasTotal == false` ⇒
+    ///   **总分永远显示「参考分 --」**。全程不崩、不报错、日志干净，
+    ///   从 UI 上看起来只是「还没测出来」，所以这个漏洞靠肉眼回归抓不住。
+    ///
+    /// ★ 不判 `motion.isAvailable`：拿不到 deviceMotion 时 `start` 内部直接返回，
+    ///   一次回调都不发，`rollValid` 保持 `false` —— 正是「静默隐藏水平仪」的语义。
+    ///   在这里再判一次只会让能力探测分散在两处。
+    private func startMotion() {
+        motion.start { rollDegrees, pitchDegrees, valid in
+            // ★ 直接写 `coordinator`，不包 `Task { @MainActor }`：
+            //   `MotionProvider.start` 的闭包已经声明成 `@MainActor`，
+            //   本方法也跑在主 actor 上，再包一层只会多一次调度。
+            coordinator.updateMotion(
+                rollDegrees: rollDegrees,
+                pitchDegrees: pitchDegrees,
+                rollValid: valid
+            )
+        }
     }
 
     private func stopEverything() {
+        // ★ 顺序：先停传感器，再断帧，最后停相机会话。
+        //   反过来先 `detach` 的话，`gate` 已经作废，可传感器还在发 —— 那几十毫秒里
+        //   每一帧都会走一次 `updateMotion`，白改一次 `@Published`，
+        //   页面都关了还会让 SwiftUI 重算一次 body。
+        motion.stop()
         coordinator.detach()
         session.stop()
     }
