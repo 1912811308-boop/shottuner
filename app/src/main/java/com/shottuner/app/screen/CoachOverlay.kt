@@ -106,18 +106,25 @@ class CoachOverlay(
     /**
      * 悬浮窗**窗口坐标系模型** —— 真机第一件事要确认的就是这条。
      *
-     * 默认 [OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT]：
-     * 方向请求是 per-display 的，MainActivity 的 portrait 锁会把本 App 的悬浮窗
-     * 窗口一起锁在竖屏坐标系里，横屏时框架再把整个窗口旋转进 display 的逻辑坐标系，
-     * 所以内容必须预旋转 R×90°、拖动增量也要换算。
+     * ## ★ 2026-11-09 真机确认：真机是 [OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY]
      *
-     * ⚠️ **如果真机发现「悬浮窗窗口其实跟随了 display」**（表现：横屏时卡片侧躺 90°，
-     * 文字横着）—— **只改这一行**改成
-     * [OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY] 即可：
-     * 卡片宽度上限、坐标夹取区间、拖动增量换算、内容预旋转会一起切过去，
-     * 旋转壳也会自动退化为不启用（不再需要预旋转）。
+     * 用户实测（小米 14 Pro / HyperOS，横持手机用系统相机）：
+     * **横屏时悬浮卡侧躺 90°、字是横的，完全没法读** —— 这正是本文件下方
+     * 那段判据写的「横屏时卡片侧躺 ⇒ 窗口其实跟随了 display」。
+     *
+     * 原因：manifest 里 `MainActivity` 的 `portrait` 锁只约束**这个 Activity 的窗口**，
+     * 并没有把整个 display 锁住。系统相机（全屏、有焦点）请求横屏后 display 真的转了，
+     * 悬浮窗不属于任何 Activity，于是也跟着 display 的逻辑坐标系走。
+     * 这时若还按 LOCKED_PORTRAIT 去「预旋转 R×90°」，就是在已经横过来的画面上
+     * 再转一次 —— 结果就是侧躺。
+     *
+     * ⇒ 改成 FOLLOW_DISPLAY 之后：内容不预旋转、拖动增量不换算、
+     *   卡片宽度按逻辑宽（横屏就是长边）算，四套几何一起切过去，不需要别处配合。
+     *   竖屏下两种模型等价（R=0 时预旋转 0°、窗口尺寸同为短边×长边），所以零回归。
+     *
+     * ⚠️ 如果将来某台设备又出现侧躺（厂商可能改行为），**只改这一行**回 LOCKED_PORTRAIT。
      */
-    private val windowSpaceModel = OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT
+    private val windowSpaceModel = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
 
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val displayManager =
@@ -179,7 +186,9 @@ class CoachOverlay(
             marginDp = CARD_MARGIN_DP
         )
 
-        val anchor = OverlayOrientation.anchorFor(rotation)
+        // 落位方式必须跟着窗口模型走：FOLLOW_DISPLAY 下横屏的「上边」是真的上边，
+        // 用 CENTER 会把卡片放到画面正中、正好压住主体。见 `anchorFor` 的注释。
+        val anchor = OverlayOrientation.anchorFor(rotation, windowSpaceModel)
         val contentDegrees = OverlayOrientation.contentRotationDegrees(rotation, windowSpaceModel)
 
         val card = buildCard()

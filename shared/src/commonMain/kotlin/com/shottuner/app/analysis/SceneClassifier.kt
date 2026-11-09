@@ -52,6 +52,23 @@ object SceneClassifier {
 
         if (rule.scene == SceneType.BACKLIT && rule.confidence > 0.70f) return rule
 
+        // ★ 人像优先：只要 AI 说画面里有「人」（标签级即可，不要求脸够大），就按人像算。
+        //
+        // 为什么给它开这个口子、而不是继续用下面的「置信度 ≥ 0.85 才改判」：
+        //   实测最常见的误判是**户外人像**——人物在画面里、背景有天空/山，
+        //   AI 打成「人 + 天空 + 自然」时，规则侧会因为天空占比高算成风景（conf 常在 0.7 上下），
+        //   而标签级人像只有 0.74~0.78，**永远到不了 0.85 那条线** ⇒ 规则赢 ⇒ 判成风景。
+        //   结果就是用户举着人像拍，App 却在教他拍风景（构图建议、参数预设全跟着错）。
+        //
+        // 为什么这个方向的错更该避免：本产品的主场景就是拍人。把风景判成人像的代价
+        //   是少两句风光建议；把人像判成风景的代价是**整套建议都在讲错的对象**。
+        //
+        // 为什么阈值是 0.70 而不是照单全收：ML Kit 的 people 标签在纯风景里偶尔也会冒出来
+        //   （画面里有个远处路人），0.70 能把最弱的那一档挡掉。
+        if (mapped == SceneType.PORTRAIT && ai.confidence >= 0.70f) {
+            return Result(SceneType.PORTRAIT, ai.confidence.coerceIn(0.55f, 0.95f), "AI·人物")
+        }
+
         if (ai.confidence >= 0.85f || rule.confidence < 0.60f) {
             return Result(mapped, ai.confidence.coerceIn(0.45f, 0.95f), "AI·标签")
         }

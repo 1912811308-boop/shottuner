@@ -159,6 +159,34 @@ class CoachOverlayOrientationTest {
         )
     }
 
+    /**
+     * 真机确认后的模型（FOLLOW_DISPLAY）下，**横屏也必须是 TOP_CENTER**。
+     *
+     * ★ 这条是 2026-11-09 用户反馈「横屏悬浮卡侧躺、用不了」的直接回归测试：
+     *   窗口跟随 display 时，横屏的「上边」就是真的上边，用 CENTER 会把卡片
+     *   顶到画面正中、正好压住主体。之前 `anchorFor` 只看 rotation、不看模型，
+     *   切模型时这一处没跟着切 —— 这类「改了一个开关，另一处硬编码没跟上」的错，
+     *   只能靠测试钉住。
+     */
+    @Test
+    fun followDisplayKeepsTopCenterInLandscape() {
+        for (rotation in intArrayOf(
+            OverlayOrientation.ROTATION_0,
+            OverlayOrientation.ROTATION_90,
+            OverlayOrientation.ROTATION_180,
+            OverlayOrientation.ROTATION_270
+        )) {
+            assertEquals(
+                "FOLLOW_DISPLAY 下 rotation=$rotation 应落在顶部居中",
+                OverlayOrientation.Anchor.TOP_CENTER,
+                OverlayOrientation.anchorFor(
+                    rotation,
+                    OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+                )
+            )
+        }
+    }
+
     // ── 4. 旋转后的视觉外框 ──────────────────────────────────────────────────
 
     @Test

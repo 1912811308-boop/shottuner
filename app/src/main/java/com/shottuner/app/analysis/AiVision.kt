@@ -176,7 +176,16 @@ class AiVision {
         val hasFlower = tags.any { it in FLOWER }
 
         return when {
-            hasPeople && !hasSky -> AiScene.PORTRAIT to 0.74f
+            // ★ 画面里有「人」就判人像 —— **不再要求「没有天空」**。
+            //
+            // 原来写的是 `hasPeople && !hasSky`，于是最常见的户外人像（人在街上/海边，
+            // 背景有天空）会掉进下面的 `hasSky && hasNature`，被判成风景 0.93。
+            // 而且它是 0.93、人像是 0.74 —— 一旦判错，置信度反而更高，融合阶段更难翻回来。
+            //
+            // 为什么敢去掉 `!hasSky`：天空是**背景**，不是主体。判定该看「画面里有什么」，
+            // 不是「背景是谁」。远处路人确实会让这条偶尔误触发，但那属于 0.76 这一档，
+            // 融合阶段还有 `SceneClassifier` 的阈值兜着。
+            hasPeople -> AiScene.PORTRAIT to 0.76f
             hasFood -> AiScene.FOOD to 0.90f
             hasPet -> AiScene.PET to 0.88f
             hasSky && hasNature -> AiScene.LANDSCAPE to 0.93f

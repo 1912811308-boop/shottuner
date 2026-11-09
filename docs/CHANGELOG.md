@@ -8,6 +8,50 @@
 > ★ 但内部 `versionCode` **仍然单调递增**（Android 的 33、iOS 的 1，两端独立）：
 > 系统靠 versionCode 判断能不能覆盖安装，**回退会导致装不上**。它与用户看到的版本号是两回事。
 
+## 1.1.1 (versionCode 36 / iOS build 4) - 2026-11-10 - 「修两个真机上才看得见的错」
+
+真机反馈两条，都是「代码看着对、用起来错」的那一类。
+
+### ① 横屏时悬浮卡侧躺、用不了
+
+**根因**：`CoachOverlay` 把窗口坐标系模型硬编码成了 `LOCKED_PORTRAIT`。
+
+当初那套方向换算写得是完整的（`OverlayOrientation` 里两种模型、预旋转、拖动增量换算都有），
+但它默认假设「Activity 锁 portrait 会把整个 display 一起锁住，所以悬浮窗的窗口坐标系仍是竖屏」。
+真机不是这样：`portrait` 只约束**那一个 Activity 的窗口**，系统相机全屏且有焦点、请求横屏后
+display 真的转了，而悬浮窗不属于任何 Activity，于是跟着 display 走。
+这时再按 `LOCKED_PORTRAIT` 去「预旋转 R×90°」，就是在已经横过来的画面上又转了一次 —— 侧躺。
+
+**修法**：切到 `FOLLOW_DISPLAY`（不预旋转、拖动增量不换算、宽度按逻辑宽算），
+并把 `anchorFor` 补上模型参数 —— 它原来只看 rotation，切模型时这一处没跟着切，
+横屏会跑成「画面正中」，正好压住主体。
+
+**回归测试**：`followDisplayKeepsTopCenterInLandscape`（4 个 rotation 全覆盖）。
+
+### ② 人像 / 风景识别精度不高
+
+**根因是两条规则把最常见的户外人像判成了风景**，不是模型不行：
+
+1. `AiVision.decide` 里写的是 `hasPeople && !hasSky -> 人像`。
+   人在街上/海边、背景有天空时，条件不成立，掉进 `hasSky && hasNature -> 风景 0.93`。
+   **而且风景给了 0.93、人像只有 0.74** —— 一旦判错，置信度反而更高，后面更难翻回来。
+2. `SceneClassifier` 的融合规则是「AI 置信度 ≥ 0.85 才改判规则」。
+   标签级人像只有 0.74~0.78，**永远够不到这条线**，于是规则（偏风景）赢。
+
+**修法**：
+- `decide`：`hasPeople -> 人像 0.76`，去掉 `!hasSky`。天空是背景，不是主体。
+- `SceneClassifier`：标签级人像 ≥ 0.70 直接覆盖规则，来源标 `AI·人物`。
+  理由是**错的方向更有害**：把风景判成人像只少两句风光建议，
+  把人像判成风景则是整套建议都在讲错的对象。
+
+**回归测试**：`SceneClassifierTest` 6 条，其中 `outdoorPortraitBeatsLandscapeRules`
+做过反向验证 —— 把修复关掉后**只有这一条变红**（1/182），其余全绿，说明它精确钉住了这个 bug。
+
+### 这一版没动的
+
+`VisionSceneDetector`（iOS 侧）仍是 0 调用点；`setManualExposure` 仍是 0 调用点。
+Android 侧的场景识别这次改的是判定规则，不是新功能。
+
 ## 1.1.0 (versionCode 35 / iOS build 3) - 2026-11-05 - 「iOS 补齐四块够不着的功能」
 
 **Android：与 1.0.1 功能一致，无用户可见变化。** 这一版的 Android 包是重新构建的同源代码，

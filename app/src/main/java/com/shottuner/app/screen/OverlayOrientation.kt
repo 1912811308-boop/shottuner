@@ -177,9 +177,33 @@ object OverlayOrientation {
         WindowSpaceModel.FOLLOW_DISPLAY -> realWidthPx to realHeightPx
     }
 
-    /** 该姿态下的落位方式 */
-    fun anchorFor(rotation: Int): Anchor =
-        if (isLandscape(rotation)) Anchor.CENTER else Anchor.TOP_CENTER
+    /**
+     * 该姿态下的落位方式。
+     *
+     * ★ 必须看 `model`，不能只看 `rotation`：
+     *   - [WindowSpaceModel.LOCKED_PORTRAIT]：横屏时窗口被框架整体旋转，
+     *     窗口坐标系里「上边」其实是画面的侧边，没有安全的顶部区域，所以用 [Anchor.CENTER]。
+     *   - [WindowSpaceModel.FOLLOW_DISPLAY]：窗口坐标系就是 display 的逻辑坐标系，
+     *     横屏时「上边」是真的上边，用 [Anchor.TOP_CENTER] 才对 ——
+     *     沿用 CENTER 会把卡片放到画面正中，正好压住主体，比竖屏的顶部位置更糟。
+     *
+     * ★ 默认值保持 [WindowSpaceModel.LOCKED_PORTRAIT]：既有调用点与测试的行为不变，
+     *   只有真正知道模型的地方（`CoachOverlay`）才显式传。
+     *
+     * @param rotation `Display.getRotation()`
+     * @param model 窗口坐标系模型
+     */
+    fun anchorFor(
+        rotation: Int,
+        model: WindowSpaceModel = WindowSpaceModel.LOCKED_PORTRAIT
+    ): Anchor =
+        if (model == WindowSpaceModel.FOLLOW_DISPLAY) {
+            Anchor.TOP_CENTER
+        } else if (isLandscape(rotation)) {
+            Anchor.CENTER
+        } else {
+            Anchor.TOP_CENTER
+        }
 
     /**
      * 卡片宽度上限。
