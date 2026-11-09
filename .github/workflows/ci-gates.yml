@@ -139,9 +139,14 @@ jobs:
     # ★ 为什么不用 macos-latest：
     #   实测 2026-10-27，免费私有仓库的 macOS runner **排队 15 分钟就被自动取消**
     #   （GitHub 在分配不到 runner 时会 cancel 并报 failure）。
-    #   较老的 runner 版本供给更多、排队更短，所以固定用 macos-14。
-    #   排队被取消**不消耗 macOS 配额**（没跑就不计时），所以多试几个标签是安全的。
-    runs-on: macos-14
+    #   ★ 2026-11-09 查到**真正的原因**（不是排队，也不是私有/公开）：
+    #     两个 macOS job 的 check-run annotation 写的是
+    #       `The configuration 'macos-14-arm64-us-default' is not supported`
+    #     —— `macos-14` 现在解析成 **arm64** 配置，这个账号档位不支持它，
+    #     于是 job 在 0 个 step 时就被 cancel（连 runner 都没分到）。
+    #   ⇒ 改成 `macos-13`：那是 Intel 镜像，标签本身不含 arm64 变体。
+    #     设备包要的是 `-arch arm64`，**Intel 机器可以交叉编译**，不影响产物架构。
+    runs-on: macos-13
     # 排队 + 编译的总时限；超了就明确失败，别让人以为跑过
     timeout-minutes: 45
     # 只手动触发 + 允许手动跑分档；不做 push 触发 —— 保护 macOS 配额
@@ -286,8 +291,10 @@ jobs:
   #   所以点一次 = 两份 macOS 占用 —— 攒着跑，不要每次 push 都点。
   ios-package:
     name: iOS 出包（macOS · 手动触发）
-    # ★ 与 ios-compile 同款 runner：macos-latest 在免费私有仓库上排队会被取消。
-    runs-on: macos-14
+    # ★ 与 ios-compile 同款 runner。`macos-14` 解析成 arm64 配置，
+    #   这个账号档位不支持（annotation 原文：`...'macos-14-arm64-us-default' is not supported`），
+    #   会在 0 个 step 时被 cancel。改 `macos-13`（Intel），交叉编译出 arm64 设备包。
+    runs-on: macos-13
     timeout-minutes: 60
     if: github.event_name == 'workflow_dispatch'
     # ★ 需要 contents: write：把 ipa 挂到 v1.0.0 这个 Release 上（与 Android 的 apk 同一个）。
