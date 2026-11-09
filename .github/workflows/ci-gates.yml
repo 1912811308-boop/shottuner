@@ -12,6 +12,17 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    # ★ 为什么把 macOS runner 标签做成**手动触发的输入**：
+    #   2026-11-09 一天之内试了三个标签（macos-14 不支持、macos-13 排队 31 分钟拿不到机器），
+    #   而**每换一次标签都要提交一次、并且因为 tag 要保持与出包源一致还要移一次 tag** ——
+    #   移 tag 本身是危险动作，为了一个纯 CI 配置反复做它不值。
+    #   做成输入之后，换标签 = 重新点一次 Run workflow，不改代码、不动 tag。
+    inputs:
+      macos_runner:
+        description: 'macOS runner 标签（macos-15-intel / macos-14 / macos-13）'
+        required: false
+        default: 'macos-15-intel'
+        type: string
 
 jobs:
   gates:
@@ -144,9 +155,11 @@ jobs:
     #       `The configuration 'macos-14-arm64-us-default' is not supported`
     #     —— `macos-14` 现在解析成 **arm64** 配置，这个账号档位不支持它，
     #     于是 job 在 0 个 step 时就被 cancel（连 runner 都没分到）。
-    #   ⇒ 改成 `macos-13`：那是 Intel 镜像，标签本身不含 arm64 变体。
-    #     设备包要的是 `-arch arm64`，**Intel 机器可以交叉编译**，不影响产物架构。
-    runs-on: macos-13
+    #   ⇒ 用 Intel 镜像（arm64 变体拿不到），但具体哪个标签由手动触发时的输入决定。
+    #     `macos-13` 实测排队 31 分钟仍分不到机器（可能正在退役），
+    #     所以默认换成 `macos-15-intel`；都不行再回来改输入，**不用改代码**。
+    #     设备包要的是 `-arch arm64`，Intel 机器可以交叉编译，产物架构不受影响。
+    runs-on: ${{ inputs.macos_runner || 'macos-15-intel' }}
     # 排队 + 编译的总时限；超了就明确失败，别让人以为跑过
     timeout-minutes: 45
     # 只手动触发 + 允许手动跑分档；不做 push 触发 —— 保护 macOS 配额
@@ -293,8 +306,8 @@ jobs:
     name: iOS 出包（macOS · 手动触发）
     # ★ 与 ios-compile 同款 runner。`macos-14` 解析成 arm64 配置，
     #   这个账号档位不支持（annotation 原文：`...'macos-14-arm64-us-default' is not supported`），
-    #   会在 0 个 step 时被 cancel。改 `macos-13`（Intel），交叉编译出 arm64 设备包。
-    runs-on: macos-13
+    #   会在 0 个 step 时被 cancel。改用 Intel 镜像，标签由手动触发的输入决定。
+    runs-on: ${{ inputs.macos_runner || 'macos-15-intel' }}
     timeout-minutes: 60
     if: github.event_name == 'workflow_dispatch'
     # ★ 需要 contents: write：把 ipa 挂到 v1.0.0 这个 Release 上（与 Android 的 apk 同一个）。
