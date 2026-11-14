@@ -55,7 +55,7 @@ mkdir -p "${REPO}/ios" "${REPO}/shared/src" "${REPO}/docs" "${REPO}/tools/ci"
 cp -r "${SCRIPT_DIR}/lib" "${SCRIPT_DIR}/patterns" "${REPO}/tools/ci/"
 cp "${SCRIPT_DIR}/check-no-network.sh" "${SCRIPT_DIR}/check-no-network-config.sh" \
    "${SCRIPT_DIR}/check-apple-credentials.sh" "${SCRIPT_DIR}/check-ios-project-spec.sh" \
-   "${SCRIPT_DIR}/check-swift-contract-args.sh" \
+   "${SCRIPT_DIR}/check-swift-contract-args.sh" "${SCRIPT_DIR}/scan-binary.sh" \
    "${REPO}/tools/ci/"
 chmod +x "${REPO}/tools/ci/"*.sh
 
@@ -434,6 +434,108 @@ rm -f "${REPO}/ios/ShotTuner/ContentView.swift"
 printf 'let z = SampleSnapshot(omega: 1)\n' > "${CALLER}"
 expect fail "同一个坏调用放在被扫文件里 → 契约门禁红" "${CONTRACT}" "${REPO}"
 rm -f "${CALLER}"
+
+# ── G4 产物二进制扫描（T21）─────────────────────────────────────────────────
+# ★ 这道门禁补的是「五道源码门禁共同的盲区」：第三方 SDK 以二进制形式进来时
+#   （xcframework / 预编译 .a / 别人的 .framework），源码里搜不到任何特征串 ——
+#   因为根本没有源码，而它自带的网络代码与遥测域名会原样编进 ipa。
+#
+# ★ 它自己也会坏，而且坏法比别的门禁更隐蔽：
+#   · 找不到产物时「没东西可扫 → 通过」→ 永远绿的假门禁（第 ⑧ 条抓它）；
+#   · 白名单写反（变成"什么都不允许"）→ 每次出包都红 → 团队学会忽略它（第 ① 条抓它）；
+#   · 手滑把 Foundation 自带符号也扫进去 → 100% 误报（第 ⑨ 条抓它）。
+#   ⇒ 下面 9 条用例必须绿/红各有，其中 ①⑥⑨ 是「期望绿」，用来防"永远红"。
+#
+# ★ 本机没有 nm / plutil / codesign（Windows），所以：
+#   · Mach-O 靠**头 4 字节魔数**识别，原始字节扫描用 grep —— 本机可测；
+#   · 未定义符号（nm -u）/ ATS 的 plutil 权威解析 / codesign entitlements
+#     三条子检查在非 macOS 上会打印 ::notice:: 明确"跳过、未执行"（不是通过）。
+#     它们只能在 CI 的 macOS runner 上被真正验证，这里如实说明。
+ci_info ""
+ci_info "【G4 产物二进制扫描】"
+SCAN="${REPO}/tools/ci/scan-binary.sh"
+
+# 被注入的字面量一律从清单读（纪律：脚本里不写被禁字面量）
+TELEPAT="$(ci_load_patterns "network-binary.txt" | head -1)"
+ATSPAT="$(ci_load_patterns "ios-config-forbidden.txt" | head -1)"
+ENTPAT="$(ci_load_patterns "ios-config-forbidden.txt" | awk '/^com\.apple\.security\./ { print; exit }')"
+[ -n "${TELEPAT}" ] || ci_die "network-binary.txt 为空"
+[ -n "${ATSPAT}" ]  || ci_die "ios-config-forbidden.txt 没有 ATS 键"
+[ -n "${ENTPAT}" ]  || ci_die "ios-config-forbidden.txt 没有 entitlement 能力名"
+
+ART="${REPO}/artifacts"
+APPF="${ART}/ShotTuner.app"
+
+# 假 Mach-O：只有头 4 字节是真魔数（arm64 = cf fa ed fe，写成八进制以免依赖 \x）。
+# scan-binary.sh 只靠魔数识别二进制 —— 这正是它能在没有 nm 的机器上被反向验证的原因。
+fake_macho() {
+  local out="$1" body="$2"
+  { printf '\317\372\355\376'; printf '%s\n' "${body}"; } > "${out}"
+}
+
+# 造一个「合规」的假产物（未签名、XML plist、只有 KMP framework）。
+write_fake_app() {
+  rm -rf "${ART}"
+  mkdir -p "${APPF}/Frameworks/Shared.framework"
+  printf '<?xml version="1.0"?>\n<plist version="1.0"><dict>\n<key>CFBundleExecutable</key>\n<string>ShotTuner</string>\n</dict></plist>\n' \
+    > "${APPF}/Info.plist"
+  fake_macho "${APPF}/ShotTuner" "假的主可执行文件"
+  fake_macho "${APPF}/Frameworks/Shared.framework/Shared" "假的 KMP 内核"
+}
+
+# ① 合规产物 → 绿（同时证明白名单没有"什么都不允许"）
+write_fake_app
+expect pass "合规产物（只含 Shared.framework）→ G4 绿" "${SCAN}" "${APPF}"
+
+# ② 混入第三方 framework → 红（G4-a）
+write_fake_app
+mkdir -p "${APPF}/Frameworks/AcmeTracking.framework"
+fake_macho "${APPF}/Frameworks/AcmeTracking.framework/AcmeTracking" "第三方 SDK"
+expect fail "产物里混入第三方 framework → G4 红" "${SCAN}" "${APPF}"
+
+# ③ 混入第三方预编译 dylib → 红（G4-a）
+write_fake_app
+fake_macho "${APPF}/Frameworks/libAcmeCodec.dylib" "预编译库"
+expect fail "产物里混入第三方 dylib → G4 红" "${SCAN}" "${APPF}"
+
+# ④ 二进制里出现遥测血统特征串 → 红（G4-b 原始字节层）
+#    ★ 这一条才是"源码里搜不到"的那种情况：SDK 没有源码，只有符号/字符串。
+write_fake_app
+fake_macho "${APPF}/Frameworks/Shared.framework/Shared" "_OBJC_CLASS_\$_\$${TELEPAT}"
+expect fail "二进制里出现遥测血统特征串（没有源码也能抓到）→ G4 红" "${SCAN}" "${APPF}"
+
+# ⑤ 产物 Info.plist 的 ATS 被放宽 → 红（G4-c）
+write_fake_app
+printf '<?xml version="1.0"?>\n<plist version="1.0"><dict>\n<key>NSAppTransportSecurity</key>\n<dict>\n<key>%s</key>\n<true/>\n</dict>\n</dict></plist>\n' "${ATSPAT}" \
+  > "${APPF}/Info.plist"
+expect fail "产物 Info.plist 的 ATS 被放宽 → G4 红" "${SCAN}" "${APPF}"
+
+# ⑥ ATS 存在但明确为 false → 绿（防"一提到就红"的假门禁）
+write_fake_app
+printf '<?xml version="1.0"?>\n<plist version="1.0"><dict>\n<key>NSAppTransportSecurity</key>\n<dict>\n<key>%s</key>\n<false/>\n</dict>\n</dict></plist>\n' "${ATSPAT}" \
+  > "${APPF}/Info.plist"
+expect pass "ATS 显式设为 false → G4 绿" "${SCAN}" "${APPF}"
+
+# ⑦ entitlements 含网络能力 → 红（G4-d）
+write_fake_app
+printf '<?xml version="1.0"?>\n<plist version="1.0"><dict>\n<key>%s.client</key>\n<true/>\n</dict></plist>\n' "${ENTPAT}" \
+  > "${APPF}/archived-expanded-entitlements.xcent"
+expect fail "产物 entitlements 含网络能力 → G4 红" "${SCAN}" "${APPF}"
+
+# ⑧ 产物路径不存在 → 红（exit 2）
+#    ★ 最坏的坏法是"没东西可扫 → 通过"：路径写错会伪装成扫描通过。
+expect fail "产物路径不存在 → G4 红（不是静默通过）" "${SCAN}" "${ART}/NoSuchApp.app"
+
+# ⑨ Foundation 自带的网络符号出现在二进制里 → 必须**绿**
+#    ★ 这条把 docs/IOS-ARCH-EXEC.md §4.3 的「技术更正」变成了可执行的约定：
+#      不要扫 NSURLSession / CFNetwork —— Foundation 永远链着它们，扫它 100% 误报。
+#      注入的是 L1 源码层的整套禁用词（正好就是 Foundation 那些符号）。
+write_fake_app
+L1PATTERNS="$(ci_load_patterns "network-source.txt" | tr '\n' ' ')"
+fake_macho "${APPF}/ShotTuner" "假二进制：${L1PATTERNS}"
+expect pass "Foundation 自带网络符号（整套 L1 禁用词）在二进制里 → G4 仍绿" "${SCAN}" "${APPF}"
+
+rm -rf "${ART}"
 
 ci_log ""
 if [ "${FAIL}" -gt 0 ]; then

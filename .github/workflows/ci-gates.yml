@@ -752,6 +752,51 @@ jobs:
           fi
           echo "::notice::反假绿断言全部通过（5 组断言 + 附带的签名状态检查）"
 
+      # ── ★ G4 · 产物二进制扫描（T21 的另一半）──────────────────────────────
+      #
+      # ★ 为什么必须有这一步（这是整个任务的核心）：
+      #   现有的五道门禁**全部只扫源码文本**：
+      #     check-no-network.sh / check-no-network-config.sh / check-apple-credentials.sh
+      #     以及规格与契约两道 —— 一道都不看产物。
+      #   如果哪天有人引了一个**二进制形式**的第三方 SDK（xcframework / 预编译 .a /
+      #   别人的 .framework），它会带着自己的网络符号、自己的遥测域名**编译进 ipa**，
+      #   而五道门禁一道都不会红 —— 源码里搜不到任何特征串，因为根本没有源码。
+      #   ⇒ 这一步在**产物**上看：链了什么 framework、调了什么符号、
+      #     ATS / entitlements 有没有被放宽。补的正是那个洞。
+      #
+      # ★ 为什么扫 ipa 而不是 .xcarchive 里的 .app：
+      #   ipa 才是要被上传、要被 SideStore 装到手机上的那一份。
+      #   门禁扫「要发出去的东西」，不是扫中间产物。
+      #
+      # ★ 位置：必须在**上传 Release 之前** —— 门禁的意义就是"不合格的包不许发"。
+      #
+      # ★ 判据出处：docs/IOS-ARCH-EXEC.md §4.3（含那条「不要扫 NSURLSession /
+      #   CFNetwork —— Foundation 自带，必然误报」的技术更正）与 T21 验收 ②③。
+      - name: G4 · 产物二进制扫描（第三方 framework / 遥测符号 / ATS / entitlements）
+        run: |
+          set -euo pipefail
+          OUTDIR="${RUNNER_TEMP}/ipa-out"
+          VERSION="$(grep -E "^[[:space:]]*MARKETING_VERSION[[:space:]]*:" ios/project.yml | head -1 \
+            | sed -E 's/.*:[[:space:]]*//' | tr -d '"' | tr -d '[:space:]')"
+          ASSET_NAME="ShotTuner-${VERSION}-unsigned.ipa"
+          IPA="${OUTDIR}/${ASSET_NAME}"
+          MANIFEST="${RUNNER_TEMP}/dependency-manifest.txt"
+          # ★ 扫描前先确认产物在 —— 拿一个不存在的路径去跑，门禁只能报"找不到产物"，
+          #   而那个报错容易被误读成"门禁坏了"。这里是"上一步没出包"，说清楚。
+          test -s "${IPA}" \
+            || { echo "::error::G4 扫描前找不到 ipa：${IPA}（上一步没产出？）"; exit 1; }
+          # 脚本自己负责"扫描不通过就非零退出"；set -e 让 job 红。
+          bash tools/ci/scan-binary.sh "${IPA}" --manifest "${MANIFEST}"
+          # 依赖清单落档：写进 run 的摘要页，出问题时不用翻日志。
+          if [ -f "${MANIFEST}" ]; then
+            {
+              echo "## G4 依赖清单（产物：${ASSET_NAME}）"
+              echo '```'
+              cat "${MANIFEST}"
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          fi
+
       # ── 把 ipa 留一份 workflow artifact（Release 上传失败时的备份，
       #    也方便本地下载后独立复核一遍）──
       - name: 留档（workflow artifact）

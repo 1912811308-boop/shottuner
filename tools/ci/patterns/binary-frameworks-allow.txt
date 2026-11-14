@@ -1,0 +1,30 @@
+# G4-a · 允许出现在产物里的内嵌 framework / dylib 名（白名单）
+# ─────────────────────────────────────────────────────────────────────────────
+# 消费者：tools/ci/scan-binary.sh（macOS runner 上的 G4 二进制扫描）
+# 语义：产物里（含 PlugIns 等任意层级）每个 *.framework / *.xcframework / *.dylib
+#       的**名字**（去掉后缀）必须在本清单里；不在 ⇒ 红。
+#
+# ★ 为什么这份白名单是「第一批零网络承诺」的最后一道网：
+#   其余门禁全在扫**源码文本**。第三方 SDK 以二进制形式进来时（xcframework /
+#   预编译 .a / 别人的 .framework），源码里搜不到任何特征串 —— 因为根本没有源码，
+#   而它自带的网络代码、遥测域名会原样编译进 ipa。
+#   ⇒ 只允许**我们自己产出的** KMP framework，其余一律当第三方对待。
+#
+# ★ 为什么「一个名字写一行」，而不是脚本里写死：
+#   与 tools/ci 其它清单同风格：被审的对象在清单里，PR diff 一眼可见。
+#   加一个名字 = 一次显式的、可审计的决定，而不是「改脚本顺手放行」。
+#
+# ★ 为什么同时放行 Shared 和 ShotTunerShared（这是有意的，不是懒）：
+#   设计文档（docs/IOS-ARCH-EXEC.md T21 验收 ③、§4.3 G4-a）写的是
+#   `ShotTunerShared.framework`；但 shared/build.gradle.kts 的 `baseName = "Shared"`，
+#   **真实产物是 `Shared.framework`**，ci-gates.yml 的反假绿断言 ④ 也按
+#   `Frameworks/Shared.framework` 检查。
+#   如果这里只写文档里的那个名字，门禁会在**每一次真实出包**上变红 ——
+#   「红一次的 CI 门禁等于没有门禁」，那比不做还糟。
+#   ⇒ 两个名字都放行，并在本注释里把「文档名 vs 实现名」的偏差记在明处。
+#   （第三方 SDK 的名字仍然全部落网：白名单是**穷举允许**，不是黑名单。）
+#
+# 一行一个名字（不带 .framework / .dylib 后缀），'#' 之后为注释。
+
+Shared
+ShotTunerShared
