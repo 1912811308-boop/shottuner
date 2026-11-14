@@ -119,8 +119,12 @@ final class DexUnlockStore: ObservableObject {
 
     /// 装载。
     ///
-    /// ★ 不在这里触发任何解锁：装载只读不写。解锁只发生在
-    ///   `recordCapture(_:)` / `settleFromLatestPhoto()` 两个入口。
+    /// ★ 不在这里触发任何解锁：装载只读不写。解锁只有**一个**入口
+    ///   `recordCapture(_:)`，触发点是 `ContentView.capture()` 的成功回调。
+    /// ★ 也不许加「打开某页时补结算一次」这类第二入口：它会在「点开册子」这个动作上
+    ///   花掉当天的额度，于是用户拍到达标的那一张时**没有任何提示**，
+    ///   反而是几天后随手点开册子才悄悄解锁一条 ——
+    ///   解锁时机与「我这一张拍得好」之间的因果一旦断了，图鉴就没有意义了。
     init() {
         // 取不到自定义域就退化到 standard —— 宁可把进度写进默认域，
         // 也不要让「图鉴」因为一个域取不到而完全不工作（读不到就永远是 0 / 83）。
@@ -180,57 +184,6 @@ final class DexUnlockStore: ObservableObject {
             exposureScore: DexUnlockStore.scoreOrUnmeasured(snapshot.exposure),
             compositionScore: DexUnlockStore.scoreOrUnmeasured(snapshot.composition),
             clarityScore: DexUnlockStore.scoreOrUnmeasured(snapshot.clarity)
-        )
-    }
-
-    /// 用**最近一条参考分历史**结算一次解锁。
-    ///
-    /// ## 为什么需要它（以及它该在什么时候被删掉）
-    /// 正规的触发点是 `recordCapture(_:)`，调用点在 `ContentView.capture()` 的成功回调里
-    /// （紧挨着 `historyStore.record(frozenScore)`）。**那一行现在还没接** ——
-    /// `ContentView.swift` 正由另一位成员改，本轮不能碰。
-    /// 没有它的话，图鉴首页会永远停在「已解锁 0 / 83」，看起来像功能坏了。
-    ///
-    /// 所以这里退一步：用 `IosGrowthBridge` 里**已经落盘的历史**的最后一条结算。
-    /// 这不是第二条解锁规则（判定、顺序、每天一条全都还是 common 那一套），
-    /// 只是**换了个时机**：从「拍完立刻」变成「打开册子时补一次」。
-    ///
-    /// ★ 它是幂等的、也是安全的：`last_unlock_date` 卡着「每天最多一条」，
-    ///   同一天无论打开多少次册子、无论 ContentView 那边是否已经接了正规入口，
-    ///   最多只会多解锁一条；而且解锁的条目一定是用户**真的拍到达标**的那一维。
-    /// ★ ContentView 接好 `recordCapture` 之后，这个方法可以整段删掉
-    ///   （那时两个入口并存不会出错，只是没必要）。
-    ///
-    /// - Returns: 本次新解锁的技法 id；没有历史 / 没解锁时为空串。
-    @discardableResult
-    func settleFromLatestPhoto() -> String {
-        // 历史为空 ⇒ 一张都没拍过 ⇒ 没什么可结算的。
-        // ★ 历史由 `ScoreHistoryStore.init()` 从磁盘装进 `IosGrowthBridge`；
-        //   它没被创建过时这里读到 0，方法自然什么都不做（不会崩、不会误解锁）。
-        let count = Int(IosGrowthBridge.shared.count())
-        guard count > 0 else { return "" }
-
-        // 时间升序的最后一条 = 最近一张。四维逐个先问「测了没」再取数，
-        // 未测传 -1（见文件头铁律二）—— 这里**不能**写 `?? 0`。
-        let last = Int32(count - 1)
-        let level = IosGrowthBridge.shared.levelMeasuredAt(index: last)
-            ? IosGrowthBridge.shared.levelAt(index: last)
-            : DexUnlockStore.unmeasuredScore
-        let exposure = IosGrowthBridge.shared.exposureMeasuredAt(index: last)
-            ? IosGrowthBridge.shared.exposureAt(index: last)
-            : DexUnlockStore.unmeasuredScore
-        let composition = IosGrowthBridge.shared.compositionMeasuredAt(index: last)
-            ? IosGrowthBridge.shared.compositionAt(index: last)
-            : DexUnlockStore.unmeasuredScore
-        let clarity = IosGrowthBridge.shared.clarityMeasuredAt(index: last)
-            ? IosGrowthBridge.shared.clarityAt(index: last)
-            : DexUnlockStore.unmeasuredScore
-
-        return settle(
-            levelScore: level,
-            exposureScore: exposure,
-            compositionScore: composition,
-            clarityScore: clarity
         )
     }
 

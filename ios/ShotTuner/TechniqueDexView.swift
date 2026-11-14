@@ -69,9 +69,13 @@ struct TechniqueDexView: View {
     ///
     /// ★ `@StateObject` 而不是 `@State`：它是 `ObservableObject`，
     ///   解锁之后会发 `unlockedCount` / `unlockedIds` 让本页重算。
-    /// ★ 由本页**自己**创建（而不是从 `ContentView` 传进来）：`ContentView`
-    ///   这个 sheet 的调用点是 `TechniqueDexView()`，改它要动另一个人的文件。
-    ///   本类型只读写了 `UserDefaults` 里一个独立域，没有多实例问题。
+    /// ★ 本页**只读进度，不写进度**：解锁的唯一入口是 `DexUnlockStore.recordCapture(_:)`，
+    ///   调用点在 `ContentView.capture()` 的成功回调里（与 `historyStore.record` 同一处）。
+    ///   **不要在本页加「打开页面时补结算一次」之类的副作用** —— 理由见
+    ///   `DexUnlockStore.init()` 的注释：那会在「点开册子」时花掉当天的额度，
+    ///   把「我这一张拍得好」与解锁之间的因果切断。
+    /// ★ 实例目前由本页自己创建（`ContentView` 的调用点是 `TechniqueDexView()`）；
+    ///   将来若改成从外层传入，只需换掉这一行的初始化方式，本页其余代码不用动。
     @StateObject private var dexStore = DexUnlockStore()
 
     init() {
@@ -122,14 +126,6 @@ struct TechniqueDexView: View {
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 6)
             }
-        }
-        // ★ 打开册子时补一次结算。
-        //   正规触发点是 ContentView 的拍照回调（`recordCapture`），那一行还没接 ——
-        //   没有这条兜底，首页会永远停在「已解锁 0 / 83」，看起来像功能坏了。
-        //   判定与「每天一条」全在 common，这里只是换了个时机（详见
-        //   `DexUnlockStore.settleFromLatestPhoto()` 的注释）。
-        .onAppear {
-            dexStore.settleFromLatestPhoto()
         }
     }
 
