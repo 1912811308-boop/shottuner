@@ -408,6 +408,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:minHeight="48dp"
+                    android:layout_marginEnd="6dp"
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="功能"
@@ -420,10 +421,37 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:minHeight="48dp"
-                    android:layout_marginStart="6dp"
+                    android:layout_marginEnd="6dp"
                     android:layout_weight="1"
                     android:gravity="center"
                     android:text="技法"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <!--
+                  第 5 个页签「成长」（G4「进步可见」）。
+
+                  ★ 为什么新增一页而不是塞进技法页：技法页已经有
+                    标题 + 图鉴进度 + 进度条 + 15 个分类胶囊 + 技法列表，
+                    再往下挂一张趋势图会把技法列表推到首屏之外；而「回看自己进步」
+                    是一件用户专门过来做的事，不是边取景边看的东西，与技法页的
+                    「此刻该注意什么」节奏相反。iOS 侧它也是一个独立页面
+                    （ios/ShotTuner/Growth/GrowthView.swift），两边结构对齐。
+                  ★ 顺带说明为什么不挤进「功能」页：那里全是**开关与设置**，
+                    一张只读的趋势图混在开关里，用户不会想到去那儿找。
+                  ★ 页签行用 layout_weight=1 平分，加第 5 个不需要改任何尺寸 ——
+                    五格各占 1/5，两个汉字的标签（照片/录像/功能/技法/成长）
+                    在 360dp 屏上仍有约 60dp，13sp 不会挤断。
+                -->
+                <TextView
+                    android:id="@+id/tabGrowth"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="成长"
                     android:textColor="@color/st_text_dim"
                     android:textSize="13sp"
                     android:textStyle="bold" />
@@ -1384,6 +1412,175 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
                     android:orientation="vertical" />
+            </LinearLayout>
+
+            <!-- ========== 成长页（G4「进步可见」） ==========
+
+              数据全部来自 `ScoreHistoryStore`（每次拍照都已落盘），本页只渲染、
+              一行统计都不算 —— 与 iOS `GrowthView` 同一份 common 实现。
+
+              ★ 三条显示铁律（与 iOS 逐条对齐，代码在 `GrowthFormat`）：
+                1. 记录数不够 `MIN_RECORDS_FOR_GROWTH`（2 张）⇒ 整张首末对比卡
+                   不显示（`llGrowthCard` 默认 gone）。一排占位横线只会让人以为坏了。
+                2. 三个数值各自判 null，未测的那一位写占位横线（`GrowthFormat.NO_VALUE`）；
+                   **增量不可算时整段不渲染**（既不印 `（+0）` 也不印占位横线：
+                   「提高了多少」在起点未知时本来就不成立）。
+                3. 一条记录都没有 ⇒ 只显示一句「还没记录」，
+                   **不画空网格、不显示 `已记 0 张`**（default gone 的那几个控件
+                   就是为此存在的：没有被 applyGrowth 打开的路径，就不会有 0 露出来）。
+
+              ★ 为什么默认全部 gone：本页在首次 `renderGrowth()` 之前不该显示任何
+                数字。留一个 `text="0"` 之类的占位，就等于在数据没到之前先撒一次谎。
+            -->
+            <LinearLayout
+                android:id="@+id/pageGrowth"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- 空状态：一条记录都没有时才出现（GrowthFormat.showEmptyState） -->
+                <TextView
+                    android:id="@+id/tvGrowthEmpty"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text=""
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
+                <!-- 「已记 N / M 张」：shotCount 恒有效，N > 0 时永远显示 -->
+                <TextView
+                    android:id="@+id/tvGrowthCount"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text=""
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="11sp"
+                    android:visibility="gone" />
+
+                <!-- 首末对比卡：记录数不足两张时整张不显示 -->
+                <LinearLayout
+                    android:id="@+id/llGrowthCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical"
+                    android:padding="14dp"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="首次"
+                            android:textColor="@color/st_text_dim"
+                            android:textSize="11sp" />
+
+                        <!--
+                          占位横线与真正的分数（例如 82）字号、字重、monospace 完全一致：
+                          切换时宽度不抖，卡片不会左右跳一下（与 iOS scoreValue 同理）。
+                        -->
+                        <TextView
+                            android:id="@+id/tvGrowthFirst"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:fontFamily="monospace"
+                            android:text=""
+                            android:textColor="@color/st_text"
+                            android:textSize="20sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginHorizontal="8dp"
+                            android:text="→"
+                            android:textColor="@color/st_text_dim"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="最佳"
+                            android:textColor="@color/st_text_dim"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/tvGrowthBest"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:fontFamily="monospace"
+                            android:text=""
+                            android:textColor="@color/st_accent"
+                            android:textSize="20sp"
+                            android:textStyle="bold" />
+
+                        <!-- 增量段：不可算时整个 view GONE，而不是填占位横线或（+0） -->
+                        <TextView
+                            android:id="@+id/tvGrowthDelta"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:fontFamily="monospace"
+                            android:text=""
+                            android:textColor="@color/st_accent"
+                            android:textSize="13sp"
+                            android:textStyle="bold"
+                            android:visibility="gone" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="参考分是同一套算法在两端给的估价，不是评测结论"
+                        android:textColor="@color/st_text_faint"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <!-- 标题不写「最近 30 天」：横轴跨度是窗口内首末记录的真实时间，
+                     写成固定天数等于替这张图宣称一根它没有的轴（见 GrowthFormat.CHART_TITLE） -->
+                <TextView
+                    android:id="@+id/tvGrowthChartTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="参考分变化"
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="11sp"
+                    android:visibility="gone" />
+
+                <!-- 有记录但一个完整参考分都没测到时的说明。
+                     与「还没记录」是两件事：前者记录在长、只是画面信息不足。 -->
+                <TextView
+                    android:id="@+id/tvGrowthChartPlaceholder"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text=""
+                    android:textColor="@color/st_text_dim"
+                    android:textSize="11sp"
+                    android:visibility="gone" />
+
+                <!-- 折线图：没有任何可画的点时 GrowthChartView 自己什么都不画，
+                     这里再由 applyGrowth 把它整个 GONE，确保不会留下空网格 -->
+                <com.shottuner.app.growth.GrowthChartView
+                    android:id="@+id/chartGrowth"
+                    android:layout_width="match_parent"
+                    android:layout_height="140dp"
+                    android:layout_marginTop="6dp"
+                    android:visibility="gone" />
             </LinearLayout>
 
             <com.google.android.material.button.MaterialButton

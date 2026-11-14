@@ -73,12 +73,17 @@ import com.shottuner.app.feature.FeatureAdvisor
 import com.shottuner.app.feature.FeatureSuggestion
 import com.shottuner.app.growth.AbortReason
 import com.shottuner.app.growth.DexStore
+import com.shottuner.app.growth.GrowthChartGeometry
+import com.shottuner.app.growth.GrowthChartMath
+import com.shottuner.app.growth.GrowthFormat
+import com.shottuner.app.growth.GrowthSummary
 import com.shottuner.app.growth.MissionEngine
 import com.shottuner.app.growth.MissionEvent
 import com.shottuner.app.growth.MissionSample
 import com.shottuner.app.growth.MissionState
 import com.shottuner.app.growth.MissionTask
 import com.shottuner.app.growth.MissionThresholds
+import com.shottuner.app.growth.ScoreHistory
 import com.shottuner.app.growth.ScoreHistoryStore
 import com.shottuner.app.growth.ShotRecord
 import com.shottuner.app.growth.TaskKind
@@ -232,6 +237,15 @@ class MainActivity : AppCompatActivity() {
     private var currentPlan: VideoPlan? = null
     private var currentAdvice: List<FeatureSuggestion> = emptyList()
     private var currentSkillCategory: TechCategory? = null
+
+    /**
+     * 成长页取数的「轮次令牌」。
+     *
+     * 成长页要读盘（[ScoreHistoryStore.load]），读在后台线程。用户来回切页签时，
+     * 可能出现「第一轮还没回来、第二轮已经发出了」。每轮开头 `++` 一次，
+     * 回到主线程时比对：**不是最新一轮就整段丢弃**，避免旧快照盖掉新快照。
+     */
+    private var growthLoadToken = 0
 
     private val uiHandler = Handler(Looper.getMainLooper())
 
@@ -452,6 +466,7 @@ class MainActivity : AppCompatActivity() {
         binding.tabVideo.setOnClickListener { selectTab(TAB_VIDEO) }
         binding.tabFeature.setOnClickListener { selectTab(TAB_FEATURE) }
         binding.tabSkill.setOnClickListener { selectTab(TAB_SKILL) }
+        binding.tabGrowth.setOnClickListener { selectTab(TAB_GROWTH) }
 
         // 用户实际用原生相机拍，这个界面要一直亮着方便边看边拨
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1204,6 +1219,7 @@ class MainActivity : AppCompatActivity() {
         binding.pageVideo.visibility = if (idx == TAB_VIDEO) LinearLayout.VISIBLE else LinearLayout.GONE
         binding.pageFeature.visibility = if (idx == TAB_FEATURE) LinearLayout.VISIBLE else LinearLayout.GONE
         binding.pageSkill.visibility = if (idx == TAB_SKILL) LinearLayout.VISIBLE else LinearLayout.GONE
+        binding.pageGrowth.visibility = if (idx == TAB_GROWTH) LinearLayout.VISIBLE else LinearLayout.GONE
 
         // 屏幕快门与音量键快门必须同口径（v1.7.1 P1-c）：两者都只在照片页可用。
         // 以前屏幕快门没有 tab 守卫，录像/功能/技法页点它也能拍，而音量键却被
@@ -1213,7 +1229,13 @@ class MainActivity : AppCompatActivity() {
         // llControlBar，隐藏它会让 panel 失去锚点，又回到 P1-a 那个"整块塌掉"的坑。
         applyShutterAvailability()
 
-        val tabs = arrayOf(binding.tabPhoto, binding.tabVideo, binding.tabFeature, binding.tabSkill)
+        val tabs = arrayOf(
+            binding.tabPhoto,
+            binding.tabVideo,
+            binding.tabFeature,
+            binding.tabSkill,
+            binding.tabGrowth
+        )
         for (i in tabs.indices) {
             val tv = tabs[i]
             if (i == idx) {
@@ -1227,6 +1249,7 @@ class MainActivity : AppCompatActivity() {
         if (idx == TAB_VIDEO) renderVideo()
         if (idx == TAB_FEATURE) renderFeatures()
         if (idx == TAB_SKILL) renderSkills()
+        if (idx == TAB_GROWTH) renderGrowth()
         // 切页后重新套用档位：上面的 page* 显隐与本函数管的那些 view 互不重叠，
         // 但 renderFeatures/renderSkills 会重建列表，重新套一次能保证档位状态收敛。
         applyUiPreset()
@@ -1573,6 +1596,126 @@ class MainActivity : AppCompatActivity() {
             supportsLongExposure = longExposure,
             hasStats = true
         )
+    }
+
+    // ---------------- 成长页（G4「进步可见」） ----------------
+
+    /**
+     * 成长页的取数入口。
+     *
+     * ## 为什么在后台线程读
+     * [ScoreHistoryStore.load] 是**磁盘 IO**，它的 KDoc 写明「调用方必须在后台线程」。
+     * 切到成长页时同步读一份 JSON 会让主线程卡一帧 —— 而这一页是「翻看历史」，
+     * 用户对它的期待是立刻出现，不是卡一下。
+     *
+     * ## 为什么一次 `load()` 取三样东西
+     * `growth(context)` / `series(context, days)` 各自都会再读一遍盘。三个数来自
+     * 同一份文件，读一次再自己算：既少两次 IO，也保证三个数**来自同一个快照**。
+     * 分三次读，理论上会读到「刚追加一条之后」的中间态，出现
+     * 「已记 7 张，但摘要还是第 6 张那一版」这种自相矛盾的画面。
+     *
+     * ## 竞态
+     * 读盘期间用户可能已经切走页签，或者又切回来触发第二轮。两个守卫：
+     * · `currentTab != TAB_GROWTH` → 直接丢弃（改了也看不见，还会覆盖别页文案）；
+     * · [growthLoadToken] 变化 → 旧的一轮自行作废，避免旧数据盖掉新数据。
+     */
+    private fun renderGrowth() {
+        val token = ++growthLoadToken
+        Thread {
+            val history = runCatching { ScoreHistoryStore.load(this) }
+                .getOrElse { t ->
+                    Diag.w(TAG, "读取成长历史失败，按空历史处理", t)
+                    ScoreHistory.empty()
+                }
+            val summary = history.firstVsBest()
+            val series = history.recentSeries(GROWTH_WINDOW_DAYS, System.currentTimeMillis())
+            val shotCount = history.size()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (currentTab != TAB_GROWTH) return@runOnUiThread
+                if (token != growthLoadToken) return@runOnUiThread
+                applyGrowth(summary, series, shotCount)
+            }
+        }.start()
+    }
+
+    /**
+     * 把一份历史快照写进界面。
+     *
+     * ★ 本函数**没有任何一处把 null 当 0 用**：所有 `Int?` → 文案的转换只经过
+     *   [GrowthFormat.formatTotal] 与 [GrowthFormat.deltaText]，两者都在函数体第一行
+     *   处理 null。那条「未测不能印 0」的铁律由 `GrowthFormatTest` 机器验证，
+     *   不靠这里逐行看得仔细。
+     *
+     * @param summary 首末对比摘要；null = 记录数不足 `MIN_RECORDS_FOR_GROWTH`
+     * @param series 最近 [GROWTH_WINDOW_DAYS] 天的记录（升序，含未测记录）
+     * @param shotCount 历史总条数（含未测记录，恒有效）
+     */
+    private fun applyGrowth(summary: GrowthSummary?, series: List<ShotRecord>, shotCount: Int) {
+        // ── 空状态：一条记录都没有 ──
+        // 只留一句「还没记录」。计数行与图表都藏起来 —— 显示「已记 0 / 500 张」
+        // 或者画一张空网格，都是在用 0 假装有数据。
+        val empty = GrowthFormat.showEmptyState(shotCount)
+        binding.tvGrowthEmpty.text = if (empty) GrowthFormat.EMPTY_TEXT else ""
+        binding.tvGrowthEmpty.visibility = if (empty) View.VISIBLE else View.GONE
+
+        // ── 已记 N 张（shotCount 恒有效；N == 0 时由上面那句接管）──
+        binding.tvGrowthCount.text =
+            if (empty) "" else GrowthFormat.countText(shotCount, ScoreHistory.MAX_RECORDS)
+        binding.tvGrowthCount.visibility = if (empty) View.GONE else View.VISIBLE
+
+        // ── 首末对比卡 ──
+        if (summary == null) {
+            // 铁律 1：记录数不够两张 ⇒ 整张卡不显示，一堆占位横线只会让人以为功能坏了
+            binding.llGrowthCard.visibility = View.GONE
+        } else {
+            binding.llGrowthCard.visibility = View.VISIBLE
+            // 铁律 2：三个数值各自判 null，未测的那一位印占位横线
+            binding.tvGrowthFirst.text = GrowthFormat.formatTotal(summary.firstTotal)
+            binding.tvGrowthFirst.setTextColor(
+                ContextCompat.getColor(
+                    this,
+                    if (summary.firstTotal != null) R.color.st_text else R.color.st_text_dim
+                )
+            )
+            binding.tvGrowthBest.text = GrowthFormat.formatTotal(summary.bestTotal)
+            binding.tvGrowthBest.setTextColor(
+                ContextCompat.getColor(
+                    this,
+                    if (summary.bestTotal != null) R.color.st_accent else R.color.st_text_dim
+                )
+            )
+            // 铁律 3：增量不可算时**整段不渲染**。既不印（+0）（会被读成「一点没进步」），
+            // 也不印占位横线（「提高了多少」这个说法在起点未知时本来就不成立）。
+            val delta = GrowthFormat.deltaText(summary.delta)
+            if (delta == null) {
+                binding.tvGrowthDelta.text = ""
+                binding.tvGrowthDelta.visibility = View.GONE
+            } else {
+                binding.tvGrowthDelta.text = delta
+                binding.tvGrowthDelta.visibility = View.VISIBLE
+            }
+        }
+
+        // ── 折线图 ──
+        // 几何里 `total == null` 的点根本不存在，所以中间有未测记录时折线会自然断开，
+        // 不会被连成一条「穿过未测记录」的斜线（那等于凭空编出一段趋势）。
+        val geometry = GrowthChartMath.layout(series)
+        val showChart = geometry.hasMeasurable
+        val placeholder = GrowthFormat.chartPlaceholderText(
+            recordCount = shotCount,
+            recentCount = series.size,
+            windowDays = GROWTH_WINDOW_DAYS,
+            hasMeasurablePoint = showChart
+        )
+        binding.tvGrowthChartTitle.visibility = if (empty) View.GONE else View.VISIBLE
+        binding.tvGrowthChartPlaceholder.text = placeholder ?: ""
+        binding.tvGrowthChartPlaceholder.visibility =
+            if (placeholder == null) View.GONE else View.VISIBLE
+        binding.chartGrowth.visibility = if (showChart) View.VISIBLE else View.GONE
+        // 无论显示与否都灌一次：`showChart == false` 时灌空几何，
+        // 保证不会留下上一轮的折线（`GrowthChartView` 拿到空几何就什么都不画）
+        binding.chartGrowth.setGeometry(if (showChart) geometry else GrowthChartGeometry.EMPTY)
     }
 
     // ---------------- 照片页 ----------------
@@ -2267,6 +2410,10 @@ class MainActivity : AppCompatActivity() {
                                 unlockedDexId
                             )
                         }
+                        // 成长页若正开着（拍完这一张之后用户已经切过去了），
+                        // 把刚落的这条补进来。否则成长页会停在「append 之前」的那份快照上，
+                        // 而这种不一致没有任何报错，只表现为「已记张数少 1」。
+                        if (currentTab == TAB_GROWTH) renderGrowth()
                     }
                 }.start()
             },
@@ -3018,6 +3165,25 @@ class MainActivity : AppCompatActivity() {
         private const val TAB_VIDEO = 1
         private const val TAB_FEATURE = 2
         private const val TAB_SKILL = 3
+
+        /**
+         * 第 5 个页签：成长（G4「进步可见」）。
+         *
+         * ★ 为什么是新增一页而不是塞进技法页：技法页已经有标题 + 图鉴进度 +
+         *   进度条 + 15 个分类胶囊 + 技法列表，再挂一张趋势图会把技法列表推到
+         *   首屏之外；而「回看自己进步」是用户专门过来做的事，节奏与技法页
+         *   「此刻该注意什么」相反。iOS 侧也是独立页（`GrowthView.swift`）。
+         * ★ 值必须与页签数组下标一致（`selectTab` 里那个 arrayOf 的第 5 项）。
+         */
+        private const val TAB_GROWTH = 4
+
+        /**
+         * 成长页折线图的取数窗口（天）。
+         *
+         * 与 iOS `GrowthDefaults.windowDays` 同值。改这里就够 —— 门面
+         * （`ScoreHistory.recentSeries`）会把它钳到 1..3650。
+         */
+        private const val GROWTH_WINDOW_DAYS = GrowthFormat.DEFAULT_WINDOW_DAYS
 
         /** 提示状态机的节拍。500ms 足够跟上 3s 驻留/8s 冷却的分辨率，又不至于把 UI 打满 */
         private const val COACH_TICK_MS = 500L
