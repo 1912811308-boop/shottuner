@@ -42,6 +42,15 @@ struct ContentView: View {
     /// 前后台状态。用于在切后台时停掉姿态采样（见 `body` 里的 `onChange`）。
     @Environment(\.scenePhase) private var scenePhase
 
+    /// 隐私同意状态（T16）。
+    ///
+    /// ★ 它必须排在最前面，因为它是**所有权限 API 的前置闸门**：
+    ///   `startIfAllowed()` 的第一句就是查它，未同意时连 `authorizationStatus` 都不读。
+    ///   为什么是 `@StateObject` 而不是 `@State`：它是 `ObservableObject`，
+    ///   同意页与关于页都要读它，三处必须是**同一个对象**（理由见 `PrivacyConsentStore`
+    ///   的文件头 —— 各持一份状态就是「这边同意了、那边还认为没同意」的来源）。
+    @StateObject private var privacy = PrivacyConsentStore()
+
     /// 相机权限状态机（只负责要权限，不碰任何图像数据）。
     @StateObject private var cameraPermission = CameraPermissionModel()
 
@@ -124,11 +133,28 @@ struct ContentView: View {
     /// 是否显示详细统计（直方图 + 四维明细）。默认收起，把画面还给取景。
     @State private var showingDetails = false
 
+    // ── 首屏分支 ────────────────────────────────────────────────────────────
+    //
+    // ★ 四个分支的顺序就是**优先级**，不能换：
+    //   ① `showsGate`      未同意过当前版本的政策 → 同意页盖住一切（T16 验收①）；
+    //   ② `isRestricted`   本次会话点了「暂不同意」→ 受限模式（T16 验收③）；
+    //   ③ 已同意且相机已授权 → 取景；
+    //   ④ 已同意但相机没授权 / 被拒 → 原来的权限门（引导去系统设置）。
+    //
+    // ★ 为什么用「分支」而不是把同意页写成 `.fullScreenCover`：
+    //   根节点上已经挂了一个 `.sheet(item: $activePage)`（四个页面共用），
+    //   再挂一个模态呈现就回到「两个呈现同时为真时只有一个生效、顺序不保证」那个坑。
+    //   分支的显示关系是**结构性的**：同意页在时，取景层根本不在视图树里，
+    //   相机链路连起点都没有 —— 这比「起了再挡住」可靠。
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if cameraPermission.status.allowsCapture {
+            if privacy.showsGate {
+                PrivacyGateView(consent: privacy)
+            } else if privacy.isRestricted {
+                restrictedGate
+            } else if cameraPermission.status.allowsCapture {
                 cameraLayer
                 overlayLayer
                 chromeLayer
@@ -185,6 +211,22 @@ struct ContentView: View {
         .onChange(of: cameraPermission.status) { status in
             if status.allowsCapture { startIfAllowed() }
         }
+        // ★ 同意状态变了 → 立刻按新状态起链路（与 Android `acceptPrivacy()` 里
+        //   那句 `refreshCameraState()` 同序：同意之后用户不该再点第二次）。
+        //
+        //   为什么不把「起相机」写在同意页的按钮里：那样「同意之后发生什么」就有两个实现点，
+        //   而这条链路上已经有 `pipelineStarted` 这类幂等闸门 —— 多一个入口就多一处
+        //   需要验证「会不会重入」的地方。
+        .onChange(of: privacy.acceptedVersion) { version in
+            guard version >= PrivacyText.version else { return }
+            startIfAllowed()
+            // 用户刚点了「同意并继续」，此时要一次相机权限不突然。
+            // ★ 只在 `.notDetermined` 时要：已被拒绝过的再调 `request()` 不会弹框，
+            //   只会白跑一次回调（`CameraPermissionModel` 的文档写明了这条）。
+            if cameraPermission.status == .notDetermined {
+                cameraPermission.request()
+            }
+        }
         .onDisappear(perform: stopEverything)
         // ★ 「更多」用 `confirmationDialog` 而不是再开一个 sheet：
         //   根节点上已经有 `.sheet(item: $activePage)`，同节点再挂一个 `.sheet`
@@ -196,6 +238,10 @@ struct ContentView: View {
             Button("录像方案") { activePage = .video }
             Button("参考分变化") { activePage = .growth }
             Button("技法图鉴") { activePage = .techniqueDex }
+            // ★ 「关于」是上架阻塞项（政策第八节承诺了『关于』页可查全文，
+            //   双清单的两个入口也挂在那里 —— 见 `docs/RELEASE-PRD.md` 风险 6）。
+            //   文案与 Android 侧 `btnAbout` 的「关于 · 隐私与第三方清单」一致。
+            Button("关于 · 隐私与第三方清单") { activePage = .about }
             // ★ 水印开关放在这里，是因为它只需要一个开关、不值得单开一页。
             //   标题带当前状态（`水印：开` / `水印：关`）—— 一个不显示状态的
             //   「切换水印」按钮，用户点完不知道现在是什么。
@@ -238,6 +284,13 @@ struct ContentView: View {
             case .growth:
                 GrowthView(
                     store: historyStore,
+                    onClose: { activePage = nil }
+                )
+            case .about:
+                // ★ 只传同意状态的引用（关于页只读它来显示「已同意 / 受限模式」），
+                //   撤回同意走系统设置里的权限开关，与 Android 侧同口径。
+                AboutView(
+                    consent: privacy,
                     onClose: { activePage = nil }
                 )
             }
@@ -356,6 +409,12 @@ struct ContentView: View {
     ///      否则「拍照」这个动作本身会被任务引擎当成一次普通的画面变化继续判定；
     ///   ③ 最后发起拍照 —— `capture` 内部是异步的，回调回来才决定要不要开复盘卡。
     private func capture() {
+        // ★ 受限模式下快门下不了手。
+        //   正常情况下走到这里是不可能的 —— 受限模式压根不渲染 `chromeLayer`，
+        //   快门条不在视图树里。这道判断防的是**将来**：谁把快门挪到常驻位置，
+        //   漏了这一行就会出现「没同意隐私也能拍照」，而那是一条合规事故。
+        guard privacy.hasAccepted else { return }
+
         // 已经有一张在拍就直接丢弃这次点击：`CaptureFlow.capture` 会挡住重入
         // 且**不回调**，这里再挡一次只是为了让「连点两下」连文案都不重算。
         guard !captureFlow.isCapturing else { return }
@@ -572,6 +631,111 @@ struct ContentView: View {
         .padding(32)
     }
 
+    // ── 受限模式 ────────────────────────────────────────────────────────────
+    /// 「暂不同意」之后的拍摄页。
+    ///
+    /// ★ T16 验收③：不同意 → 技法页 / 视频页 / 功能页可用，**拍摄页显示引导卡**
+    ///   （不是空白，也不是闪退）。这一屏就是那张卡。
+    ///
+    /// ★ 为什么把四个入口放在这张卡里，而不是复用顶栏的「更多」菜单：
+    ///   顶栏在 `chromeLayer` 里，而 `chromeLayer` 只在相机可用时才渲染 ——
+    ///   受限模式下顶栏不存在。入口必须跟着能看见的那一屏走。
+    ///
+    /// ★ 相机与快门在这一屏是**不存在**，不是「变灰」：
+    ///   灰按钮会诱导用户反复点，而这里压根没有可以点的快门。
+    private var restrictedGate: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Image(systemName: "hand.raised")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(Palette.accent)
+                    .padding(.bottom, 14)
+
+                Text(PrivacyText.restrictedTitle)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Palette.overlayText)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(PrivacyText.restrictedPoints, id: \.self) { point in
+                        Text(point)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.overlayTextSecondary)
+                            .lineSpacing(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.top, 14)
+
+                // 主按钮：回到同意页重新选择。
+                Button {
+                    privacy.requestConsentAgain()
+                } label: {
+                    Text("同意隐私政策并开启相机")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.black)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(Palette.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 22)
+
+                Text("仍然可以看的内容")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.overlayTextSecondary)
+                    .padding(.top, 22)
+
+                // 四个入口：与取景页「更多」菜单同一套目的地（都是 `activePage`）。
+                VStack(spacing: 10) {
+                    HStack(spacing: 10) {
+                        restrictedEntry("技法图鉴", .techniqueDex)
+                        restrictedEntry("录像方案", .video)
+                    }
+                    HStack(spacing: 10) {
+                        restrictedEntry("这会儿该开什么", .features)
+                        restrictedEntry("关于 · 隐私与第三方清单", .about)
+                    }
+                }
+                .padding(.top, 10)
+
+                Text("相机权限没有被申请过，系统设置里的相机开关也没有被改动。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.overlayTextSecondary)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 18)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// 受限模式里的一个入口按钮。
+    ///
+    /// - Parameters:
+    ///   - title: 按钮文字。
+    ///   - page: 目的页（与「更多」菜单共用同一个 `AppPage` 枚举）。
+    private func restrictedEntry(_ title: String, _ page: AppPage) -> some View {
+        Button {
+            activePage = page
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Palette.overlayText)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, 8)
+                .background(Palette.overlayText.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
     // ── 生命周期 ────────────────────────────────────────────────────────────
     /// 采集管线是否已经起过。
     ///
@@ -589,6 +753,15 @@ struct ContentView: View {
     @State private var pipelineStarted = false
 
     private func startIfAllowed() {
+        // ★ 隐私门在最前面，而且**连刷新都不做**。
+        //
+        //   未同意时整个 App 不该碰任何权限 API。`authorizationStatus` 本身不会弹框
+        //   （真正弹框的是 `requestAccess`），但「未同意就不进这条路」是一条**能一眼
+        //   检查的结构**，而「这条 API 恰好不弹框」是一个需要每次读文档去确认的前提。
+        //   审核与合规看的也是结构：拒绝隐私之后，系统设置里这台手机的相机权限
+        //   仍然应该停在「未询问」。
+        guard privacy.hasAccepted else { return }
+
         cameraPermission.refresh()
         guard cameraPermission.status.allowsCapture else { return }
 
@@ -736,11 +909,16 @@ struct ContentView: View {
 ///
 /// ★ 为什么不加 `.techniqueDex` 之外的更多项：
 ///   这个 App 只有四个能离开取景器的页面，多一项就说明该重新设计导航了。
+///
+/// ★ `.about` 是第五项，且是**必须**的一项：政策第八节第 3 条承诺「历史版本可在
+///   『关于』页面查阅」，双清单（个人信息收集清单 / 第三方共享清单）的两个入口
+///   也挂在这一页。少这一项，那两句承诺就是假的（见 `docs/RELEASE-PRD.md` 风险 6）。
 private enum AppPage: String, Identifiable {
     case techniqueDex
     case features
     case video
     case growth
+    case about
 
     /// `Identifiable` 要求。用 `rawValue` 而不是自增 `UUID`：
     /// sheet 的身份必须**稳定**，否则同一个页面重开会被当成另一个身份、重新走入场动画。
