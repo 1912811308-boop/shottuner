@@ -121,6 +121,15 @@ struct ContentView: View {
     ///   发 `revision` 让成长页在拍完一张后重算。
     @StateObject private var historyStore = ScoreHistoryStore()
 
+    /// 技法图鉴的解锁态。
+    ///
+    /// ★ 由本视图持有（而不是让 `TechniqueDexView` 自己 new 一个）：
+    ///   解锁发生在**拍照那一刻**，那一刻只有本视图在场。放在这里图鉴页打开时
+    ///   读到的一定是最新状态，不会出现「刚解锁完点进去还是 0/83」。
+    /// ★ 与 Android 同一套持久化口径：`UserDefaults` 域 `technique_dex`，
+    ///   键 `unlocked` / `last_unlock_date`，日期卡「每天最多一条」。
+    @StateObject private var dexStore = DexUnlockStore()
+
     /// 当前打开的功能页。
     ///
     /// ★ 全 App **只有一个** `.sheet`，由它驱动。理由见 `body` 里那段注释：
@@ -441,6 +450,19 @@ struct ContentView: View {
                 //   不该算作一次练习。
                 historyStore.record(frozenScore)
 
+                // ★ 图鉴解锁：**必须传同一份冻结快照**，与上面那行同源。
+                //   读实时 `coordinator.score` 会给这张照片记一个「下一帧的分」，
+                //   于是「这张拍得好 → 解锁一条」的因果就错位了。
+                //
+                // ★ 为什么不放在 `TechniqueDexView.onAppear` 里补结算：
+                //   那个写法会让「打开图鉴页」这个动作消耗掉当天的解锁额度 ——
+                //   用户拍达标时没有任何提示，几天后随手翻册子才悄悄多一条。
+                //   解锁的时机必须和「我这一张拍得好」挨在一起，否则这个功能就没有意义了。
+                //
+                // 返回值是新解锁的技法 id（空串 = 没解锁 / 当天额度已用），
+                // 留给复盘卡做「图鉴 +1」提示用，这里先丢弃。
+                _ = dexStore.recordCapture(frozenScore)
+
                 // ★ 先确认拿到图再开复盘卡。
                 //   `lastCapturedImage` 可能为 nil（水印关闭时解码失败那条路径，
                 //   照片本身是成功进相册的）。原来直接置 `true`，于是 sheet 里
@@ -597,38 +619,70 @@ struct ContentView: View {
 
     // ── 权限门 ──────────────────────────────────────────────────────────────
     private var permissionGate: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "camera")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(Palette.accent)
+        // ★ 用 ScrollView 而不是裸 VStack：下面新增了四个「非相机入口」，
+        //   小屏（SE 这类 4.7 寸）加上四个按钮会顶出屏外，而这一屏**恰恰是
+        //   用户唯一能操作的地方** —— 内容顶出去就等于没有入口。
+        ScrollView {
+            VStack(spacing: 16) {
+                Image(systemName: "camera")
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(Palette.accent)
 
-            Text("光影调参")
-                .font(.title2.bold())
-                .foregroundStyle(Palette.overlayText)
+                Text("光影调参")
+                    .font(.title2.bold())
+                    .foregroundStyle(Palette.overlayText)
 
-            Text(cameraPermission.status.text)
-                .font(.footnote)
-                .foregroundStyle(Palette.overlayTextSecondary)
-                .multilineTextAlignment(.center)
+                Text(cameraPermission.status.text)
+                    .font(.footnote)
+                    .foregroundStyle(Palette.overlayTextSecondary)
+                    .multilineTextAlignment(.center)
 
-            Button {
-                cameraPermission.request()
-            } label: {
-                Text(cameraPermission.status.allowsCapture ? "重新检查权限" : "申请相机权限")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(Palette.accent, in: Capsule())
+                Button {
+                    cameraPermission.request()
+                } label: {
+                    Text(cameraPermission.status.allowsCapture ? "重新检查权限" : "申请相机权限")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(Palette.accent, in: Capsule())
+                }
+
+                Text("照片只在这台设备上分析，不会上传。App 给的是参考分与「照拨」建议，参数由你自己调。")
+                    .font(.caption)
+                    .foregroundStyle(Palette.overlayTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 8)
+
+                // ★ 相机权限被拒时也必须能进非相机功能。
+                //
+                //   原来这一屏只有一个「申请权限」按钮。权限一旦被永久拒掉
+                //   （iOS 只弹一次窗，之后只能去设置里开），用户就卡死在一句提示上 ——
+                //   技法图鉴 / 录像方案 / 功能页 / 关于页一个都进不去，而它们**都不需要相机**。
+                //   更不合理的是：受限模式（未同意隐私政策）反而给了四个入口，
+                //   两个「进不了取景器」的状态却给了不对等的能力。
+                //
+                //   这里复用受限模式那套 `restrictedEntry`，四个目的页完全相同 ——
+                //   两处的入口一旦不一致，就会出现「同样进不去相机，一个能看图鉴一个不能」。
+                Text("仍然可以看的内容")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.overlayTextSecondary)
+                    .padding(.top, 18)
+
+                VStack(spacing: 10) {
+                    HStack(spacing: 10) {
+                        restrictedEntry("技法图鉴", .techniqueDex)
+                        restrictedEntry("录像方案", .video)
+                    }
+                    HStack(spacing: 10) {
+                        restrictedEntry("这会儿该开什么", .features)
+                        restrictedEntry("关于 · 隐私与第三方清单", .about)
+                    }
+                }
+                .padding(.top, 4)
             }
-
-            Text("照片只在这台设备上分析，不会上传。App 给的是参考分与「照拨」建议，参数由你自己调。")
-                .font(.caption)
-                .foregroundStyle(Palette.overlayTextSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 8)
+            .padding(32)
         }
-        .padding(32)
     }
 
     // ── 受限模式 ────────────────────────────────────────────────────────────

@@ -872,46 +872,39 @@ jobs:
 
 ### 4.3 G4 的二进制扫描（`.github/workflows/ci-release.yml`，macOS runner）
 
-```bash
-#!/usr/bin/env bash
-# tools/ci/scan-binary.sh —— 在 macOS runner 上扫描未签名 .app
-set -euo pipefail
-APP="$1"
-fail=0
+> **实现已落地：`tools/ci/scan-binary.sh`。本节保留的是「判据」，不是可复制代码。**
+>
+> 早期版本这里贴过一段示例实现，**它有真 bug，已删除**。删掉的原因值得记一笔：
+> 那段用 `find ... | while read -r fw; do ... fail=1; done`，而管道右侧的 `while` 跑在
+> **子 shell** 里 —— 循环里设的 `fail=1` 出了循环就没了，最后 `exit $fail` 永远 `exit 0`。
+> 也就是说：**它明明发现了第三方 framework，却仍然报通过**。这是门禁最坏的一种失效：
+> 不是漏检，是发现了却说自己没发现。以后写「累积违规计数」的门禁，一律避免管道 + 子 shell，
+> 用进程替换（`while ... done < <(...)`）或命令替换（`$(...)`）+ 计数变量。
 
-echo "== G4-a 第三方 framework 清单（第一批应只有 ShotTunerShared）=="
-ls "$APP/Frameworks" 2>/dev/null || echo "(无 Frameworks 目录)"
-find "$APP/Frameworks" -maxdepth 1 -name "*.framework" 2>/dev/null | while read -r fw; do
-  n="$(basename "$fw" .framework)"
-  [ "$n" = "ShotTunerShared" ] || { echo "::error::出现非预期 framework: $n"; fail=1; }
-done
+判据（`scan-binary.sh` 逐条实现，顺序即执行顺序）：
 
-echo "== G4-b 遥测血统符号（ML Kit / Firebase 的指纹）=="
-# 注意：不要扫 NSURLSession / CFNetwork —— Foundation 自带，一定误报。
-# 真正的判据是「有没有第三方遥测 SDK」。
-for bin in "$APP/Mobile" "$APP"/Frameworks/*.framework/*; do
-  [ -f "$bin" ] && [ -x "$bin" ] || continue
-  if nm -gU "$bin" 2>/dev/null | grep -qiE 'GoogleDataTransport|GTMSessionFetcher|FIRApp|FirebaseCore|GoogleUtilities|Analytics'; then
-    echo "::error::检测到遥测血统符号: $bin"; fail=1
-  fi
-done
+| 编号 | 查什么 | 判据 |
+|---|---|---|
+| **G4-a** | 内嵌 framework / dylib 白名单 | 递归找 `*.framework` / `*.xcframework` / `*.dylib`，名字必须穷举在 `patterns/binary-frameworks-allow.txt` 里，否则红。**一个都没有也红**（空壳产物会让白名单变成空检查） |
+| **G4-b** | 第三方遥测血统 | Mach-O 原始字节 grep `patterns/network-binary.txt`（全平台可跑）；macOS 上再加 `nm -u` 未定义符号核对 |
+| **G4-c** | ATS 未放宽 | `plutil -extract` 权威取值（非 `false` 即红）；无 `plutil` 时降级为 XML 文本兜底，**二进制 plist 直接报错而不是猜** |
+| **G4-d** | entitlements 无网络 | 扫 `*.entitlements` / `*.xcent`；macOS 上再用 `codesign -d --entitlements` 复核 |
+| **G4-e** | 依赖清单落档 | framework 清单 + 每个 Mach-O 的 `lipo -archs` 与符号数，写进 step summary |
 
-echo "== G4-c ATS 未放宽 =="
-if plutil -p "$APP/Info.plist" | grep -A3 NSAppTransportSecurity | grep -q 'NSAllowsArbitraryLoads.*true'; then
-  echo "::error::ATS 被放宽，违反零网络承诺"; fail=1
-fi
+**exit code 语义**：`0` 通过 / `1` 违规 / `2` **门禁自身出错**（产物不存在、没有 Info.plist、ipa 解不开、清单缺失）。
+`2` 不是通过 —— 「没东西可扫」和「扫了没问题」必须能区分，否则门禁会在它最该起作用的时候静默变绿。
 
-echo "== G4-d entitlements 无网络能力 =="
-if codesign -d --entitlements :- "$APP" 2>/dev/null | grep -qi 'com.apple.security.network'; then
-  echo "::error::entitlements 含网络权限"; fail=1
-fi
+**两条实现约束**（写错会在唯一能跑它的地方挂掉）：
 
-echo "== G4-e 依赖清单落档 =="
-find "$APP/Frameworks" -maxdepth 1 -name "*.framework" 2>/dev/null | sed 's|.*/||' > "dependency-manifest.txt" || true
-cat dependency-manifest.txt
+1. **`macOS runner` 的 `/bin/bash` 是 3.2**，而 `tools/ci/lib/common.sh` 要求 bash 4+。
+   所以 `scan-binary.sh` **不 source common.sh**，只用 3.2 也支持的语法（无 `mapfile`、
+   无关联数组、无 nameref）。其他门禁都跑在 ubuntu（bash 5）上，不受这条约束影响。
+2. **白名单里有两个名字：`Shared` 与 `ShotTunerShared`。** 文档这里原本写的是
+   `ShotTunerShared.framework`，但 `shared/build.gradle.kts` 的 `baseName` 是 `Shared`，
+   **真实产物是 `Shared.framework`**。只放行文档里那个名字 ⇒ 每次真实出包都红。
+   两个都放行是**兼容现状**，不是设计意图 —— 要收敛成一个的话，得改 `baseName`
+   并同步 XcodeGen 的链接配置与 CI 断言，属于另一件事。
 
-exit $fail
-```
 
 > **一条重要的技术更正**：不要用"扫 `NSURLSession`/`CFNetwork` 符号"来判零网络 —— **Foundation 永远链着这两个符号，必然误报**。真正的门禁是三层：**① G1 源码 grep（主力）② G4-c/d 的 ATS 与 entitlements（配置层）③ G4-b 的第三方遥测符号（供应链层）**。
 
