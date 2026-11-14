@@ -8,6 +8,49 @@
 > ★ 但内部 `versionCode` **仍然单调递增**（Android 的 33、iOS 的 1，两端独立）：
 > 系统靠 versionCode 判断能不能覆盖安装，**回退会导致装不上**。它与用户看到的版本号是两回事。
 
+## 1.1.2 (versionCode 37 / iOS build 5) - 2026-11-14 - 「iOS 接上场景识别」
+
+**Android 无变化。** 这一版动的全是 iOS 侧。
+
+### 补的是最后一个「门面补了但没人调」的洞
+
+`VisionSceneDetector`（T11）和 `IosSceneBridge` 早就写完、也都编译通过，
+但**两边都没人调**。于是 `ScoreCoordinator.sceneName` 恒为 `GENERAL`：
+
+- 评分按通用场景算（夜景 / 逆光 / 人像三套专用阈值不生效）
+- 照拨按通用预设给（`ParamRecommender` 的 PRESETS 只命中 GENERAL）
+- 功能页只出通用建议，且拿不到「AI 看到 …」后缀
+- `needsTripod` 只能传 `false`，「夜景长曝：别用手指戳快门」永不出现
+
+**失效是静默的** —— 界面上看不出任何异常，只是所有建议都变得很"平"。
+
+### 怎么接的：旁路，不动主链一行
+
+`CameraSession.onFrame` 是**单槽**，`ScoreCoordinator` 已经占着（它的注释专门警告过：
+谁再赋值就会静默杀死评分链）。所以没有去动那个槽，而是在**投递点**多开一个
+显式命名的旁路槽 `onFrameTap`：两个消费者各占一个属性，谁也覆盖不了谁。
+
+链路：`onFrameTap` → `SceneDriver.submit`（只转交，立刻返回）→
+`VisionSceneDetector`（内部 ≤10fps 节流）→ `IosSceneBridge.classify`（融合留给 Kotlin）
+→ 去抖 → `ScoreCoordinator.setScene`。
+
+### ★ 最要紧的一条：`setScene` 不能每帧调
+
+`setScene` 内部会 `gate.invalidate()`，会话代次 +1，**排队中的分析结果全部作废**。
+每帧调一次的结果是：画面在两种场景间抖一下，评分就**永远落不了地** ——
+界面上表现为「参考分一直不出来」，日志里什么都看不到。
+
+所以 `SceneDriver` 有三道闸：
+- **连续 3 次一致**才算数（约 0.3~0.6 秒，滤掉镜头扫过的一两帧）
+- 两次切换**至少间隔 2 秒**（避免连续作废）
+- 与当前值相同直接跳过（不白算，也不白触发）
+
+### 为什么融合不写在 Swift 里
+
+「人像优先于风景」那条规则刚在 1.1.1 修过，它在 Kotlin 的 `SceneClassifier` 里，
+是**两端共用的一份实现**。在 Swift 里再写一遍就是第二份，早晚和 Android 分叉，
+而且分叉后不会报错 —— 只会「同一张照片两端给的建议不一样」。
+
 ## 1.1.1 (versionCode 36 / iOS build 4) - 2026-11-10 - 「修两个真机上才看得见的错」
 
 真机反馈两条，都是「代码看着对、用起来错」的那一类。

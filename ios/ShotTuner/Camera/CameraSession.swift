@@ -138,6 +138,33 @@ final class CameraSession: NSObject {
         }
     }
 
+    /// 每帧的**旁路**消费者（可为空）。给「搭车看帧」的模块用，目前只有 Vision 场景识别。
+    ///
+    /// ★ 为什么要有第二个槽，而不是让大家都挂 `onFrame`：
+    ///   `onFrame` 是**单槽**，赋值即覆盖。`ScoreCoordinator` 已经占着它（它在文件头
+    ///   专门写了一段警告：谁再赋值就会**静默杀死**评分链 —— 不崩不报错，只是帧不来了）。
+    ///   与其去改那个被警告过的东西，不如在**投递点**多开一个显式命名的旁路槽：
+    ///   两个消费者各占一个属性，谁也覆盖不了谁。
+    ///
+    /// ★ 为什么不做成数组广播：本 App 固定只有这两个消费者。数组会引入
+    ///   「谁先谁后」「谁持有强引用」「移除时按索引还是按身份」这些不必要的问题。
+    ///   真出现第三个消费者时再改，那时也有三处调用可以一起核。
+    ///
+    /// ★ 实现方**必须立刻返回**：这个回调和 `onFrame` 一样跑在 `videoQueue` 上，
+    ///   阻塞它就是阻塞整条取景链路。耗时工作（Vision、编码、落盘）请自己扔到别的队列。
+    var onFrameTap: ((CVPixelBuffer) -> Void)? {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return _onFrameTap
+        }
+        set {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            _onFrameTap = newValue
+        }
+    }
+
     /// 能力变化（切 format / 切帧率 / 设备重连 / 兜底发现变化）。
     /// ★ 在后台队列回调；参数就是**刚现场重读**出来的 `CameraCaps`。
     var onCapabilitiesChanged: ((CameraCaps) -> Void)? {
@@ -206,6 +233,9 @@ final class CameraSession: NSObject {
     private var lastPublishedRawCaps: RawCaps?
 
     private var _onFrame: ((CVPixelBuffer) -> Void)?
+
+    /// `onFrameTap` 的存储。与 `_onFrame` 同一把 `stateLock` 保护。
+    private var _onFrameTap: ((CVPixelBuffer) -> Void)?
     private var _onCapabilitiesChanged: ((CameraCaps) -> Void)?
     private var _onError: ((Failure) -> Void)?
     private var _firstFrameLatencySeconds: TimeInterval?
@@ -937,6 +967,9 @@ extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         onFrame?(pixelBuffer)
+        // ★ 旁路消费者（目前是 Vision 场景识别）。放在 `onFrame` **之后**：
+        //   评分链是主产出，先把它喂饱；旁路晚一微秒无所谓，急了可以丢帧（它自己有节流）。
+        onFrameTap?(pixelBuffer)
     }
 }
 

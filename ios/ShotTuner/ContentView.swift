@@ -81,6 +81,13 @@ struct ContentView: View {
     ///   iOS 版能打分、能给模式建议，唯独不给「该拨几档」。
     @StateObject private var paramAdvisor = ParamAdvisor()
 
+    /// Vision 场景识别（旁路）。
+    ///
+    /// ★ `@State` 而不是 `@StateObject`：它不是 `ObservableObject`，不发布任何状态 ——
+    ///   识别结果直接进 `ScoreCoordinator.sceneName`（那才是唯一真相）。
+    ///   `@State` 对引用类型同样保证「只创建一次」，与 `session` / `motion` 同一个理由。
+    @State private var sceneDriver = SceneDriver()
+
     /// 复盘卡是否展开。
     @State private var showingReview = false
 
@@ -600,6 +607,8 @@ struct ContentView: View {
             //   但这里多判一次能让「谁在跑」这件事在调用点一眼可见，
             //   与上面两行的写法保持一致。
             if !paramAdvisor.isRunning { startParamAdvisor() }
+            // 场景识别的旁路也要补上（它自己的 `isRunning` 同样是幂等闸门）。
+            if !sceneDriver.isRunning { startSceneDetection() }
             return
         }
         pipelineStarted = true
@@ -608,6 +617,29 @@ struct ContentView: View {
         startMotion()
         startMission()
         startParamAdvisor()
+        startSceneDetection()
+    }
+
+    /// 起 Vision 场景识别旁路。
+    ///
+    /// ★ 为什么必须挂 `onFrameTap` 而不是 `onFrame`：
+    ///   `onFrame` 是单槽，`coordinator.attach` 已经占了它。往那儿赋值会**静默杀死评分链**
+    ///   （不崩不报错，只是帧不来了）—— `ScoreCoordinator.attach` 的注释专门警告过这条。
+    ///
+    /// ★ 为什么把结果接回 `setScene` 而不是自己存一份场景：
+    ///   场景的**唯一真相**在 `ScoreCoordinator.sceneName`（它同时喂给
+    ///   `analyzeFrame`、`ParamAdvisor`、`FeatureView`）。这里另存一份就会出现
+    ///   「评分说风景、照拨说人像」这种自相矛盾，而且两边都不认为自己错。
+    ///   `setScene` 内部的去抖/限频由 `SceneDriver` 负责（它知道 `invalidate` 的代价）。
+    private func startSceneDetection() {
+        sceneDriver.onSceneChange = { [coordinator] name in
+            coordinator.setScene(name)
+        }
+        sceneDriver.start()
+        session.onFrameTap = { [sceneDriver] pixelBuffer in
+            // 这一行跑在 `videoQueue` 上：`submit` 内部只做转交，立刻返回。
+            sceneDriver.submit(pixelBuffer: pixelBuffer)
+        }
     }
 
     /// 起「照拨」建议的 500ms 驱动。
@@ -681,6 +713,11 @@ struct ContentView: View {
         motion.stop()
         mission.stop()
         paramAdvisor.stop()
+        // ★ 旁路槽必须显式摘掉：`CameraSession` 是 `@State` 持有的长命对象，
+        //   不清就会在页面已经关掉之后还往 `SceneDriver` 里喂帧 ——
+        //   `SceneDriver.isRunning` 会挡住处理，但每帧仍要过一次跨队列转交，纯浪费。
+        session.onFrameTap = nil
+        sceneDriver.stop()
         coordinator.detach()
         session.stop()
         pipelineStarted = false
