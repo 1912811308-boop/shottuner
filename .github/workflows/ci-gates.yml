@@ -326,7 +326,7 @@ jobs:
       # ★ 这一行必须与 `ios/project.yml` 的 `MARKETING_VERSION` 保持同步。
       #   1.1.0 起有机器保障：本 job 的 `版本同源 · RELEASE_TAG 与 MARKETING_VERSION`
       #   这个 step 会比对两者，不一致直接红 —— 不再靠人记。
-      RELEASE_TAG: "v1.1.2"
+      RELEASE_TAG: "v1.2.0"
     steps:
       # ★ 前置检查：Release 必须**先**存在，否则本 job 会白烧约 20 分钟 macOS 配额。
       #

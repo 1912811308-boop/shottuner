@@ -22,9 +22,10 @@ android {
         // ★ versionCode **不能回退** —— 系统靠它判断能否覆盖安装，
         //   已装过 31/32 的设备装不上 versionCode 更小的包。故内部取 33。
         // 1.0.0=33，1.0.1=34（iOS 首次真正能拍），1.1.0=35（iOS 补齐四块功能），
-        // 1.1.1=36（修横屏悬浮窗 + 人像/风景误判），1.1.2=37（iOS 接场景识别）。
-        versionCode = 37
-        versionName = "1.1.2"
+        // 1.1.1=36（修横屏悬浮窗 + 人像/风景误判），1.1.2=37（iOS 接场景识别），
+        // 1.2.0=38（Android 成长页 / iOS 隐私门 + 图鉴进度 / 二进制扫描门禁）。
+        versionCode = 38
+        versionName = "1.2.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }

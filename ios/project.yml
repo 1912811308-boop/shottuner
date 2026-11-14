@@ -80,9 +80,10 @@ settings:
     #   不该沿用 Android 内部的迭代号（2.x/3.x 从未对外发布过）。
     # CURRENT_PROJECT_VERSION 是 iOS 侧的**独立递增**（从 1 起算），与 Android 的 versionCode 无关。
     # 1.0.0=1，1.0.1=2（取景+评分主链 + 快门），1.1.0=3（功能页/录像方案/成长记录 + 四个门面），
-    # 1.1.1=4（修横屏悬浮窗 + 人像/风景误判），1.1.2=5（iOS 接场景识别）。
-    MARKETING_VERSION: "1.1.2"
-    CURRENT_PROJECT_VERSION: "5"
+    # 1.1.1=4（修横屏悬浮窗 + 人像/风景误判），1.1.2=5（iOS 接场景识别），
+    # 1.2.0=6（iOS 隐私门 + 图鉴进度）。
+    MARKETING_VERSION: "1.2.0"
+    CURRENT_PROJECT_VERSION: "6"
 
     # ── 签名：CI 一律不签名（硬规则一）──
     # ★ 加引号是刻意的：YAML 1.1 会把裸的 NO 解析成布尔 false，
