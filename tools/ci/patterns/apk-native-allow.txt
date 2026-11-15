@@ -1,0 +1,41 @@
+# A1 · APK 产物里允许出现的原生库（lib/**/*.so）白名单
+# ─────────────────────────────────────────────────────────────────────────────
+# 消费者：tools/ci/scan-apk.sh（A1 判据）
+# 语义：APK 里**任意路径下**每个 *.so 的**文件名**（不含目录）必须在本清单里；
+#       出现清单外的 .so ⇒ 红。
+#
+# ★ 为什么 Android 需要这道、而 iOS 有自己的那道：
+#   iOS 侧（G4-a）卡的是 *.framework / *.dylib —— KMP 与第三方 SDK 都是那个形态。
+#   Android 侧第三方 SDK 有两种形态：
+#     ① Java/Kotlin 代码 → 进 classes*.dex（由 A2 的黑名单管）
+#     ② 原生库 → 进 lib/<abi>/*.so（由本清单管）
+#   ② 是最隐蔽的一种：一个 .so 可以自己带 http 栈、自己打点上报，
+#   **dex 里一行痕迹都没有**，源码门禁更看不到。所以这里用**穷举白名单**
+#   （不是黑名单）—— 允许什么必须一个个写出来，加一个 = 一次显式、可审计的决定。
+#
+# ★ 这份清单是怎么来的（2026-11 实测枚举，不是猜的）：
+#   `unzip -Z1 dist/ShotTuner-1.2.0-release.apk | grep '\.so$'` 的真实输出，去重后：
+#     lib/arm64-v8a/libface_detector_v2_jni.so
+#     lib/arm64-v8a/libimage_processing_util_jni.so
+#     lib/arm64-v8a/libmlkitcommonpipeline.so
+#     lib/armeabi-v7a/libface_detector_v2_jni.so
+#     lib/armeabi-v7a/libimage_processing_util_jni.so
+#     lib/armeabi-v7a/libmlkitcommonpipeline.so
+#   ⇒ 只有 3 个不同的库名，两个 ABI 各一份（abiFilters 是 arm64-v8a + armeabi-v7a，
+#     见 app/build.gradle.kts）。三个都是 **ML Kit / TFLite 管线自带**：
+#       · libmlkitcommonpipeline        ML Kit 通用推理管线
+#       · libface_detector_v2_jni       人脸检测（com.google.mlkit:face-detection）
+#       · libimage_processing_util_jni  图像预处理
+#   它们是端侧离线推理的实现，**不做任何网络访问**；A3（manifest 权限）是它们的
+#   反证 —— 这个 APK 连 INTERNET 权限都没有，硬闯网络也发不出去。
+#
+# ★ 加一个新名字之前该做什么：
+#   先 `aapt2 dump permissions <apk>` 确认没新增网络权限，再在本清单里写一行并说明
+#   它从哪来（哪个依赖 / 哪个 SDK），提交信息里带上理由。**不要**顺手改成 `libmlkit*`
+#   这种通配 —— 白名单一旦能通配，它就不再是白名单了。
+#
+# 一行一个文件名（不带目录），固定字符串精确匹配，'#' 之后为注释。
+
+libmlkitcommonpipeline.so
+libface_detector_v2_jni.so
+libimage_processing_util_jni.so

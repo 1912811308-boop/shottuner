@@ -56,6 +56,7 @@ cp -r "${SCRIPT_DIR}/lib" "${SCRIPT_DIR}/patterns" "${REPO}/tools/ci/"
 cp "${SCRIPT_DIR}/check-no-network.sh" "${SCRIPT_DIR}/check-no-network-config.sh" \
    "${SCRIPT_DIR}/check-apple-credentials.sh" "${SCRIPT_DIR}/check-ios-project-spec.sh" \
    "${SCRIPT_DIR}/check-swift-contract-args.sh" "${SCRIPT_DIR}/scan-binary.sh" \
+   "${SCRIPT_DIR}/scan-apk.sh" "${SCRIPT_DIR}/check-privacy-version.sh" \
    "${REPO}/tools/ci/"
 chmod +x "${REPO}/tools/ci/"*.sh
 
@@ -617,6 +618,224 @@ printf '<?xml version="1.0"?>\n<plist version="1.0"><dict></dict></plist>\n' > "
 expect fail "产物 Info.plist 读不动（无 CFBundleIdentifier）→ G4 红（不是静默通过）" "${FAKESCAN}" "${APPF}"
 
 rm -rf "${ART}"
+
+# ── APK 产物扫描（A1 原生库白名单 / A2 dex SDK 血统 / A3 manifest 权限）────
+# ★ 为什么这道门禁比别的更需要反向验证：它的三条判据各有各的「永远绿」坏法，
+#   而且都不会有人主动怀疑：
+#   · A1 白名单写反（变成"什么都不允许"）→ 每次出包都红 → 团队学会忽略它；
+#   · A2 写成 `unzip -p … | grep -q` + `set -o pipefail` → grep 命中后立即退出，
+#     unzip 收到 SIGPIPE（141），pipefail 把整条管道判失败 ⇒ **命中被读成未命中**，
+#     门禁永远绿。这是最难发现的一类门禁 bug（第 ③ 条专门抓它）；
+#   · A3 拿不到 aapt2 时若"跳过"→ 最硬的判据静默消失（第 ⑤ 条抓它）。
+#
+# ★ 为什么用假 aapt2 而不是真 aapt2：
+#   假 APK 的 AndroidManifest.xml 是**占位文本**，真 aapt2 解不动它（会 exit 2），
+#   于是「期望绿」的用例永远拿不到绿。所以 A3 的判定用假 aapt2 驱动
+#   —— 与 G4 那次用假 plutil 把「权威解析分支」搬到本机来测是同一手法。
+#   真 aapt2 的路径由本仓纪律之外的自测覆盖（拿真实 dist/*.apk 跑一次）。
+ci_info ""
+ci_info "【APK 产物扫描】"
+SCANAPK="${REPO}/tools/ci/scan-apk.sh"
+
+ALLOWED_SO="$(ci_load_patterns "apk-native-allow.txt" | head -1)"
+DEXSDK="$(ci_load_patterns "apk-dex-forbidden.txt" | head -1)"
+PERMPAT="$(ci_load_patterns "apk-forbidden-permissions.txt" | head -1)"
+[ -n "${ALLOWED_SO}" ] || ci_die "apk-native-allow.txt 为空"
+[ -n "${DEXSDK}" ]     || ci_die "apk-dex-forbidden.txt 为空"
+[ -n "${PERMPAT}" ]    || ci_die "apk-forbidden-permissions.txt 为空"
+
+# ── 造 zip（假 APK）：有 zip 就用它，没有就用 python 的 zipfile ──
+# ★ 两种都试的原因：Windows 的 Git Bash 一般**没有** zip（本机就是这样），
+#   而 ubuntu runner 有。测试件必须在两种机器上都能造出来。
+ZIPPY=""
+for c in python3 python py; do
+  if command -v "${c}" >/dev/null 2>&1; then ZIPPY="${c}"; break; fi
+done
+
+zip_dir() {
+  local src="$1" out="$2"
+  rm -f "${out}"
+  if command -v zip >/dev/null 2>&1; then
+    # ★ 用 `*` 而不是 `.`：`zip -qr out.zip .` 会把条目写成 "./lib/x.so"，
+    #   而 A2 的 `^classes[0-9]*\.dex$` 是锚定的 —— 带前缀就匹配不到，
+    #   于是"找不到 dex"会被判成门禁自身出错，测试假红。
+    ( cd "${src}" && zip -qr "${out}" ./* ) || return 1
+    return 0
+  fi
+  [ -n "${ZIPPY}" ] || return 1
+  "${ZIPPY}" - "${src}" "${out}" <<'PY'
+import os
+import sys
+import zipfile
+
+src, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+    for base, _dirs, files in os.walk(src):
+        for name in files:
+            path = os.path.join(base, name)
+            arc = os.path.relpath(path, src).replace(os.sep, "/")
+            zf.write(path, arc)
+PY
+}
+
+APKSRC="${WORK}/apk-src"
+FAKEAPK="${WORK}/fake.apk"
+
+# write_fake_apk [额外的 .so 文件名] [dex 里附加的内容]
+#   · 默认：白名单内的 .so + 干净 dex + manifest 占位（= 合规形态）
+write_fake_apk() {
+  local extra_so="${1:-}"
+  local dex_body="${2:-}"
+  rm -rf "${APKSRC}"
+  mkdir -p "${APKSRC}/lib/arm64-v8a"
+  printf 'fake native lib body\n' > "${APKSRC}/lib/arm64-v8a/${ALLOWED_SO}"
+  if [ -n "${extra_so}" ]; then
+    printf 'fake third party lib body\n' > "${APKSRC}/lib/arm64-v8a/${extra_so}"
+  fi
+  printf 'dex placeholder body %s\n' "${dex_body}" > "${APKSRC}/classes.dex"
+  printf 'binary xml placeholder\n' > "${APKSRC}/AndroidManifest.xml"
+  zip_dir "${APKSRC}" "${FAKEAPK}"
+}
+
+# ── 假 aapt2：只实现 `dump permissions <apk>` ──────────────────────────────
+# 权限列表由环境变量 FAKE_AAPT2_PERMS 注入（一行一条），这样同一个假件
+# 既能演"合规"、也能演"声明了网络权限"。
+cat > "${FAKEBIN}/aapt2" <<'FAKEAAPT'
+#!/usr/bin/env bash
+# 假 aapt2：只实现 `dump permissions <apk>`，输出与真 aapt2 同格式。
+# ★ 一定会打出 package 行 —— 真脚本靠它证明"manifest 真的读动了"。
+set -u
+[ "${1:-}" = "dump" ] || exit 2
+[ "${2:-}" = "permissions" ] || exit 2
+printf 'package: com.shottuner.app\n'
+if [ -n "${FAKE_AAPT2_PERMS:-}" ]; then
+  printf '%s\n' "${FAKE_AAPT2_PERMS}" | while IFS= read -r p; do
+    [ -n "${p}" ] || continue
+    printf "uses-permission: name='%s'\n" "${p}"
+  done
+fi
+exit 0
+FAKEAAPT
+chmod +x "${FAKEBIN}/aapt2" 2>/dev/null || true
+
+# 正常权限集（与真实 APK 同形：有权限、但没有网络权限）
+FAKE_AAPT2_PERMS="android.permission.CAMERA
+android.permission.VIBRATE"
+export FAKE_AAPT2_PERMS
+
+# 带假 aapt2 跑真脚本
+cat > "${FAKEBIN}/scan-apk-with-aapt2" <<EOF
+#!/usr/bin/env bash
+SHOTTUNER_AAPT2="${FAKEBIN}/aapt2"; export SHOTTUNER_AAPT2
+exec bash "${SCANAPK}" "\$@"
+EOF
+chmod +x "${FAKEBIN}/scan-apk-with-aapt2" 2>/dev/null || true
+FAKESCANAPK="${FAKEBIN}/scan-apk-with-aapt2"
+
+# ① 合规形态 → 绿（同时证明白名单不是"什么都不允许"）
+write_fake_apk
+expect pass "合规假 APK（白名单内的 .so + 干净 dex + 无网络权限）→ APK 扫描绿" "${FAKESCANAPK}" "${FAKEAPK}"
+
+# ② 多一个白名单外的 .so → 红（A1）
+#    ★ 这是 .so 侧的核心用例：一个自带 http 栈的原生库，dex 里没有任何痕迹。
+write_fake_apk "libAcmeNet.so"
+expect fail "出现白名单外的原生库（libAcmeNet.so）→ APK 扫描红" "${FAKESCANAPK}" "${FAKEAPK}"
+
+# ③ dex 里出现网络 SDK 特征类名 → 红（A2）
+#    故意写成真正的 dex 里那种斜杠形态类名，验证 grep 是在**解压后的字节**上做的。
+write_fake_apk "" "L${DEXSDK}/RealCall;"
+expect fail "dex 里出现第三方网络 SDK 血统（${DEXSDK}）→ APK 扫描红" "${FAKESCANAPK}" "${FAKEAPK}"
+
+# ④ APK 路径不存在 → 红（exit 2，不是静默通过）
+expect fail "APK 路径不存在 → APK 扫描红（不是静默通过）" "${FAKESCANAPK}" "${WORK}/NoSuch.apk"
+
+# ⑤ 拿不到 aapt2 → 红（exit 2）
+#    ★ 防的是"最硬的判据静默消失"：既不给 SHOTTUNER_AAPT2，
+#      也不给 ANDROID_HOME/ANDROID_SDK_ROOT，连 HOME 都指到空目录
+#      （否则脚本会从 gradle 缓存里捞出 AGP 下过的 aapt2 —— 那正是它设计上的第 ④ 条退路）。
+mkdir -p "${WORK}/empty-home"
+cat > "${FAKEBIN}/scan-apk-no-aapt2" <<EOF
+#!/usr/bin/env bash
+unset ANDROID_HOME ANDROID_SDK_ROOT SHOTTUNER_AAPT2
+export HOME="${WORK}/empty-home"
+export PATH=/usr/bin:/bin
+# ★ 如果这台机器的 /usr/bin 里居然也有 aapt2，本例就**构造不出**"拿不到 aapt2"的场景。
+#   这时故意 exit 0（期望红、实得绿）让用例明确失败 —— 而不是变成一个
+#   "碰巧因为别的原因红"的假通过。环境问题要看得见。
+if command -v aapt2 >/dev/null 2>&1 || command -v aapt2.exe >/dev/null 2>&1; then
+  echo "::error::/usr/bin 里存在 aapt2，本例无法构造'拿不到 aapt2'的场景" >&2
+  exit 0
+fi
+exec bash "${SCANAPK}" "\$@"
+EOF
+chmod +x "${FAKEBIN}/scan-apk-no-aapt2" 2>/dev/null || true
+write_fake_apk
+expect fail "拿不到 aapt2 → APK 扫描红（exit 2，不静默通过）" "${FAKEBIN}/scan-apk-no-aapt2" "${FAKEAPK}"
+
+# ⑥ 产物声明了网络权限 → 红（A3 的"能红"证明）
+#    ★ 题面没点这两条，但一条只会绿的门禁等于没有门禁。
+write_fake_apk
+FAKE_AAPT2_PERMS="android.permission.CAMERA
+${PERMPAT}"
+export FAKE_AAPT2_PERMS
+expect fail "产物 manifest 声明了网络权限（${PERMPAT}）→ APK 扫描红" "${FAKESCANAPK}" "${FAKEAPK}"
+# 复原（后面的用例还要用干净权限集）
+FAKE_AAPT2_PERMS="android.permission.CAMERA
+android.permission.VIBRATE"
+export FAKE_AAPT2_PERMS
+
+# ── 隐私政策版本一致性门禁 ──────────────────────────────────────────────────
+# ★ 拦的是合规缺陷：政策升版时「改正文」与「改同意键名」是两个动作，
+#   只做前一个 → 老用户静默沿用旧同意，新政策不生效，而且编译、运行、日志全都正常。
+#   ⇒ 必须有一张对照表，否则这条不变量迟早被人改回"两处各写各的"。
+ci_info ""
+ci_info "【隐私政策版本一致性门禁】"
+PRIV="${REPO}/tools/ci/check-privacy-version.sh"
+
+mkdir -p "${REPO}/app/src/main/res/raw" "${REPO}/app/src/main/java/com/shottuner/app" \
+         "${REPO}/ios/ShotTuner/Onboarding"
+
+# 合规 fixture：正文 v1 + 键名 _v1 + R.raw.privacy_v1 + iOS version = 1
+write_privacy_fixture() {
+  local policy_ver="$1" key_ver="$2" ios_ver="$3" raw_ref="$4"
+  rm -f "${REPO}/app/src/main/res/raw/"privacy_v*.txt
+  printf '隐私政策正文（版本 %s 的测试文本）\n' "${policy_ver}" \
+    > "${REPO}/app/src/main/res/raw/privacy_v${policy_ver}.txt"
+  cat > "${REPO}/app/src/main/java/com/shottuner/app/MainActivity.kt" <<KT
+package com.shottuner.app
+
+class MainActivity {
+    // 读取同意状态（本例不参与版本判定）
+    private fun loadAccepted(): Boolean = uiPrefs.getBoolean(KEY_PRIVACY_ACCEPTED, false)
+
+    private fun policyText(): String =
+        resources.openRawResource(R.raw.privacy_v${raw_ref}).bufferedReader().use { it.readText() }
+
+    companion object {
+        private const val KEY_PRIVACY_ACCEPTED = "privacy_accepted_v${key_ver}"
+    }
+}
+KT
+  cat > "${REPO}/ios/ShotTuner/Onboarding/PrivacyText.swift" <<SWIFT
+import Foundation
+
+enum PrivacyText {
+    static let version: Int = ${ios_ver}
+    static let versionLabel: String = "v${ios_ver}.0"
+}
+SWIFT
+}
+
+write_privacy_fixture 1 1 1 1
+expect pass "政策 v1 + 键名 _v1 + iOS version 1 → 隐私门禁绿" "${PRIV}" "${REPO}"
+
+# ⑦ 政策升到 v2、键名仍是 _v1 → 红（★ 这就是那个合规缺陷本身）
+write_privacy_fixture 2 1 2 2
+expect fail "政策 v2 + 键名仍是 _v1 → 隐私门禁红（老用户会静默沿用旧同意）" "${PRIV}" "${REPO}"
+
+# ⑧ Android 一致、iOS 版本没跟上 → 红
+write_privacy_fixture 1 1 2 1
+expect fail "iOS PrivacyText.version 与政策正文版本不一致 → 隐私门禁红" "${PRIV}" "${REPO}"
 
 ci_log ""
 if [ "${FAIL}" -gt 0 ]; then

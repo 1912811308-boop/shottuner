@@ -57,6 +57,17 @@ jobs:
       - name: iOS 工程规格自检
         run: bash tools/ci/check-ios-project-spec.sh
 
+      # ── 隐私政策版本一致性（★ 拦的是合规缺陷，不是编译错误）──────────────
+      #   政策正文 app/src/main/res/raw/privacy_v1.txt 的版本号，与
+      #   MainActivity.kt 的 `KEY_PRIVACY_ACCEPTED = "privacy_accepted_v1"`
+      #   **是两个可以各自独立偏移的地方**（版本号编在键名里）。
+      #   只改正文、忘了改键名 ⇒ 老用户磁盘上那个老键早就是 true ⇒
+      #   **政策升版后不会重新征得同意**，而编译、运行、崩溃日志全都正常。
+      #   这是本项目里唯一一类「错了也不会有人发现」的缺陷，所以必须有机器盯。
+      #   顺带把 iOS 的 PrivacyText.version 钉在同一版本号上（两端政策必须同源）。
+      - name: 隐私政策版本一致性
+        run: bash tools/ci/check-privacy-version.sh
+
   # ── common-gate：commonMain 能编 iOS target 吗？（整份 CI 设计的单点依赖）──
   #
   # ★ 为什么跑在 Linux runner 上：
@@ -129,6 +140,139 @@ jobs:
       # ── 3. Android 侧零行为变化 ──
       - name: 编译 Android
         run: ./gradlew :app:assembleDebug
+
+  # ── android-package：出 apk，并在**产物**上扫（零网络承诺的产物层 · Android 侧）──
+  #
+  # ★ 为什么需要这个 job：
+  #   `ios-package` 里的 scan-binary.sh **只扫 ipa**。也就是说：Android 包从来没有人
+  #   看过产物。第三方网络 SDK 混进 apk 有两种形态 ——
+  #     ① Java/Kotlin 代码 → 进 classes*.dex
+  #     ② 原生库 → 进 lib/<abi>/*.so（可以自带 http 栈自己上报，dex 里零痕迹）
+  #   这两种形态，**六道源码门禁一道都扫不到**（它们只读文本），而唯一的产物门禁
+  #   只跑 iOS。⇒ 本 job 就是补这个洞：先出 release apk，再在**要发出去的那个包**上判。
+  #
+  #   判据（三条，见 tools/ci/scan-apk.sh 与 tools/ci/patterns/apk-*.txt）：
+  #     A1  lib/**/*.so 白名单（穷举允许：没批过的一律不许进）
+  #     A2  classes*.dex 里的第三方网络 / 遥测 SDK 血统（黑名单）
+  #     A3  产物 manifest 无 INTERNET / ACCESS_NETWORK_STATE（用 aapt2 判，不自己解 AXML）
+  #
+  # ★ 为什么跑在 ubuntu、且**不**与 ios-package 串 needs：
+  #   · Android 构建不需要 macOS，塞进 macOS job 是白烧 10× 倍率的配额；
+  #   · 两个 job 必须彼此独立：apk 扫描失败**不应该**挡住 ipa 上传（反之亦然）。
+  #     它们扫的是两个完全不同的产物，一个坏了不代表另一个不能发。
+  #
+  # ★ 为什么手动触发（workflow_dispatch）：
+  #   assembleRelease 是分钟级、要下依赖；而 push 上的「能不能编过」已经由
+  #   common-gate 的 `:app:assembleDebug`（ubuntu）覆盖了。攒着跑，别每个 push 都烧。
+  #
+  # ⚠️ 如实声明（第一次把 Android 出包搬到 Linux runner 上，别把它当既成事实）：
+  #   · 有依据的部分：common-gate 长期在 **ubuntu** 上跑 `:app:assembleDebug` 且是绿的
+  #     ⇒ 「Gradle 8.9 + AGP 8.6.1 + 依赖解析 + Android SDK 在 Linux 上能工作」成立。
+  #   · release 比 debug 多两件事：**R8 混淆 / 资源压缩**（纯 JVM 工具，与宿主无关，
+  #     风险低）与**签名配置**（gradle.properties.example 里 RELEASE_* 是空串，
+  #     assembleRelease 会直接报 "missing required property storeFile" —— 已由下面
+  #     「一次性 CI 密钥库」那一步处理掉，见该步注释）。
+  #   · 因此首次运行最可能失败的地方是**依赖下载 / 缓存冷启动**，而不是配置写错。
+  #     真失败了就看日志补依赖，不要急着给它加 `continue-on-error` ——
+  #     那会让这道门禁变成装饰。
+  android-package:
+    name: Android 出包 + 产物扫描（ubuntu · 手动触发）
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # gradle.properties 被 .gitignore 排除（含明文签名口令），构建必需项从 example 复制。
+      - name: 准备 gradle.properties
+        run: cp gradle.properties.example gradle.properties
+
+      # Windows 上 core.fileMode 默认 false，提交进仓库的模式可能是 644 ——
+      # checkout 到 Linux runner 上 ./gradlew 会 "Permission denied"（同 common-gate 的坑）。
+      - name: 确保 gradlew 可执行
+        run: chmod +x gradlew
+
+      # ★ 为什么必须现造一个密钥库：
+      #   app/build.gradle.kts 的 release signingConfig 是**惰性求值**的（四项 RELEASE_*
+      #   齐全才配置），而 gradle.properties.example 里那四项是空串 ⇒
+      #   `:app:assembleRelease` 会在 validateSigningRelease 报
+      #   "SigningConfig 'release' is missing required property storeFile"。
+      #   本 job 只需要「出个包给门禁扫」，不需要真签名 ⇒ 用 keytool 现造一个一次性
+      #   密钥库（落在 $RUNNER_TEMP：**不进仓库、不进 artifact、不进 secrets**）。
+      #
+      #   ★ 它签出来的包**绝不能分发**，但这与硬规则一并不冲突：
+      #     硬规则一针对的是 iOS / Apple 凭据（SideStore 在设备端签名）。
+      #     Android 的真实 release 包仍然只在 Windows 本地用真密钥库构建，签名指纹不变。
+      #   ★ 为什么「换个密钥库不影响扫描结论」：keytool 只影响 META-INF 与签名块，
+      #     **dex / lib/**.so / AndroidManifest.xml 三者逐字节不变** —— 而 A1/A2/A3 扫的
+      #     正是这三者。所以这个包对门禁而言与真包等价。
+      - name: 造一次性 CI 密钥库（仅用于出包给门禁扫，绝不用于分发）
+        run: |
+          set -euo pipefail
+          KS="${RUNNER_TEMP}/ci-gate-only.p12"
+          rm -f "${KS}"
+          keytool -genkeypair -keystore "${KS}" -storetype PKCS12 \
+            -storepass ci-gate-only -keypass ci-gate-only \
+            -alias ci-gate -keyalg RSA -keysize 2048 -validity 1 \
+            -dname "CN=CI Gate Only, O=ShotTuner, C=CN"
+          printf 'CI_KEYSTORE=%s\n' "${KS}" >> "${GITHUB_ENV}"
+
+      - name: 构建 release APK
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assembleRelease --console=plain \
+            -PRELEASE_STORE_FILE="${CI_KEYSTORE}" \
+            -PRELEASE_STORE_PASSWORD=ci-gate-only \
+            -PRELEASE_KEY_ALIAS=ci-gate \
+            -PRELEASE_KEY_PASSWORD=ci-gate-only
+
+      # ── A1 / A2 / A3 · 扫要发出去的那个包 ──
+      # 门禁的意义就是「不合格的包不许发」，所以扫的是 release 产物本身，不是中间件。
+      - name: A1/A2/A3 · APK 产物扫描（release）
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -s "${APK}" \
+            || { echo "::error::扫描前找不到 apk：${APK}（上一步没产出？）"; exit 1; }
+          bash tools/ci/scan-apk.sh "${APK}" --manifest "${RUNNER_TEMP}/apk-manifest-release.txt"
+          {
+            echo "## APK 产物清单（release）"
+            echo '```'
+            cat "${RUNNER_TEMP}/apk-manifest-release.txt"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+      # ★ 为什么还要扫一遍 debug 包（不是重复劳动）：
+      #   release 开了 R8（isMinifyEnabled = true），第三方 SDK 的类名会被**重命名**成
+      #   a.b.c —— 于是 A2 的黑名单（okhttp3 / com.squareup …）在混淆后的 dex 上
+      #   **搜不到**。而 debug 包不混淆，类名原样保留 ⇒ A2 在 debug dex 上才真正有效。
+      #   两者互补：release 证明「发出去的包没有网络权限、没有陌生 .so」，
+      #   debug 证明「依赖树里没有混进联网 SDK」。
+      - name: 构建 debug APK（A2 用：未被 R8 重命名，类名可判）
+        run: ./gradlew :app:assembleDebug --console=plain
+
+      - name: A1/A2/A3 · APK 产物扫描（debug · A2 的主战场）
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "${APK}" \
+            || { echo "::error::扫描前找不到 apk：${APK}（上一步没产出？）"; exit 1; }
+          bash tools/ci/scan-apk.sh "${APK}" --manifest "${RUNNER_TEMP}/apk-manifest-debug.txt"
+          {
+            echo "## APK 产物清单（debug）"
+            echo '```'
+            cat "${RUNNER_TEMP}/apk-manifest-debug.txt"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
   # ── ios-compile：真正把 iOS target 编出来（**必须 macOS 宿主**）────────
   #

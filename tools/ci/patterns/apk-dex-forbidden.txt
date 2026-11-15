@@ -1,0 +1,76 @@
+# A2 · APK dex 里禁用的第三方网络 / 遥测 SDK 特征类名（黑名单）
+# ─────────────────────────────────────────────────────────────────────────────
+# 消费者：tools/ci/scan-apk.sh（A2 判据）
+# 扫描方式：`unzip -p <apk> classes*.dex | grep -a -F` —— dex 是 zip 内压缩的，
+#           必须先解出来再按二进制文本搜（dex 里的类名是明文算符串）。
+# 语义：命中任意一行 ⇒ 红。
+#
+# ★ 为什么这一层用**黑名单**，而 A1 用白名单（这不是不一致，是分工）：
+#   A1 的对象是 *.so —— 数量少、来源单一、每个都要有人负责，穷举可行。
+#   dex 的对象是整棵依赖树（androidx / camerax / material / ML Kit …），
+#   合法类名前缀有上百个。用白名单卡 dex 的结果一定是「被人一条条加例外，
+#   加到失效」；所以 dex 侧只拦**已知的第三方网络/遥测 SDK 血统**。
+#   两者职责不同：A1 防「未知的原生库混进来」，A2 防「已知的联网 SDK 混进来」。
+#
+# ★★ 为什么清单里**没有 `firebase`**（题面举例里有，这里刻意删掉了 —— 实测结果说话）：
+#   ML Kit 自己就依赖 firebase-components / firebase-installations。合规产物
+#   dist/ShotTuner-1.2.0-release.apk 的 classes.dex 里真实存在这些字符串：
+#       com.google.firebase.components.ComponentRegistrar
+#       com.google.firebase.encoders.proto.Protobuf
+#       https://firebaseinstallations.googleapis.com/v1
+#   （`unzip -p … classes.dex | grep -a -F firebase | wc -l` = 6 处）
+#   ⇒ 把 `firebase` 写进本清单 = **每一个合规包都红**。
+#   「红一次的 CI 门禁等于没有门禁」，团队会立刻学会忽略它（同 docs/IOS-ARCH-EXEC.md
+#   §4.3 对「不要扫 NSURLSession」的技术更正，是同一条道理）。
+#   Crashlytics 是另一回事 —— 它不在这条依赖链上，所以下面单列 `crashlytics`。
+#
+# ★ 准入标准（三条全满足才可加一行）：
+#   ① 是**第三方**网络/广告/归因/推送/崩溃上报 SDK 的血统；
+#   ② 在**真实合规产物**上 `grep -c` 结果为 0（否则就是误报，会变成永远红）；
+#   ③ 本仓永远不会合法使用它（第一批零网络承诺下，这些 SDK 一个都不许进）。
+#
+# 固定字符串匹配（grep -F），一行一条，'#' 之后为注释。
+
+# ── HTTP / RPC 栈（一经引入就说明有联网意图）──
+okhttp3
+okio
+retrofit2
+retrofit
+com/squareup
+com.squareup
+
+# ── 崩溃 / 性能上报 ──
+crashlytics
+io.sentry
+io/sentry
+com.datadog
+
+# ── 归因 / 广告 / 增长（装量统计的那一类）──
+appsflyer
+com/appsflyer
+com.adjust
+com.google.android.gms.ads
+com/google/android/gms/ads
+com.facebook.ads
+com/facebook/appevents
+com/onesignal
+com.clevertap
+com.braze
+com.appboy
+com.kakao
+
+# ── 国内常见统计 / 推送 ──
+com.umeng
+com/umeng
+com.tencent.bugly
+com/tendcloud
+
+# ── 产品分析 ──
+com.amplitude
+com.mixpanel
+com.flurry
+com.segment.analytics
+io.branch
+io/branch
+io.intercom
+com.intercom

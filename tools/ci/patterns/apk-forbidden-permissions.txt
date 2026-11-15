@@ -1,0 +1,22 @@
+# A3 · APK 产物 manifest 里禁用的权限（产物层零网络的最后一道）
+# ─────────────────────────────────────────────────────────────────────────────
+# 消费者：tools/ci/scan-apk.sh（A3 判据）
+# 语义：`aapt2 dump permissions <apk>` 的输出里出现下列任意一个 uses-permission ⇒ 红。
+#
+# ★ 为什么必须用 aapt2 而不是 grep 二进制 AndroidManifest.xml：
+#   产物里的 manifest 是 AXML（二进制 XML），字符串存在 UTF-16 字符串池里，
+#   `grep` 直接搜字节搜不到（`grep -a` 也不行，因为字母之间夹着 \0）。
+#   自己写解析器 = 又一个会被人改坏、而且坏了没人知道的门禁。
+#   ⇒ 用 build-tools 自带的 aapt2；**拿不到 aapt2 就 exit 2，不静默通过**。
+#
+# ★ 为什么这两条权限而不是全部权限：
+#   零网络承诺的机器判据只有一条 —— 这个包**没有能力**发起网络访问。
+#   Android 的网络能力由 INTERNET 授予；ACCESS_NETWORK_STATE 本身不能发包，
+#   但「我现在有没有网」这种判断只有想联网的代码才会问，一并禁掉。
+#   其余权限（CAMERA / VIBRATE / FOREGROUND_SERVICE …）都是产品功能所需，
+#   由产品和审核管，不由本门禁管。
+#
+# 一行一条权限全名，固定字符串精确匹配，'#' 之后为注释。
+
+android.permission.INTERNET
+android.permission.ACCESS_NETWORK_STATE
