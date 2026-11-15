@@ -1302,6 +1302,91 @@
                     android:textSize="10sp" />
 
                 <!--
+                  悬浮窗方向（v3.1.2 手动兜底）。
+
+                  为什么一定要有这一档：真机上的旋转行为因 ROM 而异 —— 有的厂商把系统相机做成
+                  「竖屏锁定 + 界面内部旋转」，display 根本不报旋转；有的 OEM 对 overlay 窗口
+                  不回调 DisplayListener。自动判定（display + 加速度计）能覆盖绝大多数情况，
+                  但不可能覆盖全部。给用户一个点两下就能自救的开关，比让我们再猜一轮便宜。
+
+                  默认「自动」：档位字符串存在 CoachOverlay 的 prefs 里（键名与默认值见
+                  OverlayOrientation.KEY_ORIENTATION_MODE / parseManualOrientation）。
+                -->
+                <TextView
+                    android:id="@+id/tvOverlayOrientationTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="悬浮窗方向"
+                    android:textColor="@color/st_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <RadioGroup
+                    android:id="@+id/rgOverlayOrientation"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:orientation="horizontal">
+
+                    <RadioButton
+                        android:id="@+id/rbOverlayAuto"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:buttonTint="@color/st_accent"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="0dp"
+                        android:text="自动"
+                        android:textColor="@color/st_text_option"
+                        android:textSize="12sp" />
+
+                    <RadioButton
+                        android:id="@+id/rbOverlayPortrait"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:buttonTint="@color/st_accent"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="0dp"
+                        android:text="竖屏"
+                        android:textColor="@color/st_text_option"
+                        android:textSize="12sp" />
+
+                    <RadioButton
+                        android:id="@+id/rbOverlayLandscapeLeft"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:buttonTint="@color/st_accent"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="0dp"
+                        android:text="顶部朝左"
+                        android:textColor="@color/st_text_option"
+                        android:textSize="12sp" />
+
+                    <RadioButton
+                        android:id="@+id/rbOverlayLandscapeRight"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:buttonTint="@color/st_accent"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="0dp"
+                        android:text="顶部朝右"
+                        android:textColor="@color/st_text_option"
+                        android:textSize="12sp" />
+                </RadioGroup>
+
+                <TextView
+                    android:id="@+id/tvOverlayOrientationHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="横屏拍照时悬浮卡字还是竖的，就在这里手动指定：顶部朝左 = 手机横过来后顶部在你左手边"
+                    android:textColor="@color/st_text_faint"
+                    android:textSize="10sp" />
+
+                <!--
                   G1：到位震动开关。
 
                   震动是可感知的打扰，**必须给用户关闭的出口**，否则差评。

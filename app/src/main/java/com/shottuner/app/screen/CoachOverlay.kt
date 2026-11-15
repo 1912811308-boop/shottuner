@@ -1,12 +1,20 @@
 package com.shottuner.app.screen
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.hardware.display.DisplayManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Display
 import android.view.Gravity
@@ -20,6 +28,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.shottuner.app.R
+import com.shottuner.app.sensors.LevelMath
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -79,6 +88,30 @@ import kotlin.math.roundToInt
  *
  * 竖屏路径的行为**完全没变**：方向 0 时卡片还是窗口根 View、宽度算法等价、
  * gravity 仍是「顶部居中」、拖动夹取区间一字未改。
+ *
+ * ## 横屏跟随方向 v3.1.2：display 之外再加一路信号
+ *
+ * v3.1.1 只信 `Display.getRotation()`，结果在 clover 的小米 14 Pro 上翻车：
+ * 用系统相机横屏拍，**界面确实转成了横屏，悬浮卡却竖着不动**。
+ *
+ * 原因是 MIUI 的系统相机把 Activity 锁成竖屏、再在 View 层自己把画面转 90°
+ * ——「界面转了」和「display 转了」是两件事。`Display.getRotation()` 停在
+ * [OverlayOrientation.ROTATION_0]，`DisplayListener` 自然不回调，
+ * 而 [OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY] 本身又不做任何补偿 ⇒ 什么都不发生。
+ *
+ * 现在朝向由**两路信号**共同决定，判定规则全部收敛到纯函数
+ * [OverlayOrientation.effectiveContentDegrees]（可单测，见 `CoachOverlayOrientationTest`）：
+ *
+ * 1. **display 优先**：`Display.getRotation()` 不是 0，就用它 —— 它比传感器准。
+ * 2. **设备角度兜底**：display 说「没转」时，看加速度计算出的横滚角；
+ *    |roll| ≥ 55° 就认为设备物理上横过来了，按 ±90° 补偿。
+ * 3. **400ms 去抖**：新角度要连续稳定 400ms 才重建。横竖切换是人为动作，
+ *    400ms 不影响手感，但能挡住「举着手机慢慢转」时连续重建导致的闪烁。
+ * 4. **500ms 轮询兜底**：`DisplayListener` 在部分 OEM 上对 overlay 窗口不回调，
+ *    轮询是最后一道保险（生命周期见 [hide]）。
+ * 5. **手动档位优先于以上全部**：功能页的「悬浮窗方向」可以强制竖屏 / 强制横屏，
+ *    理由写在 [OverlayOrientation.ManualOrientation] 的注释里 ——
+ *    真机行为因 ROM 而异，自动判定不可能覆盖全部，用户得能一条路自救。
  */
 class CoachOverlay(
     private val context: Context,
@@ -86,7 +119,6 @@ class CoachOverlay(
 ) {
 
     private companion object {
-        const val PREFS = "shottuner_overlay"
         const val KEY_X = "pos_x"
         const val KEY_Y = "pos_y"
         const val CARD_MAX_DP = 340
@@ -101,6 +133,37 @@ class CoachOverlay(
         /** 拖动夹取：上不越过状态栏，下留 120dp 给快门区 */
         const val DRAG_TOP_DP = 24
         const val DRAG_BOTTOM_RESERVE_DP = 120
+
+        /**
+         * 朝向变化要**稳定这么久**才重建悬浮窗（毫秒）。
+         *
+         * 横竖切换是人为动作，用户不会在半秒内来回切；400ms 完全不影响手感，
+         * 但能挡住「举着手机慢慢转」时角度在阈值附近连续跨过导致的一串重建
+         * （每重建一次都要 removeView + addView，连续十几次会看到明显闪烁）。
+         */
+        const val ORIENTATION_STABLE_MS = 400L
+
+        /**
+         * 朝向轮询间隔（毫秒）。
+         *
+         * `DisplayManager.DisplayListener` 在部分 OEM 上对 `TYPE_APPLICATION_OVERLAY`
+         * 窗口不回调，而加速度计也可能被厂商省电策略掐掉 —— 轮询是最后一道保险。
+         * 500ms 的代价是两次读属性（`Display.getRotation()` + 一个 volatile Float），
+         * 相对于 320ms 一次的截图分析可以忽略。
+         */
+        const val ORIENTATION_POLL_MS = 500L
+
+        /** 传感器节流：66ms ≈ 15Hz，够 400ms 去抖用，又不至于把主线程打满 */
+        const val SENSOR_MIN_INTERVAL_MS = 66L
+    }
+
+    /**
+     * 悬浮窗自己的设置（拖动位置 + 朝向兜底档位）。
+     *
+     * 与功能页共用一个文件名，常量统一放在 `OverlayOrientation` 里，避免两处字面量走偏。
+     */
+    private val prefs: SharedPreferences by lazy {
+        context.getSharedPreferences(OverlayOrientation.PREFS_OVERLAY, Context.MODE_PRIVATE)
     }
 
     /**
@@ -135,11 +198,80 @@ class CoachOverlay(
     private var root: View? = null
     private var params: WindowManager.LayoutParams? = null
 
-    /** 最近一次已知的物理旋转 */
+    /** 最近一次已知的 display 旋转（`Display.getRotation()` 的序号） */
     private var lastRotation: Int = OverlayOrientation.ROTATION_0
 
     /** 旋转监听器：show() 时注册，hide() 时反注册（不注册会泄漏 Service） */
     private var displayListener: DisplayManager.DisplayListener? = null
+
+    // ── 朝向判定状态（v3.1.2：display + 设备物理朝向双信号）────────────────────
+
+    /** 主线程 Handler：去抖计时、轮询、传感器回调统一落在这条线程上 */
+    private val handler = Handler(Looper.getMainLooper())
+
+    /**
+     * 设备物理横滚角（度，-180..180，0 = 竖持）。
+     *
+     * ★ 必须是**没有按屏幕方向补偿过**的原始设备角 —— 只有这样才能在
+     *   「界面转了但 `Display.getRotation()` 仍是 0」时把 90° 读出来。
+     *   `LevelMath.solve(..., rotationDegrees = 0)` 给的就是这个口径。
+     *
+     * @Volatile：传感器回调与轮询都在主线程，理论上不需要；但 `SensorManager`
+     *   在某些 ROM 上会从别的线程派发，加一个不会错，且成本为零。
+     */
+    @Volatile
+    private var deviceRollDeg: Float = 0f
+
+    /**
+     * 当前**已经生效**的内容预旋转角（度）。
+     *
+     * null = 还没算过（首次 show 时算一次）。重建时直接用它，
+     * 不重新采样 —— 否则 rebuild 那一刻传感器正好抖到阈值另一侧，会重建出一个错的朝向。
+     */
+    private var appliedContentDegrees: Float? = null
+
+    /** 正在等待稳定的候选角度；null = 没有候选 */
+    private var pendingContentDegrees: Float? = null
+
+    /** 候选角度第一次出现的时刻（`SystemClock.elapsedRealtime()`） */
+    private var pendingSinceElapsed: Long = 0L
+
+    /** 加速度计/重力传感器（拿不到就是 null，静默降级成只信 display） */
+    private val sensorManager: SensorManager? =
+        context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+
+    private val gravitySensor: Sensor? =
+        sensorManager?.getDefaultSensor(Sensor.TYPE_GRAVITY)
+            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+    private var sensorRegistered = false
+    private var lastSensorEmitAt = 0L
+
+    /**
+     * 用户改了「悬浮窗方向」档位时立刻重建 —— 这是**自救开关**，不能要求用户
+     * 关掉再打开悬浮教练才生效。
+     *
+     * ★ 必须用字段强引用住：`SharedPreferences` 对监听器是**弱引用**，
+     *   写成 `prefs.registerOnSharedPreferenceChangeListener { ... }` 传个 lambda，
+     *   下一次 GC 就静默失效（表现是「设置里改了没反应」，极难查）。
+     */
+    private val prefChangeListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            // 只按 key 判定，不比对 prefs 实例：功能页与悬浮窗拿到的可能不是同一个
+            // Context（Activity vs Service），虽然同进程内通常返回同一实例，
+            // 但把正确性押在「通常」上是不可接受的。键名带 orientation 语义，别的键不会误命中。
+            if (key == OverlayOrientation.KEY_ORIENTATION_MODE) {
+                // 手动档是用户明确点的，不需要 400ms 去抖：立刻按新档重建一次
+                handler.post {
+                    if (root != null) {
+                        pendingContentDegrees = null
+                        pendingSinceElapsed = 0L
+                        appliedContentDegrees = resolveContentDegrees()
+                        rebuild()
+                    }
+                }
+            }
+        }
 
     /** 最近一次 render 的文案：重建窗口后要接着显示，不能闪回占位符 */
     private var lastScene = ""
@@ -189,7 +321,23 @@ class CoachOverlay(
         // 落位方式必须跟着窗口模型走：FOLLOW_DISPLAY 下横屏的「上边」是真的上边，
         // 用 CENTER 会把卡片放到画面正中、正好压住主体。见 `anchorFor` 的注释。
         val anchor = OverlayOrientation.anchorFor(rotation, windowSpaceModel)
-        val contentDegrees = OverlayOrientation.contentRotationDegrees(rotation, windowSpaceModel)
+
+        // ★ 内容朝向走「双信号」判定（display + 设备物理朝向），不再只信 display。
+        //   applied 已经算过就用它 —— 重建期间传感器抖动不能让朝向跟着抖。
+        val contentDegrees = appliedContentDegrees ?: resolveContentDegrees().also {
+            appliedContentDegrees = it
+        }
+        val contentRotationIndex = OverlayOrientation.rotationIndexOf(contentDegrees)
+
+        // 竖屏那条路上「下面要留 120dp 给快门区」；而内容预旋转后，卡片在窗口坐标系里的
+        // 视觉高度是 cardWidth（宽高对调），所以下界还要再加上这一截，
+        // 否则用户往下拖时卡片会拖出窗口坐标系的可视区（FLAG_LAYOUT_NO_LIMITS 允许越界，就真丢了）。
+        // 只有顶部锚点用得上这两个值，其它锚点是相对中心夹取。
+        val bottomReserve = if (OverlayOrientation.isQuarterTurn(contentDegrees)) {
+            dp(DRAG_BOTTOM_RESERVE_DP) + cardWidth
+        } else {
+            dp(DRAG_BOTTOM_RESERVE_DP)
+        }
 
         val card = buildCard()
         val handle = card.second
@@ -201,12 +349,11 @@ class CoachOverlay(
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val maxOffsetX = OverlayOrientation.maxOffsetXPx(spaceWidth, cardWidth)
 
         // 内容需要预旋转时套一层壳：窗口 Surface 的大小 = 根 View 的尺寸，
         // 而卡片转 90° 之后的视觉外框是「高 × 宽」，直接转根 View 会被裁掉。
-        val rotated = contentDegrees != 0f
+        val rotated = contentRotationIndex != OverlayOrientation.ROTATION_0
         val lp = WindowManager.LayoutParams(
             if (rotated) WindowManager.LayoutParams.WRAP_CONTENT else cardWidth,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -225,7 +372,7 @@ class CoachOverlay(
                         prefs.getInt(KEY_Y, dp(DEFAULT_TOP_DP)),
                         spaceHeight,
                         dp(DRAG_TOP_DP),
-                        dp(DRAG_BOTTOM_RESERVE_DP)
+                        bottomReserve
                     )
                 }
 
@@ -242,7 +389,9 @@ class CoachOverlay(
         val rootView: View = if (rotated) {
             RotationShell(context).apply {
                 contentWidthPx = cardWidth
-                contentRotation = rotation
+                // ★ 用**生效的**旋转序号，不是 `Display.getRotation()`：
+                //   「界面转了但 display 没转」时两者不同，那正是本次要修的场景。
+                contentRotation = contentRotationIndex
                 addView(
                     card.first,
                     FrameLayout.LayoutParams(cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -297,7 +446,7 @@ class CoachOverlay(
                                         startY + d.y,
                                         spaceHeight,
                                         dp(DRAG_TOP_DP),
-                                        dp(DRAG_BOTTOM_RESERVE_DP)
+                                        bottomReserve
                                     )
                                 } else {
                                     OverlayOrientation.clampCenterYPx(
@@ -336,6 +485,9 @@ class CoachOverlay(
             params = lp
             applyText()
             ensureDisplayListener()
+            startOrientationSensors()
+            startOrientationPolling()
+            startPrefListener()
         } catch (_: Throwable) {
             root = null
         }
@@ -392,14 +544,162 @@ class CoachOverlay(
         tvCompose.visibility = if (lastCompose.isBlank()) View.GONE else View.VISIBLE
     }
 
+    /**
+     * 收摊：**所有**注册过的东西都在这里反注册。
+     *
+     * 顺序无所谓，但一条都不能漏 —— 漏一条就是 Service 泄漏
+     * （`ScreenCaptureService.cleanup()` 是唯一的调用者，它之后会 `stopSelf()`）。
+     * - `DisplayListener`（系统服务持有我们的回调）
+     * - 加速度计（`SensorManager` 持有我们的回调，**还会持续耗电**）
+     * - 500ms 轮询（主线程 Handler 持有 Runnable，会一直把自己排回去）
+     * - SharedPreferences 监听器（虽然它不持有 Context，但会拿到失效的 prefs 回调）
+     */
     fun hide() {
         unregisterDisplayListener()
+        stopOrientationPolling()
+        stopOrientationSensors()
+        stopPrefListener()
+        // 下次 show() 要重新采样：中间可能已经转过屏了
+        appliedContentDegrees = null
+        pendingContentDegrees = null
+        pendingSinceElapsed = 0L
         val v = root ?: return
         try {
             wm.removeView(v)
         } catch (_: Throwable) {
         }
         root = null
+    }
+
+    // ── 方向判定（display + 设备物理朝向 双信号）──────────────────────────────
+
+    /**
+     * 最终要用的内容预旋转角：**手动档位优先，其次自动判定**。
+     *
+     * 每次现算，不缓存 —— 缓存就得管失效，而这里读的是两个随手可得的属性、
+     * 加上一个 volatile Float，成本可以忽略。
+     */
+    private fun resolveContentDegrees(): Float {
+        val manual = OverlayOrientation.parseManualOrientation(
+            prefs.getString(OverlayOrientation.KEY_ORIENTATION_MODE, null)
+        )
+        return OverlayOrientation.resolveContentDegrees(
+            displayRotation = currentRotation(),
+            deviceRollDeg = deviceRollDeg,
+            model = windowSpaceModel,
+            manual = manual
+        )
+    }
+
+    /**
+     * 朝向变了没有？变了、且稳定够久 → 重建。
+     *
+     * 去抖用「候选角度的首次出现时刻」而不是 `Handler` 的延迟消息：
+     * 角度在阈值附近来回抖时，延迟消息会被不停取消再重排，
+     * 而记录时刻的写法天然只认「连续稳定」——逻辑更短也更好读。
+     */
+    private fun applyOrientationIfStable() {
+        if (root == null) return
+        val target = resolveContentDegrees()
+        val applied = appliedContentDegrees
+        if (applied != null && target == applied) {
+            // 回到已生效的角度：候选作废（用户转了一下又转回来）
+            pendingContentDegrees = null
+            pendingSinceElapsed = 0L
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (pendingContentDegrees != target) {
+            pendingContentDegrees = target
+            pendingSinceElapsed = now
+            return
+        }
+        if (now - pendingSinceElapsed < ORIENTATION_STABLE_MS) return
+        pendingContentDegrees = null
+        pendingSinceElapsed = 0L
+        appliedContentDegrees = target
+        rebuild()
+    }
+
+    /** 500ms 轮询：DisplayListener 不回调时的最后一道保险 */
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            // 窗口没了就别再排自己 —— 这是轮询不会泄漏的唯一保证
+            if (root == null) return
+            applyOrientationIfStable()
+            handler.postDelayed(this, ORIENTATION_POLL_MS)
+        }
+    }
+
+    private fun startOrientationPolling() {
+        handler.removeCallbacks(pollRunnable)
+        handler.postDelayed(pollRunnable, ORIENTATION_POLL_MS)
+    }
+
+    private fun stopOrientationPolling() {
+        handler.removeCallbacks(pollRunnable)
+    }
+
+    /**
+     * 加速度计/重力：唯一能在「display 说没转」时告诉我们设备其实横过来了的信号。
+     *
+     * 拿不到传感器（`gravitySensor == null`）就静默跳过 —— 此时只剩 display 与轮询，
+     * 页面照样能用，只是那种 ROM 上没有修复效果。**不要**弹窗、不要报错。
+     */
+    private fun startOrientationSensors() {
+        if (sensorRegistered) return
+        val manager = sensorManager ?: return
+        val sensor = gravitySensor ?: return
+        try {
+            manager.registerListener(sensorListener, sensor, SensorManager.SENSOR_DELAY_UI, handler)
+            sensorRegistered = true
+        } catch (_: Throwable) {
+            sensorRegistered = false
+        }
+    }
+
+    private fun stopOrientationSensors() {
+        if (!sensorRegistered) return
+        sensorRegistered = false
+        try {
+            sensorManager?.unregisterListener(sensorListener)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private val sensorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastSensorEmitAt < SENSOR_MIN_INTERVAL_MS) return
+            lastSensorEmitAt = now
+            val v = event.values
+            if (v.size < 3) return
+            // rotationDegrees = 0：**故意**不按屏幕方向补偿，要的就是设备自身的横滚角。
+            // 传 display 的旋转进来会把「界面转了但 display 没转」这个信号抵消掉 ——
+            // 那正是本次要抓的东西。
+            val reading = LevelMath.solve(gx = v[0], gy = v[1], gz = v[2], rotationDegrees = 0)
+                ?: return
+            deviceRollDeg = reading.roll
+            applyOrientationIfStable()
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+            // 精度变化不需要处理：朝向判定只看是否过了 55° 阈值，对噪声不敏感
+        }
+    }
+
+    private fun startPrefListener() {
+        try {
+            prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun stopPrefListener() {
+        try {
+            prefs.unregisterOnSharedPreferenceChangeListener(prefChangeListener)
+        } catch (_: Throwable) {
+        }
     }
 
     // ── 方向监听 ──────────────────────────────────────────────────────────────
@@ -422,7 +722,14 @@ class CoachOverlay(
 
             override fun onDisplayChanged(displayId: Int) {
                 if (displayId != Display.DEFAULT_DISPLAY) return
-                if (currentRotation() == lastRotation) return
+                val rotation = currentRotation()
+                if (rotation == lastRotation) return
+                lastRotation = rotation
+                // 真实转屏是系统级事件（系统已经去过抖），而且窗口尺寸、卡片宽度、
+                // 夹取区间全都要跟着变 —— 不等 400ms，立刻重建。
+                pendingContentDegrees = null
+                pendingSinceElapsed = 0L
+                appliedContentDegrees = resolveContentDegrees()
                 rebuild()
             }
         }

@@ -1,5 +1,6 @@
 package com.shottuner.app.screen
 
+import kotlin.math.abs
 import kotlin.math.min
 
 /**
@@ -76,6 +77,25 @@ object OverlayOrientation {
     const val ROTATION_180 = 2
     const val ROTATION_270 = 3
 
+    // ── 偏好设置（CoachOverlay 与 MainActivity 共用，只能有一份字面量）──────────
+
+    /**
+     * 悬浮窗自己的 SharedPreferences 文件名（历史名，别改：用户在旧版的拖动位置在里面）。
+     *
+     * 放在这个纯函数文件里而不是各自的类里，是因为**两边都要读同一份**：
+     * `CoachOverlay` 要读它决定朝向，功能页要写它让用户自救。
+     * 两处各写一遍字符串，早晚有一处改漏 —— 表现就是「设置里改了，悬浮窗不理会」。
+     */
+    const val PREFS_OVERLAY = "shottuner_overlay"
+
+    /**
+     * 「悬浮窗方向」手动兜底档位的键。
+     *
+     * 存的是 [ManualOrientation] 的枚举名（见 [manualOrientationKey]），
+     * 不是序号 —— 序号会被将来插入新档位偷偷改语义，枚举名不会。
+     */
+    const val KEY_ORIENTATION_MODE = "orientation_mode"
+
     /** 卡片在窗口坐标系里的落位方式 */
     enum class Anchor {
         /** 顶部居中（竖屏沿用旧行为，零回归） */
@@ -109,6 +129,49 @@ object OverlayOrientation {
         LOCKED_PORTRAIT,
         FOLLOW_DISPLAY
     }
+
+    /**
+     * **手动兜底**的朝向档位（功能页那个「悬浮窗方向」选择器）。
+     *
+     * ★ 为什么必须留这一档（注释里写清理由，将来别有人以「有自动了，删掉吧」为名删掉）：
+     *   真机上的旋转行为**因 ROM 而异**。小米/华为/OPPO 各自会改一版：
+     *   有的 OEM 对 overlay 不回调 `DisplayListener`，有的把系统相机做成
+     *   「竖屏锁定 + 界面内部旋转」，还有的屏幕旋转由厂商自己的传感器算法决定
+     *   （我们拿到的 rollout 可能差 20°）。自动判定再聪明也不可能覆盖全部机型，
+     *   **给用户一个能立刻自救的开关，比让我们再猜一轮便宜** —— 用户转一下手机、
+     *   点两下就正了，而我们不必再等一次真机反馈。
+     */
+    enum class ManualOrientation {
+        /** 按 display + 设备物理朝向自动判定（默认） */
+        AUTO,
+
+        /** 强制竖屏：内容不预旋转，永远竖着 */
+        FORCE_PORTRAIT,
+
+        /**
+         * 强制横屏，手机**顶部朝左**（= 设备逆时针横置）。
+         *
+         * 补偿方向见文件头的推导：[ROTATION_90] ⇒ 内容顺时针转 90°。
+         */
+        FORCE_LANDSCAPE_TOP_LEFT,
+
+        /**
+         * 强制横屏，手机**顶部朝右**（= 设备顺时针横置）。
+         *
+         * 补偿方向：[ROTATION_270] ⇒ 内容顺时针转 270°（视觉上等于逆时针 90°）。
+         */
+        FORCE_LANDSCAPE_TOP_RIGHT
+    }
+
+    /**
+     * 判定「设备物理上已经横过来」的横滚角阈值（度）。
+     *
+     * 取值 55 的理由：竖持时手抖 ±20° 很常见，横持是 ±90°，
+     * 55 正好是两者的中点 —— 两边各留 35° 余量。
+     * 取 45 会在「举着手机慢慢转」时在阈值附近来回抖（每抖一次就重建一次悬浮窗）；
+     * 取 65 则略斜着拿就判不出横屏，用户还是会看到竖排的字。
+     */
+    const val LANDSCAPE_ROLL_THRESHOLD_DEG = 55f
 
     /** 拖动增量（窗口坐标系） */
     data class Delta(val x: Int, val y: Int)
@@ -157,6 +220,159 @@ object OverlayOrientation {
         } else {
             normalizeRotation(rotation) * 90f
         }
+
+    /**
+     * **实际的**「内容预旋转角」—— 本题（横屏时悬浮卡不跟着转）的修复核心。
+     *
+     * ## 为什么 [contentRotationDegrees] 不够
+     *
+     * 它只信 `Display.getRotation()`。而真机上存在一类「界面转了、display 没转」的情形：
+     * 系统相机把 Activity 锁成竖屏，再在自己的 View 里手动把画面转 90°（MIUI 就这么干）。
+     * 用户**看到**界面横过来了，`Display.getRotation()` 却仍然返回 [ROTATION_0]，
+     * 于是 [WindowSpaceModel.FOLLOW_DISPLAY] 分支算出「不用预旋转」= 0°，
+     * 卡片就竖着不动 —— 这正是 clover 在小米 14 Pro 上复现的那个 bug。
+     *
+     * 补法是引入第二个信号：**设备物理朝向**（加速度计/重力的横滚角）。
+     * display 说「没转」、但设备物理上已经横过来了，就用设备角度补上。
+     *
+     * ## 规则（改之前先想清楚，这四条是互相咬合的）
+     *
+     * | displayRotation | \|deviceRoll\| | model | 返回 |
+     * |---|---|---|---|
+     * | ≠ 0 | 任意 | [WindowSpaceModel.FOLLOW_DISPLAY] | `0f`（窗口自己转了，内容不补） |
+     * | ≠ 0 | 任意 | [WindowSpaceModel.LOCKED_PORTRAIT] | `rotation × 90f`（老逻辑，没变） |
+     * | 0 | ≥ [LANDSCAPE_ROLL_THRESHOLD_DEG] | 两者 | `+90f`（roll > 0）/ `-90f`（roll < 0） |
+     * | 0 | < 阈值 | 两者 | `0f`（竖持，含手抖） |
+     *
+     * 第一条优先于设备角度：display 已经告诉我们它转了，**它比传感器准** ——
+     * 传感器有噪声、有延迟，而且用户可能只是把手机放在桌沿斜着。
+     *
+     * ## 符号
+     *
+     * `deviceRollDeg > 0` 对应 `ROTATION_90`（设备逆时针横置、顶部朝左），
+     * 而 `ROTATION_90` 的补偿是 `+90°`（见文件头推导）。所以正负号可以直接搬过来，
+     * 不需要取反 —— 这一点用 `LevelMath` 的实测口径验过：
+     * 设备顶部朝左时重力读数 `(gx, gy) = (+g, 0)`，`atan2(gx, gy) = +90°`。
+     *
+     * @param displayRotation `Display.getRotation()`（0/1/2/3）
+     * @param deviceRollDeg 加速度计算出的横滚角（-180..180），**0 = 竖持**，
+     *   必须是「不按屏幕方向补偿」的原始设备角（`LevelMath.solve` 传 rotationDegrees = 0）
+     * @param model 窗口坐标系模型
+     * @return 内容预旋转角（顺时针为正，与 `View.rotation` 约定一致）
+     */
+    fun effectiveContentDegrees(
+        displayRotation: Int,
+        deviceRollDeg: Float,
+        model: WindowSpaceModel = WindowSpaceModel.LOCKED_PORTRAIT
+    ): Float {
+        val rotation = normalizeRotation(displayRotation)
+        val roll = normalizeRoll(deviceRollDeg)
+
+        // 设备物理上横过来了吗？横了就给 ±90°，否则 null（= 传感器说不出话来）
+        val fromDevice: Float? = if (abs(roll) >= LANDSCAPE_ROLL_THRESHOLD_DEG) {
+            if (roll > 0f) 90f else -90f
+        } else {
+            null
+        }
+
+        return when (model) {
+            // 窗口跟随 display：display 说转了，框架已经替我们转好，内容不补
+            WindowSpaceModel.FOLLOW_DISPLAY ->
+                if (rotation != ROTATION_0) 0f else fromDevice ?: 0f
+
+            // 窗口被锁在竖屏：老逻辑不动，只在 display 说不出话时用设备角度兜底
+            WindowSpaceModel.LOCKED_PORTRAIT ->
+                if (rotation != ROTATION_0) rotation * 90f else fromDevice ?: 0f
+        }
+    }
+
+    /**
+     * 超出手动档位之外的最终决策：**手动档优先于自动判定**。
+     *
+     * @param manual 用户在功能页选的档位
+     * @return 内容预旋转角；[ManualOrientation.AUTO] 时等于
+     *   [effectiveContentDegrees] 的结果
+     */
+    fun resolveContentDegrees(
+        displayRotation: Int,
+        deviceRollDeg: Float,
+        model: WindowSpaceModel = WindowSpaceModel.LOCKED_PORTRAIT,
+        manual: ManualOrientation = ManualOrientation.AUTO
+    ): Float = manualContentDegrees(manual)
+        ?: effectiveContentDegrees(displayRotation, deviceRollDeg, model)
+
+    /**
+     * 手动档位对应的固定预旋转角。
+     *
+     * @return null 表示「不强制」= [ManualOrientation.AUTO]，交给自动判定
+     */
+    fun manualContentDegrees(manual: ManualOrientation): Float? = when (manual) {
+        ManualOrientation.AUTO -> null
+        ManualOrientation.FORCE_PORTRAIT -> 0f
+        // 顶部朝左 = ROTATION_90 的姿态 = 顺时针补 90°（与文件头表格一致）
+        ManualOrientation.FORCE_LANDSCAPE_TOP_LEFT -> 90f
+        // 顶部朝右 = ROTATION_270 的姿态 = 顺时针补 270°（视觉上逆时针 90°）
+        ManualOrientation.FORCE_LANDSCAPE_TOP_RIGHT -> 270f
+    }
+
+    /**
+     * 档位 → 存进 SharedPreferences 的字符串（枚举名）。
+     *
+     * 用枚举名而不是序号：将来在中间插一档不会把老用户的选择改成语义不同的另一档。
+     */
+    fun manualOrientationKey(manual: ManualOrientation): String = manual.name
+
+    /**
+     * 从 SharedPreferences 读出的字符串还原档位。
+     *
+     * 脏数据（null / 空串 / 手改过的值 / 老版本残留）一律回落 [ManualOrientation.AUTO] ——
+     * 默认值必须是「自动」，否则一次读错就把用户锁死在某个固定朝向里。
+     */
+    fun parseManualOrientation(raw: String?): ManualOrientation =
+        if (raw.isNullOrBlank()) {
+            ManualOrientation.AUTO
+        } else {
+            ManualOrientation.entries.firstOrNull { it.name == raw } ?: ManualOrientation.AUTO
+        }
+
+    /**
+     * 把任意横滚角规整到 [-180, 180]，非有限值按 0（竖持）处理。
+     *
+     * 传感器偶尔会给出 NaN/Inf（驱动 bug 或自由落体），一次脏值不能把卡片翻掉。
+     */
+    private fun normalizeRoll(roll: Float): Float {
+        if (!roll.isFinite()) return 0f
+        var d = roll % 360f
+        if (d > 180f) d -= 360f
+        if (d < -180f) d += 360f
+        return d
+    }
+
+    /**
+     * 预旋转角 → `Surface.ROTATION_*` 序号（0/1/2/3）。
+     *
+     * 旋转壳与 [visual] 都按**序号**表达（四套几何本来就是按 90° 整数倍切的），
+     * 所以 [effectiveContentDegrees] 给出 `-90f` 时要能换回 [ROTATION_270]。
+     * 非 90° 倍数的脏值就近取整，不抛异常。
+     */
+    fun rotationIndexOf(contentDegrees: Float): Int {
+        if (!contentDegrees.isFinite()) return ROTATION_0
+        var d = contentDegrees % 360f
+        if (d < 0f) d += 360f
+        // +45 后整除 90 就是「就近的 90° 整数倍」；%4 把 315..360 折回 0
+        return when ((((d + 45f) / 90f).toInt()) % 4) {
+            1 -> ROTATION_90
+            2 -> ROTATION_180
+            3 -> ROTATION_270
+            else -> ROTATION_0
+        }
+    }
+
+    /** 是否四分之一转（横置）：内容预旋转 90° / 270° 时旋转壳要宽高对调 */
+    fun isQuarterTurn(contentDegrees: Float): Boolean {
+        val idx = rotationIndexOf(contentDegrees)
+        return idx == ROTATION_90 || idx == ROTATION_270
+    }
 
     /**
      * 悬浮窗窗口坐标系的尺寸（宽、高）。

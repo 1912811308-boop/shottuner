@@ -486,6 +486,387 @@ class CoachOverlayOrientationTest {
         assertTrue("跟随 display 时卡片宽不能超过逻辑宽", follow <= 2340 - dp(24))
     }
 
+    // ── 8. 双信号朝向判定（v3.1.2：横屏不跟随的修复） ────────────────────────
+
+    /**
+     * ① display 说自己转了 ⇒ 窗口已经跟着 display 转好，内容不补。
+     *
+     * 这条是**老行为不能变**的回归线：真机横屏（display 真的转了）时，
+     * 若还额外汇 90°，卡片会侧躺 —— 那正是 v3.1.1 修过的另一个 bug。
+     */
+    @Test
+    fun followDisplayTrustsRotatedDisplay() {
+        for (rot in listOf(
+            OverlayOrientation.ROTATION_90,
+            OverlayOrientation.ROTATION_180,
+            OverlayOrientation.ROTATION_270
+        )) {
+            assertEquals(
+                "FOLLOW_DISPLAY + display=$rot 不该预旋转",
+                0f,
+                OverlayOrientation.effectiveContentDegrees(
+                    displayRotation = rot,
+                    deviceRollDeg = 0f,
+                    model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+                ),
+                0.001f
+            )
+            // display 已经转了，设备角度再离谱也不该改变结论（display 优先）
+            assertEquals(
+                "FOLLOW_DISPLAY + display=$rot 时设备角度不得覆盖 display",
+                0f,
+                OverlayOrientation.effectiveContentDegrees(
+                    displayRotation = rot,
+                    deviceRollDeg = 90f,
+                    model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+                ),
+                0.001f
+            )
+        }
+    }
+
+    /**
+     * ② **本次 bug 的场景**：系统相机界面转了，`Display.getRotation()` 仍是 0，
+     * 设备物理上横过来（roll = +90，顶部朝左）⇒ 内容顺时针补 90°。
+     *
+     * 小米 14 Pro / MIUI 的系统相机就是这一条：竖屏锁定 + 界面内部旋转。
+     * 修之前这里返回 0f，用户看到的就是「字还是竖排」。
+     */
+    @Test
+    fun followDisplayUsesDeviceRollWhenDisplaySaysPortrait() {
+        assertEquals(
+            "display 没转、设备顶部朝左 ⇒ 补 +90°",
+            90f,
+            OverlayOrientation.effectiveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = 90f,
+                model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+            ),
+            0.001f
+        )
+    }
+
+    /** ③ 镜像场景：顶部朝右（roll = -90）⇒ 补 -90°（视觉上等于 270°） */
+    @Test
+    fun deviceRollMirrorsForTopRight() {
+        assertEquals(
+            -90f,
+            OverlayOrientation.effectiveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = -90f,
+                model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+            ),
+            0.001f
+        )
+    }
+
+    /** ④ 竖持手抖不许触发：roll = ±20 是正常握持抖动，必须还是 0° */
+    @Test
+    fun portraitHandJitterDoesNotRotateContent() {
+        for (roll in listOf(0f, 5f, -5f, 20f, -20f, 30f, -30f, 54f, -54f)) {
+            assertEquals(
+                "roll=$roll 属竖持抖动，不该预旋转",
+                0f,
+                OverlayOrientation.effectiveContentDegrees(
+                    displayRotation = OverlayOrientation.ROTATION_0,
+                    deviceRollDeg = roll,
+                    model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+                ),
+                0.001f
+            )
+        }
+    }
+
+    /** ⑤ 刚过阈值：55 是「≥ 55 判定为横」，56 必须触发，55 本身也触发 */
+    @Test
+    fun thresholdBoundaryIsInclusive() {
+        assertEquals(
+            90f,
+            OverlayOrientation.effectiveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = 56f,
+                model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+            ),
+            0.001f
+        )
+        assertEquals(
+            "阈值本身算横屏（>=）",
+            90f,
+            OverlayOrientation.effectiveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = OverlayOrientation.LANDSCAPE_ROLL_THRESHOLD_DEG,
+                model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+            ),
+            0.001f
+        )
+        assertEquals(
+            "阈值下方一点点不算横屏",
+            0f,
+            OverlayOrientation.effectiveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = OverlayOrientation.LANDSCAPE_ROLL_THRESHOLD_DEG - 0.1f,
+                model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+            ),
+            0.001f
+        )
+    }
+
+    /** ⑥ 被锁在竖屏坐标系时同样要用设备角度兜底（display 说不出话的情况） */
+    @Test
+    fun lockedPortraitAlsoFallsBackToDeviceRoll() {
+        assertEquals(
+            90f,
+            OverlayOrientation.effectiveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = 90f,
+                model = OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT
+            ),
+            0.001f
+        )
+        // display 转了时老逻辑一字不改
+        assertEquals(
+            270f,
+            OverlayOrientation.effectiveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_270,
+                deviceRollDeg = 0f,
+                model = OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT
+            ),
+            0.001f
+        )
+        // 竖持 → 0
+        assertEquals(
+            0f,
+            OverlayOrientation.effectiveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = -12f,
+                model = OverlayOrientation.WindowSpaceModel.LOCKED_PORTRAIT
+            ),
+            0.001f
+        )
+    }
+
+    /** 脏数据不许把卡片翻掉：NaN / Inf / 超过一圈的 roll 都要能安全处理 */
+    @Test
+    fun dirtyRollAndRotationAreSafe() {
+        val follow = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+        assertEquals(
+            0f,
+            OverlayOrientation.effectiveContentDegrees(
+                OverlayOrientation.ROTATION_0, Float.NaN, follow
+            ),
+            0.001f
+        )
+        assertEquals(
+            0f,
+            OverlayOrientation.effectiveContentDegrees(
+                OverlayOrientation.ROTATION_0, Float.POSITIVE_INFINITY, follow
+            ),
+            0.001f
+        )
+        // 一圈以外的角度先规整：450° == 90° ⇒ 横持
+        assertEquals(
+            90f,
+            OverlayOrientation.effectiveContentDegrees(
+                OverlayOrientation.ROTATION_0, 450f, follow
+            ),
+            0.001f
+        )
+        // -270° == +90° ⇒ 顶部朝左
+        assertEquals(
+            90f,
+            OverlayOrientation.effectiveContentDegrees(
+                OverlayOrientation.ROTATION_0, -270f, follow
+            ),
+            0.001f
+        )
+        // 非法 rotation 序号按 0 处理（沿用 normalizeRotation 的约定）
+        assertEquals(
+            90f,
+            OverlayOrientation.effectiveContentDegrees(99, 90f, follow),
+            0.001f
+        )
+    }
+
+    /**
+     * ⑦ **手动档位优先于自动判定** —— 自救开关必须压得住自动结果。
+     *
+     * 场景：自动认为「竖屏、不用转」，用户明确选了「强制横屏（顶部朝左）」⇒ 必须 90°。
+     * 反过来也一样：自动认为该转 90°，用户选「竖屏」⇒ 必须 0°。
+     */
+    @Test
+    fun manualOverrideBeatsAutomaticDecision() {
+        val follow = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+        val manual = OverlayOrientation.ManualOrientation.FORCE_LANDSCAPE_TOP_LEFT
+
+        // 自动说 0°，手动说 90° ⇒ 90°
+        assertEquals(
+            90f,
+            OverlayOrientation.resolveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = 0f,
+                model = follow,
+                manual = manual
+            ),
+            0.001f
+        )
+        // 自动说 90°（设备横着），手动说竖屏 ⇒ 0°
+        assertEquals(
+            0f,
+            OverlayOrientation.resolveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = 90f,
+                model = follow,
+                manual = OverlayOrientation.ManualOrientation.FORCE_PORTRAIT
+            ),
+            0.001f
+        )
+        // 自动（AUTO）时与 effectiveContentDegrees 逐值一致
+        assertEquals(
+            OverlayOrientation.effectiveContentDegrees(
+                OverlayOrientation.ROTATION_0, 90f, follow
+            ),
+            OverlayOrientation.resolveContentDegrees(
+                displayRotation = OverlayOrientation.ROTATION_0,
+                deviceRollDeg = 90f,
+                model = follow,
+                manual = OverlayOrientation.ManualOrientation.AUTO
+            ),
+            0.001f
+        )
+    }
+
+    /** 手动档位的四个取值 → 固定角度；AUTO 返回 null 表示「不强制」 */
+    @Test
+    fun manualModesMapToFixedAngles() {
+        assertEquals(
+            null,
+            OverlayOrientation.manualContentDegrees(OverlayOrientation.ManualOrientation.AUTO)
+        )
+        assertEquals(
+            0f,
+            OverlayOrientation.manualContentDegrees(
+                OverlayOrientation.ManualOrientation.FORCE_PORTRAIT
+            )
+        )
+        assertEquals(
+            90f,
+            OverlayOrientation.manualContentDegrees(
+                OverlayOrientation.ManualOrientation.FORCE_LANDSCAPE_TOP_LEFT
+            )
+        )
+        // 270° 与 -90° 视觉等价，这里统一用正的 270°（与 Surface.ROTATION_270 对齐）
+        assertEquals(
+            270f,
+            OverlayOrientation.manualContentDegrees(
+                OverlayOrientation.ManualOrientation.FORCE_LANDSCAPE_TOP_RIGHT
+            )
+        )
+    }
+
+    /** 档位 ↔ 字符串：脏值一律回落「自动」，否则一次读错就把用户锁死在固定朝向 */
+    @Test
+    fun manualOrientationPersistsByNameAndFallsBackToAuto() {
+        for (mode in OverlayOrientation.ManualOrientation.entries) {
+            assertEquals(
+                "档位 $mode 存盘再读必须还原",
+                mode,
+                OverlayOrientation.parseManualOrientation(
+                    OverlayOrientation.manualOrientationKey(mode)
+                )
+            )
+        }
+        assertEquals(
+            OverlayOrientation.ManualOrientation.AUTO,
+            OverlayOrientation.parseManualOrientation(null)
+        )
+        assertEquals(
+            OverlayOrientation.ManualOrientation.AUTO,
+            OverlayOrientation.parseManualOrientation("")
+        )
+        assertEquals(
+            OverlayOrientation.ManualOrientation.AUTO,
+            OverlayOrientation.parseManualOrientation("FORCE_LANDSCAPE_LEFT")
+        )
+        assertEquals(
+            OverlayOrientation.ManualOrientation.AUTO,
+            OverlayOrientation.parseManualOrientation("2")
+        )
+    }
+
+    /** 预旋转角 → 旋转壳用的序号：-90 必须换回 ROTATION_270，否则外壳尺寸算反 */
+    @Test
+    fun rotationIndexOfRoundTrips() {
+        assertEquals(
+            OverlayOrientation.ROTATION_0,
+            OverlayOrientation.rotationIndexOf(0f)
+        )
+        assertEquals(
+            OverlayOrientation.ROTATION_90,
+            OverlayOrientation.rotationIndexOf(90f)
+        )
+        assertEquals(
+            OverlayOrientation.ROTATION_180,
+            OverlayOrientation.rotationIndexOf(180f)
+        )
+        assertEquals(
+            OverlayOrientation.ROTATION_270,
+            OverlayOrientation.rotationIndexOf(270f)
+        )
+        assertEquals(
+            "负角按顺时针折算",
+            OverlayOrientation.ROTATION_270,
+            OverlayOrientation.rotationIndexOf(-90f)
+        )
+        assertEquals(
+            OverlayOrientation.ROTATION_0,
+            OverlayOrientation.rotationIndexOf(360f)
+        )
+        assertEquals(
+            "非 90° 倍数就近取整",
+            OverlayOrientation.ROTATION_90,
+            OverlayOrientation.rotationIndexOf(100f)
+        )
+        assertEquals(
+            OverlayOrientation.ROTATION_0,
+            OverlayOrientation.rotationIndexOf(Float.NaN)
+        )
+    }
+
+    /** 四分之一转的判定：90 / 270 才要宽高对调（旋转壳的尺寸算法据此走） */
+    @Test
+    fun quarterTurnDetection() {
+        assertTrue(OverlayOrientation.isQuarterTurn(90f))
+        assertTrue(OverlayOrientation.isQuarterTurn(-90f))
+        assertTrue(OverlayOrientation.isQuarterTurn(270f))
+        assertTrue(!OverlayOrientation.isQuarterTurn(0f))
+        assertTrue(!OverlayOrientation.isQuarterTurn(180f))
+    }
+
+    /**
+     * 本次修复与外壳几何的接缝：display 说竖屏、设备横着（roll = 90）时，
+     * 旋转 90° 后的视觉外框必须仍然塞得进屏幕（否则卡片会被裁掉一截）。
+     *
+     * 这一条把「内容角度」与「visual() 的宽高对调」两处口径钉在一起 ——
+     * 分开测都对、合起来错的 bug 只能这么抓。
+     */
+    @Test
+    fun compensatedLandscapeBoxFitsScreen() {
+        val degrees = OverlayOrientation.effectiveContentDegrees(
+            displayRotation = OverlayOrientation.ROTATION_0,
+            deviceRollDeg = 90f,
+            model = OverlayOrientation.WindowSpaceModel.FOLLOW_DISPLAY
+        )
+        val idx = OverlayOrientation.rotationIndexOf(degrees)
+        val cardWidth = OverlayOrientation.cardWidthPx(portraitShortSide, density, 340, 24)
+        val contentHeight = 900
+        val v = OverlayOrientation.visual(cardWidth, contentHeight, idx)
+        assertTrue("旋转后宽度 ${v.widthPx} 超过物理长边", v.widthPx <= portraitLongSide)
+        assertTrue("旋转后高度 ${v.heightPx} 超过物理短边", v.heightPx <= portraitShortSide)
+        // 内容确实落在窗口原点右上角那块区域里（支点没算错）
+        assertEquals(contentHeight, v.widthPx)
+        assertEquals(cardWidth, v.heightPx)
+    }
+
     // ── 工具 ─────────────────────────────────────────────────────────────────
 
     /**

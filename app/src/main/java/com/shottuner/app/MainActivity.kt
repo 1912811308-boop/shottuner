@@ -108,6 +108,7 @@ import com.shottuner.app.model.ManualParams
 import com.shottuner.app.model.Recommendation
 import com.shottuner.app.model.SceneType
 import com.shottuner.app.recommend.ParamRecommender
+import com.shottuner.app.screen.OverlayOrientation
 import com.shottuner.app.screen.ScreenCaptureService
 import com.shottuner.app.share.ShareKit
 import com.shottuner.app.share.Watermark
@@ -429,6 +430,7 @@ class MainActivity : AppCompatActivity() {
         // 布局一改就静默失效且不报错 —— 本次 P0-1/P0-2 正好改布局，那种写法必挂。
         setupVolumeShutterSwitch()
         setupWatermarkSwitch()
+        setupOverlayOrientationSelector()
         setupReviewCard()
         setupMissionUi()
         orientationTracker = OrientationTracker(this) { pitch, roll ->
@@ -1112,6 +1114,67 @@ class MainActivity : AppCompatActivity() {
 
     /** 水印是否开启。每次拍照时读一次，不缓存 —— 设置改了下一张就生效。默认关。 */
     private fun watermarkEnabled(): Boolean = uiPrefs.getBoolean(KEY_WATERMARK, false)
+
+    /**
+     * 悬浮窗自己的设置（拖动位置 + 朝向档位）。
+     *
+     * ★ 刻意**不用** [uiPrefs]：这份设置的另一个读者是 `CoachOverlay`，
+     *   它跑在前台 Service 里、随时可能因为没有 Activity 而独立存在，
+     *   所以两边必须共用同一个文件名与键名（常量统一放在
+     *   [OverlayOrientation.PREFS_OVERLAY] / [OverlayOrientation.KEY_ORIENTATION_MODE]）。
+     *   这里只是「代用户写一下」，真正的读取方与生效方都在悬浮窗侧。
+     */
+    private val overlayPrefs by lazy {
+        getSharedPreferences(OverlayOrientation.PREFS_OVERLAY, MODE_PRIVATE)
+    }
+
+    /**
+     * 功能页的「悬浮窗方向」四档选择器（v3.1.2 手动兜底）。
+     *
+     * 存在的理由（别以为「有自动了就能删」）：真机上的旋转行为**因 ROM 而异** ——
+     * 小米把系统相机做成「竖屏锁定 + 界面内部旋转」，display 根本不报旋转；
+     * 部分 OEM 对 overlay 窗口不回调 `DisplayListener`；还有厂商用自己的传感器算法
+     * 决定屏幕方向，我们拿到的 roll 可能差一截。自动判定覆盖不了全部，
+     * 所以必须留一个用户能立刻自救的出口。
+     *
+     * 选择立即落盘，`CoachOverlay` 里注册了 `OnSharedPreferenceChangeListener`，
+     * 所以**改完立刻重建一次**，不需要用户关掉再打开悬浮教练。
+     */
+    private fun setupOverlayOrientationSelector() {
+        val current = OverlayOrientation.parseManualOrientation(
+            overlayPrefs.getString(OverlayOrientation.KEY_ORIENTATION_MODE, null)
+        )
+        // 先 check 再挂监听：否则初始化这一次 check 会被当成用户操作写回磁盘
+        binding.rgOverlayOrientation.check(
+            when (current) {
+                OverlayOrientation.ManualOrientation.AUTO -> R.id.rbOverlayAuto
+                OverlayOrientation.ManualOrientation.FORCE_PORTRAIT -> R.id.rbOverlayPortrait
+                OverlayOrientation.ManualOrientation.FORCE_LANDSCAPE_TOP_LEFT ->
+                    R.id.rbOverlayLandscapeLeft
+                OverlayOrientation.ManualOrientation.FORCE_LANDSCAPE_TOP_RIGHT ->
+                    R.id.rbOverlayLandscapeRight
+            }
+        )
+        binding.rgOverlayOrientation.setOnCheckedChangeListener { _, checkedId ->
+            val picked = when (checkedId) {
+                R.id.rbOverlayAuto -> OverlayOrientation.ManualOrientation.AUTO
+                R.id.rbOverlayPortrait -> OverlayOrientation.ManualOrientation.FORCE_PORTRAIT
+                R.id.rbOverlayLandscapeLeft ->
+                    OverlayOrientation.ManualOrientation.FORCE_LANDSCAPE_TOP_LEFT
+                R.id.rbOverlayLandscapeRight ->
+                    OverlayOrientation.ManualOrientation.FORCE_LANDSCAPE_TOP_RIGHT
+                // id = -1（全部取消选中）或未知值：不写磁盘。
+                // 宁可什么都不做，也不要因为一次程序化的 check 把用户的档位冲掉。
+                else -> return@setOnCheckedChangeListener
+            }
+            overlayPrefs.edit()
+                .putString(
+                    OverlayOrientation.KEY_ORIENTATION_MODE,
+                    OverlayOrientation.manualOrientationKey(picked)
+                )
+                .apply()
+        }
+    }
 
     /** 复盘卡：点一下保持常驻，点「看技法」跳技法页（跳转本身也算"我在看"，先取消收起） */
     private fun setupReviewCard() {
