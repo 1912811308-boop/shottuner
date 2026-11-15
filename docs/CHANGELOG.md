@@ -8,6 +8,68 @@
 > ★ 但内部 `versionCode` **仍然单调递增**（Android 的 33、iOS 的 1，两端独立）：
 > 系统靠 versionCode 判断能不能覆盖安装，**回退会导致装不上**。它与用户看到的版本号是两回事。
 
+## 1.3.2 (versionCode 41 / iOS build 9) - 2026-11-15 - 「悬浮窗横屏跟随」
+
+clover 真机复现：小米 14 Pro 上用系统相机**横屏**拍，系统相机界面转了、自动旋转也开着，
+但悬浮教练卡**竖着不动**。
+
+### 根因
+
+`CoachOverlay` 里 `windowSpaceModel` 写死是 `FOLLOW_DISPLAY`，而这个模式下
+`contentRotationDegrees()` **直接返回 0f** —— 它赌「窗口自己会跟着 display 转」。
+
+MIUI 的系统相机很可能是**竖屏锁定 + 界面内部旋转**：用户看到界面转了，
+但 `Display.getRotation()` 仍是 `ROTATION_0`。于是：
+
+- `DisplayListener` 不触发（rotation 从没变过）
+- 就算触发，`FOLLOW_DISPLAY` 也不做任何补偿
+- ⇒ 卡片竖着不动
+
+### 修法（三层）
+
+**① 加「设备物理朝向」作为第二信号**
+
+新增纯函数 `OverlayOrientation.effectiveContentDegrees(displayRotation, deviceRollDeg, model)`：
+
+| display | \|roll\| | 结果 |
+|---|---|---|
+| ≠ 0 | 任意 | `0f`（窗口自己转了） |
+| 0 | ≥ 55° | `±90f`（**本次 bug 场景**） |
+| 0 | < 55° | `0f`（竖持含手抖） |
+
+55° 是竖持手抖（±20°）与横持（±90°）的中点，两边各留 35° —— 45 会在慢转时来回跳，
+65 会判不出。`roll` 直接当补偿角用不取反：`LevelMath` 实测顶部朝左时 `atan2` = +90°，
+而 `ROTATION_90` 的补偿正是 +90°。
+
+**② 500ms 轮询兜底**
+
+部分 OEM 对 overlay 不回调 `onDisplayChanged`。轮询绑在悬浮窗生命周期上，
+`root == null` 时不再自排（即使有人漏掉 `hide()` 也不会无限排下去）。
+
+**③ 手动开关**
+
+功能页设置区加「悬浮窗方向」四档：`自动`（默认）/ `竖屏` / `顶部朝左` / `顶部朝右`。
+
+★ 这一档不是补丁，是**承认现实**：真机旋转行为因 ROM 而异，自动判定不可能覆盖全部；
+给用户一个十秒能自救的开关，比让我们再猜一轮便宜。
+
+★ 标签刻意写「顶部朝左/朝右」而不是「左/右」：按 AOSP 口径，顶部朝左 = `ROTATION_90`
+= 内容顺时针 +90°，若标成「左」用户第一次一定点反。
+
+### 还会失效的两种情形（如实列出）
+
+1. **MIUI 的 per-app 方向锁作用到 overlay 上**：display 真转了、但窗口被单独锁在竖屏坐标系，
+   规则 1 会继续返回 0° —— 症状一模一样。此时只能靠手动开关。
+2. **传感器被省电策略限流**：`deviceRoll` 恒 0，只剩 display + 轮询，而 display 本来就停在 0。
+   同样靠手动开关。
+
+### 验证
+
+- 测试 332 → **345 executed**（新增 13 例），全绿
+- 13 例里第 ② 条就是本次 bug 场景的直接回归测试（display=0、roll=90、FOLLOW → 90f）
+- 门禁：no-network / common-purity / privacy-version 全绿
+
+
 ## 1.3.1 (versionCode 40 / iOS build 8) - 2026-11-15 - 「主屏改说人话」
 
 这一版没有新功能，只改**主屏那两行字的说法**。但它是这一个系列里最接近产品本质的一次改动。
