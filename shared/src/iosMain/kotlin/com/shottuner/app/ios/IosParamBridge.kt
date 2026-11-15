@@ -28,6 +28,7 @@ import com.shottuner.app.device.DeviceProfile
 import com.shottuner.app.model.Recommendation
 import com.shottuner.app.recommend.ParamRecommender
 import com.shottuner.app.text.NumFmt
+import com.shottuner.app.text.PlainTalk
 import kotlin.math.abs
 
 /**
@@ -126,7 +127,21 @@ object IosParamBridge {
             tip = rec.tip,
             detail = rec.detail,
             confidence = rec.confidence,
-            summary = "ISO ${rec.iso} · ${rec.shutterLabel} · ${rec.kelvin}K · EV ${evText(rec.evDelta)}"
+            // ★ 同一套人话层（与 Android `renderParamsSummary` 同源）：
+            //   结论在前（提亮/压暗/不用调/找地方靠手），档位在后。
+            //   原来这行是 `ISO 400 · 1/60 · 5200K · EV +1.3` —— 四个术语，
+            //   不会拍照的人读完不知道该动哪个拨盘。
+            //   ★ EV 从这行里去掉了：它是从目标亮度反推出来的派生量，方向已由结论词承载；
+            //     要精确值的人走功能页（那里有完整理由）。
+            //   ★ 为什么不在 Swift 里拼：快门吸附、`±0` 口径都在 Kotlin 侧，
+            //     Swift 再拼一遍必然漂移 —— 这条与 `paramRow` 的注释是同一个理由。
+            summary = PlainTalk.params(
+                evDelta = rec.evDelta,
+                iso = rec.iso,
+                shutterLabel = rec.shutterLabel,
+                kelvin = rec.kelvin,
+                needsTripod = rec.needsTripod
+            )
         )
     }
 

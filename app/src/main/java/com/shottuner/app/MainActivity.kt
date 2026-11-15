@@ -113,6 +113,7 @@ import com.shottuner.app.share.ShareKit
 import com.shottuner.app.share.Watermark
 import com.shottuner.app.sensors.LevelSensor
 import com.shottuner.app.text.NumFmt
+import com.shottuner.app.text.PlainTalk
 import com.shottuner.app.ui.GuideOverlayView
 import com.shottuner.app.video.VideoIntent
 import com.shottuner.app.video.VideoPlan
@@ -1935,8 +1936,9 @@ class MainActivity : AppCompatActivity() {
 
         lastStats = stats
         binding.histogram.setHistogram(stats.histogram)
-        binding.tvLuma.text =
-            "亮度 ${(stats.meanLuma * 100).roundToInt()}% · 高光截断 ${(stats.highlightClip * 100).roundToInt()}%"
+        // ★ 亮度那行字**故意不在这里写**：它需要有 evDelta 才能说人话，
+        //   而 rec 要到下面才算出来（见 `renderBrightness` 的调用点）。
+        //   原来这里印的是「亮度 42% · 高光截断 8%」—— 两个术语，小白读完不知道该干什么。
 
         val cls = SceneClassifier.classify(stats, aiResult)
         currentScene = cls.scene
@@ -1960,6 +1962,11 @@ class MainActivity : AppCompatActivity() {
         }
         val display = if (locked && lockedRec != null) lockedRec!! else rec
         lastRecommendation = rec
+
+        // ★ 亮度那行：先给判断与动作，数字退到括号里。
+        //   参数建议已经算出来了（`rec.evDelta`），所以这里能和它同源 ——
+        //   上面若说「亮度正好」、下面让你 ISO 加一档，那种自相矛盾比不显示更糟。
+        renderBrightness(stats, rec.evDelta)
 
         binding.tvScene.text =
             "${cls.scene.label} ${(cls.confidence * 100).roundToInt()}% · ${cls.source}"
@@ -2051,11 +2058,60 @@ class MainActivity : AppCompatActivity() {
      * 四格+直方图默认收起后，如果什么都不留，用户会以为功能被删了。
      * 这行字同时是「参数 ▾」展开前的预览。
      */
+    /**
+     * 亮度那一行：**先说该怎么办，原始数字降级到括号里**。
+     *
+     * 改之前这里是 `亮度 42% · 高光截断 8%`。对一个不会拍照的人，这是两个术语：
+     * 他知道「高光截断」这个词，但不知道 8% 算不算严重、更不知道该动哪个拨盘。
+     * 屏幕上信息很多，而他拍出来的照片没有任何变化。
+     *
+     * 现在：`有点暗，提亮一点（亮度 42%）`—— 结论 + 动作在前，数字在后。
+     *
+     * ★ 判断读的是 `evDelta`（与参数建议同一个量），不是另算一套阈值。
+     *   两套阈值一定会分叉，然后出现「上面说亮度正好、下面让你 ISO 加一档」。
+     * ★ 每 220ms 会被调用一次，所以先比字符串再重建 Span —— 不然每 tick 都分配一次。
+     */
+    private fun renderBrightness(stats: FrameStats, evDelta: Float) {
+        val verdict = PlainTalk.brightness(evDelta, stats.highlightClip, stats.shadowClip)
+        val fine = PlainTalk.brightnessIsFine(evDelta, stats.highlightClip, stats.shadowClip)
+        val numbers = "（亮度 ${(stats.meanLuma * 100).roundToInt()}%）"
+        val plain = verdict + numbers
+        if (binding.tvLuma.text?.toString() == plain) return
+
+        val span = SpannableString(plain)
+        span.setSpan(
+            ForegroundColorSpan(ContextCompat.getColor(this, if (fine) R.color.st_accent else R.color.st_warn)),
+            0,
+            verdict.length,
+            Spanned.SPAN_INCLUSIVE_EXCLUSIVE
+        )
+        span.setSpan(
+            ForegroundColorSpan(ContextCompat.getColor(this, R.color.st_text_dim)),
+            verdict.length,
+            span.length,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        span.setSpan(
+            RelativeSizeSpan(0.85f),
+            verdict.length,
+            span.length,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        binding.tvLuma.text = span
+    }
+
     private fun renderParamsSummary() {
         val rec = lastRecommendation ?: return
+        // ★ 同一套人话层：结论在前（提亮/压暗/不用调），档位在后 —— 要照抄的人仍拿得到数。
         setTextOnce(
             binding.tvParamsSummary,
-            "ISO ${rec.iso} · ${rec.shutterLabel} · ${rec.kelvin}K · EV ${formatEv(rec.evDelta)}"
+            PlainTalk.params(
+                evDelta = rec.evDelta,
+                iso = rec.iso,
+                shutterLabel = rec.shutterLabel,
+                kelvin = rec.kelvin,
+                needsTripod = rec.needsTripod
+            )
         )
     }
 
