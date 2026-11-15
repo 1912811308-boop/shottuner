@@ -477,7 +477,9 @@ fake_macho() {
 write_fake_app() {
   rm -rf "${ART}"
   mkdir -p "${APPF}/Frameworks/Shared.framework"
-  printf '<?xml version="1.0"?>\n<plist version="1.0"><dict>\n<key>CFBundleExecutable</key>\n<string>ShotTuner</string>\n</dict></plist>\n' \
+  # ★ 必须带 CFBundleIdentifier：G4-c 用它的可读性来判断「plist 到底读不读得动」。
+  #   真实的 App 一定有两项，假产物少一项会让门禁在"文件坏了？"那条路上误判。
+  printf '<?xml version="1.0"?>\n<plist version="1.0"><dict>\n<key>CFBundleIdentifier</key>\n<string>com.shottuner.app</string>\n<key>CFBundleExecutable</key>\n<string>ShotTuner</string>\n</dict></plist>\n' \
     > "${APPF}/Info.plist"
   fake_macho "${APPF}/ShotTuner" "假的主可执行文件"
   fake_macho "${APPF}/Frameworks/Shared.framework/Shared" "假的 KMP 内核"
@@ -534,6 +536,85 @@ write_fake_app
 L1PATTERNS="$(ci_load_patterns "network-source.txt" | tr '\n' ' ')"
 fake_macho "${APPF}/ShotTuner" "假二进制：${L1PATTERNS}"
 expect pass "Foundation 自带网络符号（整套 L1 禁用词）在二进制里 → G4 仍绿" "${SCAN}" "${APPF}"
+
+# ── ⑩~⑫ 用假 plutil 跑「权威解析」那条分支 ────────────────────────────────
+# ★ 为什么必须造一个假 plutil：
+#   上面 ⑤⑥ 走的是**文本兜底**分支（本机 HAS_PLUTIL=0），而 macOS runner 上
+#   走的是 plutil 分支 —— **那条分支从没被测过**。2026-11-14 它第一次真跑就红了：
+#   键不存在时 plutil 把 "Could not extract value, error: No value" 打到 **stdout**，
+#   脚本据此判成「ATS 被放宽」，于是**任何没声明 ATS 的正常 App 都红**。
+#   ⇒ 现在用 PATH 注入假 plutil，把这条分支搬到本机来测。
+FAKEBIN="${WORK}/fakebin"
+rm -rf "${FAKEBIN}"; mkdir -p "${FAKEBIN}"
+
+cat > "${FAKEBIN}/plutil" <<'FAKEPLUT'
+#!/usr/bin/env bash
+# 假 plutil：只实现 -extract <keypath> raw -o - <file>
+# ★ 刻意复刻真实 macOS plutil 的一个行为：取不到时把错误文本打到 **stdout**
+#   （不是 stderr）。那次误判的根因就在这里，假件必须能重现它，否则测不出来。
+set -u
+[ "${1:-}" = "-extract" ] || exit 2
+keypath="${2:-}"
+file=""
+for a in "$@"; do file="$a"; done   # 最后一个参数是文件路径
+flat="$(tr '\n\r' '  ' < "${file}" 2>/dev/null || true)"
+miss() { printf '%s: Could not extract value, error: No value\n' "${file}"; exit 1; }
+
+if [ "${keypath}" = "CFBundleIdentifier" ]; then
+  v="$(printf '%s' "${flat}" | sed -n 's|.*<key>[[:space:]]*CFBundleIdentifier[[:space:]]*</key>[[:space:]]*<string>\([^<]*\)</string>.*|\1|p')"
+  [ -n "${v}" ] && { printf '%s\n' "${v}"; exit 0; }
+  miss
+fi
+
+case "${keypath}" in
+  NSAppTransportSecurity.*)
+    key="${keypath#NSAppTransportSecurity.}"
+    # 整个 ATS 段不存在 ⇒ 子键当然取不到
+    case "${flat}" in *NSAppTransportSecurity*) ;; *) miss ;; esac
+    if printf '%s' "${flat}" | grep -q "<key>[[:space:]]*${key}[[:space:]]*</key>[[:space:]]*<true"; then
+      printf 'true\n'; exit 0
+    fi
+    if printf '%s' "${flat}" | grep -q "<key>[[:space:]]*${key}[[:space:]]*</key>[[:space:]]*<false"; then
+      printf 'false\n'; exit 0
+    fi
+    miss
+    ;;
+esac
+miss
+FAKEPLUT
+chmod +x "${FAKEBIN}/plutil" 2>/dev/null || true
+
+# 让 expect 能带着假 plutil 跑真脚本
+cat > "${FAKEBIN}/scan-with-fake-plutil" <<EOF
+#!/usr/bin/env bash
+PATH="${FAKEBIN}:\$PATH"; export PATH
+exec bash "${SCAN}" "\$@"
+EOF
+chmod +x "${FAKEBIN}/scan-with-fake-plutil" 2>/dev/null || true
+FAKESCAN="${FAKEBIN}/scan-with-fake-plutil"
+
+# ⑩ ★ 真实产物的情形：Info.plist **完全没有 ATS 段** → 必须绿。
+#    这条就是那次 CI 红的回归测试。真实 ios/ShotTuner 的 Info.plist 就是这样。
+write_fake_app
+expect pass "产物没有 ATS 段（真实产物的状态）→ G4 绿（plutil 分支）" "${FAKESCAN}" "${APPF}"
+
+# ⑪ ATS 段存在、明确 false → 绿
+write_fake_app
+printf '<?xml version="1.0"?>\n<plist version="1.0"><dict>\n<key>CFBundleIdentifier</key>\n<string>com.shottuner.app</string>\n<key>NSAppTransportSecurity</key>\n<dict>\n<key>%s</key>\n<false/>\n</dict>\n</dict></plist>\n' "${ATSPAT}" \
+  > "${APPF}/Info.plist"
+expect pass "ATS 显式 false → G4 绿（plutil 分支）" "${FAKESCAN}" "${APPF}"
+
+# ⑫ ATS 段存在、true → 红
+write_fake_app
+printf '<?xml version="1.0"?>\n<plist version="1.0"><dict>\n<key>CFBundleIdentifier</key>\n<string>com.shottuner.app</string>\n<key>NSAppTransportSecurity</key>\n<dict>\n<key>%s</key>\n<true/>\n</dict>\n</dict></plist>\n' "${ATSPAT}" \
+  > "${APPF}/Info.plist"
+expect fail "ATS 被放宽 → G4 红（plutil 分支）" "${FAKESCAN}" "${APPF}"
+
+# ⑬ plist 读不动（连 CFBundleIdentifier 都没有）→ exit 2，不是静默通过
+#    ★ 防的是另一个方向：把「文件坏了」当成「没声明 ATS」= 悄悄变绿。
+write_fake_app
+printf '<?xml version="1.0"?>\n<plist version="1.0"><dict></dict></plist>\n' > "${APPF}/Info.plist"
+expect fail "产物 Info.plist 读不动（无 CFBundleIdentifier）→ G4 红（不是静默通过）" "${FAKESCAN}" "${APPF}"
 
 rm -rf "${ART}"
 

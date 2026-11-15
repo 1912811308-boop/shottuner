@@ -335,16 +335,44 @@ if [ ! -f "${PLIST}" ]; then
 fi
 
 if [ "${HAS_PLUTIL}" -eq 1 ]; then
+  # ★ 先证明「这个 plist 读得动」。判据用 CFBundleIdentifier —— 每个 App 的
+  #   Info.plist 必有它。若连它都取不到，说明 plutil 根本读不了这个文件
+  #   （格式损坏 / 被截断），这时**不能**把「取不到」当成「没声明」——
+  #   那会把「文件坏了」静默变成「合规」。⇒ exit 2（门禁自身出错）。
+  if ! plutil -extract CFBundleIdentifier raw -o - "${PLIST}" >/dev/null 2>&1; then
+    gate_die "产物 Info.plist 读不动（连 CFBundleIdentifier 都取不到）—— ATS 无法判定（拒绝静默通过）：$(rel "${PLIST}")"
+  fi
+
   for key in "${ATS_KEYS[@]}"; do
-    val="$(plutil -extract "NSAppTransportSecurity.${key}" raw -o - "${PLIST}" 2>/dev/null || true)"
-    case "${val}" in
-      ""|false|FALSE|False|0)
-        info "ATS.${key} = ${val:-未设置} → 未放宽（OK）"
-        ;;
-      *)
-        gate_fail "G4-c" "产物 Info.plist 的 ATS 被放宽：NSAppTransportSecurity.${key} = ${val}（$(rel "${PLIST}")）—— 违反零网络承诺"
-        ;;
-    esac
+    # ★★ 这一段曾经写错，别再改回去（2026-11-14 首次在 macOS 上真跑时红的）：
+    #
+    #   原来写的是：
+    #     val="$(plutil -extract ... raw -o - "$PLIST" 2>/dev/null || true)"
+    #     case "$val" in ""|false|0) OK ;; *) gate_fail ;; esac
+    #   也就是靠「输出为空」判断「这个键没设置」。
+    #
+    #   但 macOS 的 plutil 在键不存在时，把
+    #     "…/Info.plist: Could not extract value, error: No value"
+    #   **打到 stdout**（不是 stderr，`2>/dev/null` 挡不住）。于是 $val 是一段
+    #   错误文本、不是空串，直接命中 `*` 分支 ⇒ 判成「ATS 被放宽」。
+    #
+    #   后果不是「偶尔误报」：**任何没有声明 ATS 的正常 App 都会红**（那是绝大多数
+    #   App 的状态），门禁在正常路径上永远红，最后一定有人加 `|| true` 绕过 ——
+    #   那它就从「保护」变成了「装饰」。
+    #
+    #   正确判据是**退出码**：取不到 = 这个键没声明 = 没有放宽（ATS 默认就是不放宽）。
+    if val="$(plutil -extract "NSAppTransportSecurity.${key}" raw -o - "${PLIST}" 2>/dev/null)"; then
+      case "${val}" in
+        false|FALSE|False|0)
+          info "ATS.${key} = ${val} → 未放宽（OK）"
+          ;;
+        *)
+          gate_fail "G4-c" "产物 Info.plist 的 ATS 被放宽：NSAppTransportSecurity.${key} = ${val}（$(rel "${PLIST}")）—— 违反零网络承诺"
+          ;;
+      esac
+    else
+      info "ATS.${key}：未声明 → 未放宽（OK）"
+    fi
   done
 else
   # 文本兜底（本机没有 plutil）。二进制 plist 无法用文本手段判定 → 明确报错，
