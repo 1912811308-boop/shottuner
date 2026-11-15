@@ -42,7 +42,14 @@ object TechniqueBookV15 {
         "pitfall_beauty_overdo"
     )
 
-    /** 自拍类。本 App 只有后摄通路，这 5 条仅浏览。 */
+    /**
+     * 自拍类。
+     *
+     * 自 3.2.0 起 App 有了**前置通路**（`CameraEngine` 可翻转到 `DEFAULT_FRONT_CAMERA`），
+     * 所以这 5 条不再是"永久禁推"：前置时进实时推送池，后置时不进。
+     * 判定入口只有一个：[pushEligibleIds] 的 `includeSelfie` 参数，
+     * 不允许调用点自己去拼集合（那样迟早漏一处）。
+     */
     val SELFIE_IDS: Set<String> = setOf(
         "selfie_arm_extended",
         "selfie_hold_above_eye",
@@ -1300,16 +1307,45 @@ object TechniqueBookV15 {
     val byId: Map<String, Technique> by lazy { combined.associateBy { it.id } }
 
     /**
-     * **可以进推送池**的 id：全库减去仅浏览的 3 条与自拍的 5 条。
+     * **可以进推送池**的 id（**不含自拍**）：全库减去仅浏览的 3 条与自拍的 5 条。
      *
-     * 生产环境（`MainActivity` 构造 `PromptScheduler` 时）传这个集合，而不是 `byId.keys`。
+     * 生产环境构造 `PromptScheduler` 时用 [pushEligibleIds]（带 `includeSelfie` 参数）
+     * 按当前镜头挑池子，而不是直接把 `byId.keys` 传进去。
      * 这样「禁推」就有两道闸：
      * 1. 规则表不点名它们（`PromptEngine` 侧）；
      * 2. 即使有人点名了，id 也不在调度器的可用白名单里，会被静默跳过（这里）。
      *
      * QA P2-2 指出的就是原来只有第一道闸 —— 不泄漏靠的是"恰好没有规则点名"。
      */
-    val pushEligibleIds: Set<String> by lazy { byId.keys - BROWSE_ONLY_IDS - SELFIE_IDS }
+    val pushEligibleIds: Set<String> get() = PUSH_ELIGIBLE_WITHOUT_SELFIE
+
+    /**
+     * 按「当前是不是前置」取推送池。
+     *
+     * 3.2.0 加了前置通路之后，「自拍 5 条能不能推」不再是编译期常量，而是运行时条件：
+     * - `includeSelfie == false`（后置 / 未知）→ 与 [pushEligibleIds] 完全一致；
+     * - `includeSelfie == true`（前置）→ 把 5 条自拍加回来，**仅浏览的 3 条仍然剔除**。
+     *
+     * 两个结果集都 `by lazy` 缓存：调用点（`MainActivity.onCameraReady`）会在每次
+     * bind 成功后调用一次，而 bind 因手动曝光重建时是秒级的 —— 每次重算 83 条减法
+     * 纯属浪费，而且集合每次都变新对象会让下游的引用比较失效。
+     *
+     * 注意：本函数**只决定"能不能进池"**。这 5 条的文案、触发条件、是否真会出牌，
+     * 都不在它的职责里（`PromptEngine` 目前也没有点名自拍的规则，所以即便进了池，
+     * 前置时也只会由 R10 兜底轮播带出来）。
+     */
+    fun pushEligibleIds(includeSelfie: Boolean): Set<String> =
+        if (includeSelfie) PUSH_ELIGIBLE_WITH_SELFIE else PUSH_ELIGIBLE_WITHOUT_SELFIE
+
+    /** 全库 − 仅浏览 − 自拍（后摄 / 未知镜头时的池子）。 */
+    private val PUSH_ELIGIBLE_WITHOUT_SELFIE: Set<String> by lazy {
+        byId.keys - BROWSE_ONLY_IDS - SELFIE_IDS
+    }
+
+    /** 全库 − 仅浏览（前置时的池子）。仅浏览的 3 条在任何情况下都不得进来。 */
+    private val PUSH_ELIGIBLE_WITH_SELFIE: Set<String> by lazy {
+        byId.keys - BROWSE_ONLY_IDS
+    }
 
     /** 44 条已经落地。调度器的技法过滤只在为 true 时启用。 */
     fun isReady(): Boolean = list.size == EXPECTED_COUNT

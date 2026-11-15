@@ -10,8 +10,11 @@ import kotlin.math.roundToInt
  * 保证三张卡从不同角度看同一个画面，而不是把同一类话重复三遍。
  *
  * ## v1.5 改动（三条硬约束都落在这里）
- * 1. **自拍不进推荐池**：本 App 只有后摄通路（`CameraEngine` 只用 `DEFAULT_BACK_CAMERA`），
- *    后摄拍人一样会命中 `PORTRAIT + minSkinRatio`，推「手臂伸直自拍」就荒谬了；
+ * 1. **自拍不进推荐池**：这里推荐的是"这个画面该用哪条技法"，与镜头方向无关 ——
+ *    后摄拍人一样会命中 `PORTRAIT + minSkinRatio`，推「手臂伸直自拍」就荒谬了。
+ *    （3.2.0 加了前置通路后，自拍 5 条由 `PromptEngine` 的推送池按运行时镜头放开，
+ *    见 `TechniqueBookV15.pushEligibleIds(includeSelfie)`；**推荐池仍然不要它们**，
+ *    因为推荐卡片不带"当前是前置"这个上下文。）
  * 2. **仅浏览条目不进推荐池**：见 [TechniqueBookV15.BROWSE_ONLY_IDS]；
  * 3. **运镜按 tab 隔离**：拍照页不出现 `CAMERA_MOVE`，录像页只出现 `CAMERA_MOVE` + 通用条目。
  *    这三条只在 [poolFor] 里判断一次，其他入口一律走它，避免某个入口漏了条件。

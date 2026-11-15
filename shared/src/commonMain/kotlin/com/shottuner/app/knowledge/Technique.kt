@@ -23,7 +23,13 @@ enum class TechCategory(val label: String) {
     INDOOR("室内弱光"),
     SILHOUETTE("剪影"),
 
-    /** 自拍。本 App 没有前置通路，这 5 条只做技法页浏览内容，不进任何推送池。 */
+    /**
+     * 自拍。
+     *
+     * 3.2.0 之前 App 只有后摄通路，这 5 条只能当浏览内容；现在 `CameraEngine` 能翻到
+     * 前置，所以它们在**前置时**进实时推送池、后置时仍然只做浏览。
+     * 判断入口是 `TechniqueBookV15.pushEligibleIds(includeSelfie)`。
+     */
     SELFIE("自拍"),
 
     /** 运镜。只在录像页（`PromptEngine.TAB_VIDEO`）出现。 */

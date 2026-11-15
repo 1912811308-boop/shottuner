@@ -151,6 +151,26 @@ class MainActivity : AppCompatActivity() {
 
     /** 快门防连点：一次拍照从触发到落盘完成前，不再接收新的点击 */
     private var captureInProgress = false
+
+    /**
+     * 翻转防连点（3.2.0）。
+     *
+     * 翻转 = `unbindAll` + 重新 bind，中间必然有一帧黑屏。连点两下会在这个窗口里
+     * 再发起一次 bind，两条 `bindToLifecycle` 撞在一起，最容易出来的症状是
+     * "预览停在黑的、日志里两条 bind 都成功"。所以从点下到 [FLIP_LOCK_MS] 之后
+     * 一律不接第二次。
+     */
+    private var flipInFlight = false
+
+    /**
+     * 当前错误条是不是「翻转失败」这类**一次性提示**。
+     *
+     * 真·相机打不开时这条是常驻的，还会冻结快门；但翻转失败时相机其实是好的
+     * （已回退到原来那一侧），不该把快门冻住。同一个 `llCameraError` 承载两种语义，
+     * 靠这个标记区分，见 [applyShutterAvailability]。
+     */
+    private var cameraNoticeTransient = false
+
     /** 最近一张：相册写入失败时文件留在缓存，供长按分享 */
     private var lastShotFile: File? = null
     private var lastShotUri: Uri? = null
@@ -209,12 +229,16 @@ class MainActivity : AppCompatActivity() {
     /**
      * 提示调度器。
      *
-     * `availableTipIds` 传的是**可推送白名单**（全库减去自拍 5 条与仅浏览 3 条），
-     * 不是全库：库里找不到的条目会被静默跳过，这样即便规则表将来点名了禁推条目，
-     * 也漏不到用户眼前 —— 这是「禁推」的第二道闸（QA P2-2）。
+     * `availableTipIds` 传的是**可推送白名单**，不是全库：库里找不到的条目会被静默跳过，
+     * 这样即便规则表将来点名了禁推条目，也漏不到用户眼前 —— 这是「禁推」的第二道闸
+     * （QA P2-2）。
+     *
+     * 3.2.0 起这个白名单是**运行时条件**：后置 → 全库减自拍 5 条减仅浏览 3 条；
+     * 前置 → 只减仅浏览 3 条（自拍 5 条进池）。切换点在 `onCameraReady()`，
+     * 因为那一刻才知道这一轮到底绑上了哪一颗镜头。
      */
     private val promptScheduler: PromptScheduler by lazy {
-        PromptScheduler(availableTipIds = TechniqueBookV15.pushEligibleIds)
+        PromptScheduler(initialTipIds = TechniqueBookV15.pushEligibleIds(includeSelfie = false))
     }
 
     /** 500ms 独立循环跑提示状态机。**不挂在 render() 的 220ms 节流里** */
@@ -255,6 +279,22 @@ class MainActivity : AppCompatActivity() {
     /** 复盘卡自动收起。抽成字段是为了「点一下保持常驻」时能 removeCallbacks */
     private val hideReviewRunnable = Runnable {
         if (!isFinishing && !isDestroyed) binding.llReviewCard.visibility = LinearLayout.GONE
+    }
+
+    /** 翻转的解锁点（见 [flipInFlight]）。抽成字段同样是为了一次失败能提前放行 */
+    private val flipUnlockRunnable = Runnable {
+        flipInFlight = false
+        if (!isFinishing && !isDestroyed) applyShutterAvailability()
+    }
+
+    /**
+     * 一次性提示（翻转失败）的自动收起。
+     *
+     * 只在 [cameraNoticeTransient] 还是 true 时收：否则万一这几秒里真的发生了
+     * "相机打不开"，这条 runnable 会把那条本该常驻的错误条也一起收掉。
+     */
+    private val hideCameraNoticeRunnable = Runnable {
+        if (!isFinishing && !isDestroyed && cameraNoticeTransient) hideCameraError()
     }
 
     /**
@@ -454,6 +494,7 @@ class MainActivity : AppCompatActivity() {
             shareLastShot()
             true
         }
+        binding.btnFlip.setOnClickListener { onFlipClick() }
         binding.btnCopyVideo.setOnClickListener { copyVideoPlan() }
         binding.btnFloat.setOnClickListener { startFloatingCoach() }
         binding.btnFloat.setOnLongClickListener {
@@ -975,6 +1016,10 @@ class MainActivity : AppCompatActivity() {
         binding.guideOverlay.visibility = View.GONE
         binding.btnShutter.isEnabled = false
         binding.btnShutter.alpha = 0.4f
+        // 相机根本起不来时翻转也没有意义；权限被拒这一态尤其要显式灰掉，
+        // 因为此时 privacyAccepted 仍为 true，applyShutterAvailability 会把它点亮
+        binding.btnFlip.isEnabled = false
+        binding.btnFlip.alpha = 0.4f
     }
 
     /** 占位上的唯一按钮：隐私态重新弹同意，权限态去系统设置 */
@@ -1129,11 +1174,90 @@ class MainActivity : AppCompatActivity() {
     private fun onCameraReady(c: CameraCaps) {
         caps = c
         hideCameraError()
+        // 推送池跟着镜头走（3.2.0）：只有到这一刻才知道本轮绑上的是前置还是后置。
+        // 放在收错误条之后：错误条只影响 UI，池子每次都要同步。
+        syncPushPool()
         renderDeviceInfo()
         // 默认教练模式：只给数，不抢相机。用户拿原生相机拍，这里负责测光和教构图。
         autoMode = false
         updateModeUi()
         renderFeatures()
+    }
+
+    /**
+     * 把推送池对齐到当前镜头。
+     *
+     * 前置 → 自拍 5 条进池；后置 / 未知 → 不进。判定只有这一处，
+     * 因为 [promptScheduler] 是 `by lazy` 单例，翻镜头**不能重建它**
+     * （重建会把冷却、黑名单、已执行整套会话状态一起丢掉，用户会看到同一句话再说一遍）。
+     */
+    private fun syncPushPool() {
+        promptScheduler.setAvailableTipIds(
+            TechniqueBookV15.pushEligibleIds(includeSelfie = engine?.isFront == true)
+        )
+    }
+
+    // ---------------- 翻转镜头（3.2.0） ----------------
+
+    /**
+     * 点「翻转」。
+     *
+     * 顺序不能反：
+     * 1. 先上禁用态（[flipInFlight]）—— 盖住 `unbindAll` → 重新 bind 之间那一帧黑屏，
+     *    同时挡连点；
+     * 2. 再真的翻（`CameraEngine.toggleCamera` 内部自己 unbind + bind，并负责失败回退）；
+     * 3. 失败必须给一句**可见**的话。静默的翻转失败会让用户以为"这 App 没有前置"，
+     *    然后反复点，每一次都白黑屏一帧。
+     *
+     * 成功路径不在这里动 UI：bind 成功会回调 [onCameraReady]，由它收错误条、
+     * 重新点亮快门、同步推送池。
+     */
+    private fun onFlipClick() {
+        if (flipInFlight) return
+        // 正在落盘的一张还没回来：这时候 unbind 会让 takePicture 直接失败，
+        // 而用户在界面上看到的是"点一下翻转，照片没了"。宁可这一下不响应。
+        if (captureInProgress) return
+        val eng = engine
+        if (eng == null) {
+            showCameraNotice("相机还没就绪", "稍等一下再翻转。")
+            return
+        }
+        flipInFlight = true
+        applyShutterAvailability()
+        uiHandler.removeCallbacks(flipUnlockRunnable)
+        uiHandler.postDelayed(flipUnlockRunnable, FLIP_LOCK_MS)
+
+        val ok = try {
+            eng.toggleCamera()
+        } catch (e: Throwable) {
+            Diag.e(TAG, "翻转摄像头抛异常", e)
+            false
+        }
+        if (!ok) {
+            showCameraNotice(
+                "翻转失败",
+                "这台设备切不到另一侧的摄像头（可能被别的应用占用）。已留在当前镜头，可以直接继续拍。"
+            )
+        }
+    }
+
+    /**
+     * 一次性提示：复用「相机打不开」那条错误条，但**不冻结快门**、几秒后自己收。
+     *
+     * 为什么不用 Toast：Toast 弹在取景区下沿，正好压住教练槽的位置，而且切页回来就没了；
+     * 错误条的位置用户已经认识，复用它的位置比新造一个浮层省认知。
+     * 差别只在"常驻 vs 自动收"，由 [cameraNoticeTransient] 区分。
+     */
+    private fun showCameraNotice(title: String, body: String) {
+        if (isFinishing || isDestroyed) return
+        binding.tvCameraErrorTitle.text = title
+        binding.tvCameraErrorBody.text = body
+        binding.llCameraError.visibility = LinearLayout.VISIBLE
+        cameraNoticeTransient = true
+        // 相机其实是好的 → 快门继续可用，只重算一次可用性
+        applyShutterAvailability()
+        uiHandler.removeCallbacks(hideCameraNoticeRunnable)
+        uiHandler.postDelayed(hideCameraNoticeRunnable, FLIP_NOTICE_MS)
     }
 
     // ---------------- 相机失败的可见反馈（v3.0.0 阶段 3） ----------------
@@ -1146,6 +1270,9 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showCameraError(failure: CameraEngine.Failure) {
         if (isFinishing || isDestroyed) return
+        // 常驻错误：把"一次性提示"的自动收起掐掉，别让它在 4 秒后把这条收走
+        uiHandler.removeCallbacks(hideCameraNoticeRunnable)
+        cameraNoticeTransient = false
         binding.tvCameraErrorTitle.text = "相机打不开"
         binding.tvCameraErrorBody.text = when (failure) {
             CameraEngine.Failure.IN_USE -> "摄像头正被其他应用占用（微信视频、系统相机没退出等）。关掉之后再试。"
@@ -1155,10 +1282,14 @@ class MainActivity : AppCompatActivity() {
         // 定格在错误态：快门按下去只会再报一次同样的错
         binding.btnShutter.isEnabled = false
         binding.btnShutter.alpha = 0.4f
+        // 真起不来时翻转也必然失败，一起灰掉，别让用户连点两次同样的失败
+        binding.btnFlip.isEnabled = false
+        binding.btnFlip.alpha = 0.4f
     }
 
     private fun hideCameraError() {
         binding.llCameraError.visibility = LinearLayout.GONE
+        cameraNoticeTransient = false
         applyShutterAvailability()
     }
 
@@ -1186,6 +1317,16 @@ class MainActivity : AppCompatActivity() {
         val v = profile.video
         val sb = StringBuilder()
         sb.append(profile.modelName).append(" · ").append(profile.osLabel)
+        // 3.2.0：这颗是哪一颗要说清楚。下面几行（主摄 / 镜头列表 / 等效焦距）是
+        // **设备级**档案，前置时它们仍然描述主摄 —— 不标一句"当前前置"就成了假话，
+        // 用户会以为前置也有那颗 48mm。
+        // 引擎还没建（setup 阶段会先调一次本函数）时写"启动中"：不猜后置。
+        val facing = when {
+            engine == null -> "启动中"
+            engine?.isFront == true -> "前置镜头（单摄，无长焦）"
+            else -> "后置主摄"
+        }
+        sb.append("\n当前 ").append(facing)
         sb.append("\n主摄 ").append(profile.main?.label ?: "信息缺失")
         sb.append(" · 等效 ").append(profile.equivFocalMm).append("mm")
         sb.append(" · ").append(if (profile.supportsManualPhoto) "可手动曝光" else "仅自动曝光")
@@ -1262,15 +1403,28 @@ class MainActivity : AppCompatActivity() {
      * 后两处如果直接写 `isEnabled = true`，用户在拍照过程中切到录像页，
      * 回调回来又会把快门点亮 —— 表面能按、点了没反应（`dispatchKeyEvent` 那边
      * 依然是按 tab 判的），比一直灰着更难理解。
+     *
+     * 3.2.0 起这里同时管「翻转」按钮的可用性：翻转和快门吃的是同一个前置条件
+     * （相机能用），只是**不吃页签**——在技法页看自拍条目时，用户恰恰最想翻到前置
+     * 试一试，那时把按钮灰掉就成了拦路。
      */
     private fun applyShutterAvailability() {
         // 四个条件缺一不可：在照片页 + 已同意隐私 + 相机没报错 + 相机可用。
         // 最后一条会被 showCameraError 置上，否则切一次页签就会把快门重新点亮，
         // 用户按下去只会再收到一次"拍照失败"。
-        val cameraBroken = binding.llCameraError.visibility == View.VISIBLE
+        //
+        // 「翻转失败」那条一次性提示也占用同一个 error 条，但相机是好的，
+        // 靠 cameraNoticeTransient 把它排除掉，否则快门会莫名灰 4 秒。
+        val noticeVisible = binding.llCameraError.visibility == View.VISIBLE
+        val cameraBroken = noticeVisible && !cameraNoticeTransient
         val usable = currentTab == TAB_PHOTO && privacyAccepted && !cameraBroken
         binding.btnShutter.isEnabled = usable
         binding.btnShutter.alpha = if (usable) 1f else 0.4f
+
+        val flipUsable = privacyAccepted && !cameraBroken && !flipInFlight &&
+            binding.llCameraOff.visibility != View.VISIBLE
+        binding.btnFlip.isEnabled = flipUsable
+        binding.btnFlip.alpha = if (flipUsable) 1f else 0.4f
     }
 
     // ---------------- 录像页 ----------------
@@ -2081,7 +2235,9 @@ class MainActivity : AppCompatActivity() {
      *
      * 降级口径（拿不到就传 null / false，绝不编造）：
      * - 重力传感器没有 → `roll`/`pitch` 传 null，水平度记满分但标未测；
-     * - 没有前置通路 → `mirrored` 恒 false（`CameraEngine` 只开 `DEFAULT_BACK_CAMERA`）；
+     * - `mirrored` 恒 false —— 这个值描述的是**画面有没有左右翻**，不是"是不是前置"。
+     *   3.2.0 的前置通路明确「预览与成片都不镜像」（见 `CameraEngine` 类注释），
+     *   取景方向和成片一致，所以前置时 `roll` 的符号也不需要翻转；
      * - `coveredTopics` 本版恒空：还没有"用户已学过"的持久化，R08 因此永远有资格出牌。
      */
     private fun buildPromptSignals(): PromptSignals = PromptSignals(
@@ -3188,6 +3344,18 @@ class MainActivity : AppCompatActivity() {
         /** 提示状态机的节拍。500ms 足够跟上 3s 驻留/8s 冷却的分辨率，又不至于把 UI 打满 */
         private const val COACH_TICK_MS = 500L
 
+        /**
+         * 翻转摄像头后的禁用时长。
+         *
+         * 700ms 的来历：`unbindAll` → 重新 bind → 首个预览帧，在主流机型上是
+         * 150–450ms（中低端机可到 600ms+）。取得比它长一点，用户看到的是一段
+         * "按钮灰着"的确定感，而不是连点两次换来两次黑屏。
+         */
+        private const val FLIP_LOCK_MS = 700L
+
+        /** 「翻转失败」这类一次性提示的停留时长。够读完一句话，又不至于挡住取景太久 */
+        private const val FLIP_NOTICE_MS = 4_000L
+
         /** 稳定度 EMA 系数：10Hz 输入下时间常数约 0.45s，够压掉单帧抖动 */
         private const val MOTION_ALPHA = 0.2f
 
@@ -3344,6 +3512,9 @@ ISO 管干净与明亮 —— 越低越干净，弱光下每加一档噪点肉�
         uiHandler.removeCallbacks(hideReviewRunnable)
         // 成绩卡的 8 秒收起定时器同理
         uiHandler.removeCallbacks(hideAchieveRunnable)
+        // 翻转的解锁 / 一次性提示的两个定时器同理（都持有 Activity 的 Runnable）
+        uiHandler.removeCallbacks(flipUnlockRunnable)
+        uiHandler.removeCallbacks(hideCameraNoticeRunnable)
         coachLoopRunning = false
         engine?.stop()
         engine = null

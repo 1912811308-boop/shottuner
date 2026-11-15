@@ -1699,10 +1699,29 @@
             android:layout_height="1dp"
             android:layout_weight="1" />
 
-        <!-- 与 ivThumb 等宽的占位，保证快门在屏幕水平正中 -->
-        <View
+        <!--
+          翻转摄像头（3.2.0，前置通路）。
+
+          位置就是原来那个「48dp 占位」：宽度必须与左侧 ivThumb 严格相等，
+          快门才能继续落在屏幕水平正中 —— 换成不等宽的按钮会把快门挤歪，
+          而这个 App 里"快门在正中"是构图对照的一部分。
+
+          样式复用面板胶囊按钮那套（bg_chip + 11sp 主色），不新造视觉：
+          翻转是辅助动作，不该比快门更抢眼。可用性由
+          `MainActivity.applyShutterAvailability()` 统一管（翻转中 / 相机报错时灰）。
+        -->
+        <TextView
+            android:id="@+id/btnFlip"
             android:layout_width="48dp"
-            android:layout_height="48dp" />
+            android:layout_height="48dp"
+            android:background="@drawable/bg_chip"
+            android:clickable="true"
+            android:contentDescription="翻转摄像头（前置 / 后置）"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="翻转"
+            android:textColor="@color/st_accent"
+            android:textSize="11sp" />
     </LinearLayout>
 
     <!--

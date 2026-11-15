@@ -171,7 +171,8 @@ object TechniqueDex {
         "basic_ev_order" to ScoreDimension.EXPOSURE,
 
         // ── TechniqueBookV15（44 条）─────────────────────────────────────────
-        // 自拍 5 条：本 App 只有后摄通路，纯浏览
+        // 自拍 5 条：3.2.0 起前置可推送，但四维是**照片画面**的口径，自拍没有对应的
+        // 可测维度（不是"没有前置通路"了 —— 通路已经有了，缺的是评分信号），所以仍为 null
         "selfie_arm_extended" to null,
         "selfie_hold_above_eye" to null,
         "selfie_tongue_palate" to null,

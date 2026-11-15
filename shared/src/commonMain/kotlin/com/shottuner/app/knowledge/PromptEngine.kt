@@ -438,8 +438,8 @@ object PromptEngine {
      * 求值。
      *
      * @param availableTipIds 技法库里真实存在的 id 集合。传 null 表示不做过滤（测试用）；
-     *        生产环境应传 `TechniqueBookV15.pushEligibleIds`（已剔除自拍与仅浏览条目），
-     *        池里没有的 id 会静默跳过。
+     *        生产环境传 `TechniqueBookV15.pushEligibleIds(includeSelfie = 是否前置)` ——
+     *        后置时已剔除自拍与仅浏览条目，前置时只剔除仅浏览条目；池里没有的 id 会静默跳过。
      * @param lastGuideAt 上一条**节奏类**（[PromptCandidate.paced]）提示的出牌时间，
      *        由调度器回填；<0 表示本次会话还没出过。只有 R09/R10 读它。
      * @param lastCandidateAt 上次有任何硬候选的时间（调度器回填），<0 表示从未

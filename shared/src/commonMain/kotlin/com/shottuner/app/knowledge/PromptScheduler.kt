@@ -80,11 +80,27 @@ object SchedulerConfig {
  */
 class PromptScheduler(
     /**
-     * 技法库里真实存在的 id。生产环境传 `TechniqueBookV15.list.map { it.id }.toSet()`，
-     * 阶段一列表为空时会让引擎静默不出牌；测试传 null 表示不过滤。
+     * 技法库里真实存在的 id（初始值）。
+     *
+     * 生产环境传 `TechniqueBookV15.pushEligibleIds(includeSelfie = 当前是否前置)`；
+     * 测试传 null 表示不过滤。
+     *
+     * 之所以在构造函数里叫 `initialTipIds` 而不是直接叫 `availableTipIds`：
+     * 这个池子**会在运行时变**（前置 ↔ 后置决定自拍 5 条进不进来），
+     * 而调度器在 `MainActivity` 里是 `by lazy` 单例 —— 不能为了一次翻转折一个。
+     * 运行时要换池子请走 [setAvailableTipIds]，不要另建实例（那会把冷却、
+     * 黑名单、已执行整套会话状态一起丢掉，用户会看到同一句话再说一遍）。
      */
-    private val availableTipIds: Set<String>? = null
+    initialTipIds: Set<String>? = null
 ) {
+
+    /**
+     * 当前生效的可用白名单。null = 不过滤（测试用）。
+     *
+     * 线程约定：只在构造时和 [setAvailableTipIds] 里写，两处都发生在主线程
+     * （`tickCoach` 的 500ms Handler 也在主线程），因此不需要额外同步。
+     */
+    private var availableTipIds: Set<String>? = initialTipIds
 
     private var current: ActivePrompt? = null
     /** tipId → 允许再次展示的时间戳 */
@@ -280,6 +296,25 @@ class PromptScheduler(
 
     fun pause(paused: Boolean) {
         this.paused = paused
+    }
+
+    /**
+     * 运行时替换可用白名单（翻转摄像头时用）。
+     *
+     * 为什么不能"只换集合、不管当前这条"：
+     * 从后置翻到前置的那一刻，屏幕上可能正卡着一条后摄才成立的技法；反过来，
+     * 「手臂伸直再拍」留到后置取景上同样荒谬。所以换池子时**主动撤卡**，
+     * 并且不返还 decision —— 撤卡的可见性交给下一次 tick 的 [reconcile]：
+     * `lastReportedTipId` 比对发现"界面上该看到的 tipId"变了，`changed` 就是 true，
+     * UI 自然收槽。这与 `setDensity` / `setMuted` 是同一套机制（QA P2-4）。
+     */
+    fun setAvailableTipIds(ids: Set<String>?) {
+        // 引用相等先短路：调用方每次 bind 成功都会调一次，而手动曝光收敛期间
+        // bind 是秒级的 —— 值没变就不该每 1–2 秒跑一次 83 条集合比较。
+        if (availableTipIds === ids || availableTipIds == ids) return
+        availableTipIds = ids
+        val active = current ?: return
+        if (ids != null && active.candidate.tipId !in ids) current = null
     }
 
     /** 切页 / 退出时清会话态；密度与静音保留。 */
