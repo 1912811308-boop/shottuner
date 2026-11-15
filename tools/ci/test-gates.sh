@@ -741,10 +741,14 @@ expect pass "合规假 APK（白名单内的 .so + 干净 dex + 无网络权限�
 write_fake_apk "libAcmeNet.so"
 expect fail "出现白名单外的原生库（libAcmeNet.so）→ APK 扫描红" "${FAKESCANAPK}" "${FAKEAPK}"
 
-# ③ dex 里出现网络 SDK 特征类名 → 红（A2）
-#    故意写成真正的 dex 里那种斜杠形态类名，验证 grep 是在**解压后的字节**上做的。
+# ③ dex 里出现网络 SDK 特征类名 → **绿**（A2·d 只参考，不判红）
+#    ★ 这条期望原来是「红」，2026-11-15 改成「绿」——不是放松，是判据搬家了：
+#      dex 字符串匹配在 release 上必然失效（R8 改名），而 debug 包不发布、
+#      且 ML Kit 自带 okhttp 删不掉。拿 dex 当判据 ⇒ 正常路径永远红。
+#      现在判据在 A2·r（mapping），dex 只负责「让依赖树里的东西看得见」，
+#      所以这里断言的是**能跑通且不误判**，而「命中要看得见」由下面 ⑧ 的 notice 断言覆盖。
 write_fake_apk "" "L${DEXSDK}/RealCall;"
-expect fail "dex 里出现第三方网络 SDK 血统（${DEXSDK}）→ APK 扫描红" "${FAKESCANAPK}" "${FAKEAPK}"
+expect pass "dex 里出现第三方网络 SDK（${DEXSDK}）→ 只参考，不判红" "${FAKESCANAPK}" "${FAKEAPK}"
 
 # ④ APK 路径不存在 → 红（exit 2，不是静默通过）
 expect fail "APK 路径不存在 → APK 扫描红（不是静默通过）" "${FAKESCANAPK}" "${WORK}/NoSuch.apk"
@@ -783,6 +787,39 @@ expect fail "产物 manifest 声明了网络权限（${PERMPAT}）→ APK 扫描
 FAKE_AAPT2_PERMS="android.permission.CAMERA
 android.permission.VIBRATE"
 export FAKE_AAPT2_PERMS
+
+# ── A2·r（R8 mapping）三条：这条判据错过的代价最大，必须单独钉 ─────────────
+# 背景：2026-11-15 首次在 CI 上真跑时，A2 用 dex 判 → debug 包搜到 okhttp3 就红，
+#   可 debug 不发布、而 okhttp 是 ML Kit（vision-internal-vkp）的传递依赖，删不掉。
+#   改用 mapping.txt 后也踩了第二个坑：okhttp 3.0.0 的包名是 `okhttp3.*`，
+#   不是 `com.squareup.okhttp3.*` —— 用错前缀会得到「0 命中」的假绿。
+#   所以这里既测「该红的红」，也测「该绿的绿」。
+
+ALLOWPAT="$(ci_load_patterns "apk-network-allow.txt" | head -1)"
+[ -n "${ALLOWPAT}" ] || ci_die "apk-network-allow.txt 为空"
+
+# ⑨ mapping 里有**不在允许清单**的 SDK 类声明 → 红
+write_fake_apk
+MFILE="${WORK}/mapping-bad.txt"
+printf '%s\n' "androidx.core.app.CoreComponentFactory -> a:" \
+              "retrofit2.Retrofit -> b:" > "${MFILE}"
+expect fail "mapping 里保留了非允许清单的 SDK 类（retrofit2）→ A2·r 红" \
+  "${FAKESCANAPK}" "${FAKEAPK}" --mapping "${MFILE}"
+
+# ⑩ mapping 里只有**允许清单内**的 SDK 类声明 → 绿（真实产物的情形）
+#    ★ 这条对应真件：release 里 okhttp3 有 84 个类、okio 有 22 个类，
+#      都来自 ML Kit，删不掉 —— 判红就等于门禁永远红。
+write_fake_apk
+MFILE="${WORK}/mapping-allow.txt"
+printf '%s\n' "androidx.core.app.CoreComponentFactory -> a:" \
+              "${ALLOWPAT}.Address -> X2.a:" > "${MFILE}"
+expect pass "mapping 里只有允许清单内的 SDK（${ALLOWPAT}）→ A2·r 绿" \
+  "${FAKESCANAPK}" "${FAKEAPK}" --mapping "${MFILE}"
+
+# ⑪ 给了 --mapping 但文件不存在 → exit 2
+#    ★ 防「参数忘了传」被静默当成「扫描通过」：这正是门禁最坏的失效方式。
+expect fail "给了 --mapping 但文件不存在 → APK 扫描红（exit 2，不静默降级）" \
+  "${FAKESCANAPK}" "${FAKEAPK}" --mapping "${WORK}/NoSuchMapping.txt"
 
 # ── 隐私政策版本一致性门禁 ──────────────────────────────────────────────────
 # ★ 拦的是合规缺陷：政策升版时「改正文」与「改同意键名」是两个动作，

@@ -1,0 +1,37 @@
+# A2 · 允许清单：已知的「随合法依赖进来、但不可达」的网络组件
+# ─────────────────────────────────────────────────────────────────────────────
+# 消费者：tools/ci/scan-apk.sh（A2·r 的类声明判据）
+# 语义：命中本清单的 SDK 名 ⇒ 打 ::notice:: 记一笔，**不判违规**。
+#       命中黑名单但不在本清单 ⇒ 判违规。
+#
+# ★★ 这份清单与 apk-dex-forbidden.txt 的分工（别混）：
+#   黑名单回答「哪些 SDK 一旦真的留在包里就算违规」；
+#   本清单回答「其中哪几个是**我们的依赖替我们选的**，我们删不掉，但也没能力被调用」。
+#   两者都命中时不判红，但**必须打出 notice** —— 允许不等于隐身。
+#
+# ★★ 准入标准（三条全满足才可加一行，缺一条都不许加）：
+#   ① 来源可查：能给出依赖树里带它进来的**具体坐标**（写在本行注释里）；
+#   ② 不可达：产物 manifest 里没有 INTERNET / ACCESS_NETWORK_STATE（A3 硬判据保证），
+#      Android 在 socket 层就拦住 —— **包里留着代码也开不了连接**；
+#   ③ 删不掉：移除它等于移除一条核心功能的依赖（这里就是 ML Kit）。
+#   ⇒ 换句话说：本清单里的每一行，都是「零网络承诺靠 A3（无权限）保证」而不是
+#      「靠包里没有网络代码」保证。这个区别必须一直说清楚，否则记录会变成自我安慰。
+#
+# ── 已核事实（2026-11-15，本仓 1.3.0 真实 release 产物）──────────────────────
+# 依赖树（`gradlew :app:dependencies --configuration debugRuntimeClasspath`）：
+#
+#   com.google.mlkit:image-labeling:17.0.9
+#     \--- com.google.mlkit:vision-internal-vkp:18.2.3
+#            \--- com.squareup.okhttp3:okhttp:3.0.0
+#                   \--- com.squareup.okio:okio:1.6.0
+#
+# R8 mapping（`app/build/outputs/mapping/release/mapping.txt`，只数顶格类声明行）：
+#   grep -c '^okhttp3\.'  → 84
+#   grep -c '^okio\.'     →  22
+# 即：**okhttp 与 okio 的类确实留在了发布包里**，不是「被 R8 剥掉」。
+# （★ 曾误判过一次：okhttp 3.0.0 的包名是 `okhttp3.*`，不是后来的
+#   `com.squareup.okhttp3.*` —— 用错前缀会得到「0 命中」的假结论。）
+#
+# ── 清单 ─────────────────────────────────────────────────────────────────────
+okhttp3   # 来源：ML Kit vision-internal-vkp → okhttp:3.0.0（真实 release 中 84 个类）
+okio      # 来源：okhttp:3.0.0 → okio:1.6.0（真实 release 中 22 个类）

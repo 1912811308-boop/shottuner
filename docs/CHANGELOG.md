@@ -74,6 +74,35 @@ APK 里混进二进制网络 SDK，六道门禁一道都不会红。
 另新增 `check-privacy-version.sh`：Android 把政策版本编在**键名**里（`privacy_accepted_v1`），
 改正文忘了改键名，老用户会静默沿用旧同意。现在核四处（正文文件名 / Android 键名 / `R.raw` 引用 / iOS `PrivacyText.version`）。
 
+### ★ A2 判据改过一次 —— 这个过程值得记下来
+
+第一次实现用 dex 字符串匹配，CI 一跑就红：debug 包的 dex 里有 `okhttp3` / `okio`。
+
+查依赖树：`com.google.mlkit:image-labeling` → `vision-internal-vkp:18.2.3` → `okhttp:3.0.0` → `okio:1.6.0`。
+**ML Kit 自带网络栈，删不掉**（删了场景识别就没了）。
+
+我第一次的判断是错的：看到 `grep -c "^com\.squareup\.okhttp3\." mapping.txt` = 0，
+就断定「R8 整块剥掉了」。实际是 **okhttp 3.0.0 的包名是 `okhttp3.*`**，用错前缀得到的是假绿。
+用正确前缀数：
+
+```
+grep -c '^okhttp3\.' mapping.txt  → 84
+grep -c '^okio\.'    mapping.txt  → 22
+```
+
+**发出去的 APK 里确实有 84 个 okhttp3 类 + 22 个 okio 类。** 这一点必须写在明处，
+不能因为「它没被调用」就当作不存在。
+
+所以判据最终这样定：
+- **A2·r（权威）**：看 R8 `mapping.txt` 的**顶格类声明行**（不看内联帧，也不看任意子串 ——
+  内联帧会把「方法被内联进别的类」误读成「SDK 还在」）。这才回答「它的类有没有留在包里」。
+- **允许清单** `patterns/apk-network-allow.txt`：`okhttp3` / `okio` 在列，每条写明
+  「来源坐标 + 删不掉的理由」，命中时打 `::notice::` —— **允许 ≠ 隐身**。
+- **零网络的真正保证是 A3**：manifest 里没有 INTERNET 权限，Android 在 socket 层就拦住，
+  **包里留着网络代码也开不了连接**。这句话写进了脚本文件头，因为必须一直说清楚：
+  否则「允许清单」会慢慢变成自我安慰。
+
+
 ### 仍然缺什么（这一版没做，按优先级）
 
 1. **iOS 参数建议的阻尼没接**。`IosParamBridge.recommend` 里 `current` 仍写死 `null`，

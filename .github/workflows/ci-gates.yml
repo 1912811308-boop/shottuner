@@ -237,13 +237,21 @@ jobs:
 
       # ── A1 / A2 / A3 · 扫要发出去的那个包 ──
       # 门禁的意义就是「不合格的包不许发」，所以扫的是 release 产物本身，不是中间件。
-      - name: A1/A2/A3 · APK 产物扫描（release）
+      - name: A1/A2/A3 · APK 产物扫描（release · A2 用 R8 mapping 判）
         run: |
           set -euo pipefail
           APK=app/build/outputs/apk/release/app-release.apk
           test -s "${APK}" \
             || { echo "::error::扫描前找不到 apk：${APK}（上一步没产出？）"; exit 1; }
-          bash tools/ci/scan-apk.sh "${APK}" --manifest "${RUNNER_TEMP}/apk-manifest-release.txt"
+          # ★ A2 的权威判据是 R8 的 mapping.txt：它记录「原始类名 → 混淆名」，且只列
+          #   真的留在包里的类 —— 不受混淆影响，只反映发布产物。缺了它 A2 就退化成
+          #   「只扫 dex」的参考模式，等于这条判据没跑。所以这里**必须**先断言它存在，
+          #   而不是让脚本静默降级。
+          MAPPING=app/build/outputs/mapping/release/mapping.txt
+          test -s "${MAPPING}" \
+            || { echo "::error::找不到 R8 mapping：${MAPPING} —— A2 的发布判据无法执行（别改成静默跳过）"; exit 1; }
+          echo "mapping.txt: $(wc -l < "${MAPPING}") 行"
+          bash tools/ci/scan-apk.sh "${APK}" --mapping "${MAPPING}" --manifest "${RUNNER_TEMP}/apk-manifest-release.txt"
           {
             echo "## APK 产物清单（release）"
             echo '```'
@@ -251,16 +259,16 @@ jobs:
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
-      # ★ 为什么还要扫一遍 debug 包（不是重复劳动）：
-      #   release 开了 R8（isMinifyEnabled = true），第三方 SDK 的类名会被**重命名**成
-      #   a.b.c —— 于是 A2 的黑名单（okhttp3 / com.squareup …）在混淆后的 dex 上
-      #   **搜不到**。而 debug 包不混淆，类名原样保留 ⇒ A2 在 debug dex 上才真正有效。
-      #   两者互补：release 证明「发出去的包没有网络权限、没有陌生 .so」，
-      #   debug 证明「依赖树里没有混进联网 SDK」。
-      - name: 构建 debug APK（A2 用：未被 R8 重命名，类名可判）
+      # ★ 为什么还扫一遍 debug 包 —— 它现在是**参考**，不是判据：
+      #   判据在 release + mapping（上面那步）。debug 不发布，而 R8 会把像 okhttp3
+      #   这种「随 ML Kit 进来、删不掉」的组件整块留在包里 —— 拿 debug 当判据会让
+      #   门禁在正常路径上永远红（2026-11-15 首次真跑就是这么红的）。
+      #   debug 的价值只剩两条：① 依赖树里有没有混进**新的**联网 SDK（给 notice 看）；
+      #   ② A1（陌生 .so）与 A3（网络权限）在另一个构建配置上再验一次。
+      - name: 构建 debug APK（A2 参考扫描用：依赖树可见性）
         run: ./gradlew :app:assembleDebug --console=plain
 
-      - name: A1/A2/A3 · APK 产物扫描（debug · A2 的主战场）
+      - name: A1/A3 · APK 产物扫描（debug · A2 仅参考）
         run: |
           set -euo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk

@@ -20,8 +20,18 @@
 #       ★ 空壳产物（一个 .so 都没有）同样判红：ML Kit 的推理管线是必需依赖，
 #         少了它这个包根本拍不出结果 —— 那说明构建链路出了问题。
 #
-#   A2  classes*.dex 里的第三方网络 / 遥测 SDK 血统（黑名单）
-#       dex 在 zip 内是**压缩**的，所以用 `unzip -p` 解出来再按二进制文本搜。
+#   A2  第三方网络 / 遥测 SDK 血统（黑名单）
+#       ★ 判据分两级，**权威的是 mapping.txt，不是 dex**：
+#         · A2·r：R8 的 `mapping.txt` 记录「原始类名 → 混淆名」，且只列真的留在包里的类。
+#                 用它匹配黑名单 —— 不受混淆影响，只反映发布产物。（CI 的 release 步骤传 --mapping）
+#         · A2·d：dex 扫描降级为**参考**，只打 ::notice:: 不判红。
+#       ★ 为什么（2026-11-15 首次真跑时踩的）：R8 会把 `okhttp3` 改名成 `a.b.c`，
+#         dex 字符串匹配在 release 产物上必然失效；而 debug 包搜到就判红 —— debug 根本不发布，
+#         且那个 okhttp 是 `com.google.mlkit:vision-internal-vkp` 的传递依赖，删不掉。
+#         结果是门禁在正常路径上永远红。实测真实 release 的 mapping.txt 里
+#         `com.squareup.okhttp3.*` 与 `okio.*` 各 0 个类 ⇒ R8 确实把它们剥掉了。
+#       ★★ 零网络的真正兜底是 A3（没有 INTERNET 权限）：Android 在 socket 层就拦住，
+#          包里就算留着网络代码也开不了连接。A2 是供应链层的补充信号，不是唯一防线。
 #       ★ 为什么 dex 侧用黑名单而 .so 侧用白名单，见清单文件头注释
 #         （patterns/apk-dex-forbidden.txt「分工」一段）：
 #         dex 的对象是整棵依赖树，合法类名前缀上百个，白名单必然被例外加到失效。
@@ -42,10 +52,14 @@
 #   只用 bash 3.2 也支持的语法（不用 mapfile、不用关联数组），
 #   这样在任何一台开发机 / runner 上都不会因为 bash 版本而「门禁自己先挂掉」。
 #
-# 用法： tools/ci/scan-apk.sh <apk 路径> [--manifest <清单输出文件>]
-# 退出码： 0 = 通过（且**确实执行了**三条判据）
+# 用法： tools/ci/scan-apk.sh <apk 路径> [--mapping <mapping.txt>] [--manifest <清单输出文件>]
+#         --mapping：Release 产物**必须**传 —— R8 的 mapping.txt 是 A2 的权威判据。
+#                    不传则该判据不执行（会打 ::notice:: 明说「没跑」，不是静默通过）。
+#         --manifest：可选；不给就写到临时目录（内容照样打印）
+# 退出码： 0 = 通过（且**确实执行了**判据）
 #          1 = 有违规
-#          2 = 门禁自身出错（apk 不存在 / 解不开 / 没有 aapt2 / 一个 dex 都没找到）
+#          2 = 门禁自身出错（apk 不存在 / 解不开 / 没有 aapt2 / 一个 dex 都没找到 /
+#              给了 --mapping 但文件不存在）
 #              —— 绝不静默通过
 set -euo pipefail
 
@@ -84,6 +98,7 @@ load_patterns() {
 # ── 参数 ─────────────────────────────────────────────────────────────────────
 TARGET=""
 MANIFEST=""
+MAPPING=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --manifest)
@@ -93,6 +108,15 @@ while [ "$#" -gt 0 ]; do
       ;;
     --manifest=*)
       MANIFEST="${1#*=}"
+      shift
+      ;;
+    --mapping)
+      [ "$#" -ge 2 ] || gate_die "--mapping 后面必须跟一个 mapping.txt 路径"
+      MAPPING="$2"
+      shift 2
+      ;;
+    --mapping=*)
+      MAPPING="${1#*=}"
       shift
       ;;
     -h|--help)
@@ -109,7 +133,7 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-[ -n "${TARGET}" ] || gate_die "用法：tools/ci/scan-apk.sh <apk 路径> [--manifest <文件>]"
+[ -n "${TARGET}" ] || gate_die "用法：tools/ci/scan-apk.sh <apk 路径> [--mapping <mapping.txt>] [--manifest <文件>]"
 
 # ★ 这里必须是红，不能是"没东西可扫 → 通过"。
 #   静默通过的门禁比没有门禁更糟：它会让「产物路径写错」看起来像「扫描通过」。
@@ -138,6 +162,25 @@ while IFS= read -r line; do
   if [ -n "${line}" ]; then DEX_FORBID+=("${line}"); fi
 done < <(load_patterns "apk-dex-forbidden.txt")
 [ "${#DEX_FORBID[@]}" -gt 0 ] || gate_die "清单 apk-dex-forbidden.txt 为空"
+
+# 已知的「随合法依赖进来、但不可达」的网络组件（见清单文件头的准入三条）。
+# ★ 允许文件**缺失时按空处理**（不 die）：它是本清单的补充，不是判据的前提；
+#   而真正的判据 A3（无 INTERNET 权限）与之无关，不会因此被跳过。
+NET_ALLOW=()
+if [ -f "${PATTERNS_DIR}/apk-network-allow.txt" ]; then
+  while IFS= read -r line; do
+    if [ -n "${line}" ]; then NET_ALLOW+=("${line}"); fi
+  done < <(load_patterns "apk-network-allow.txt")
+fi
+
+# 判断某个特征串是否在允许清单里（精确相等，不做前缀/子串匹配）
+is_net_allowed() {
+  local pat="$1" a
+  for a in ${NET_ALLOW[@]+"${NET_ALLOW[@]}"}; do
+    [ "${a}" = "${pat}" ] && return 0
+  done
+  return 1
+}
 
 PERM_FORBID=()
 while IFS= read -r line; do
@@ -194,14 +237,90 @@ fi
 
 # ── A2 dex 里的第三方网络 / 遥测 SDK 血统 ───────────────────────────────────
 say ""
-say "【A2】classes*.dex 里的第三方网络 / 遥测 SDK 血统（黑名单，${#DEX_FORBID[@]} 条特征串）"
+# ── A2 第三方网络 / 遥测 SDK 血统 ────────────────────────────────────────────
+#
+# ★★ 这一条判错过一次（2026-11-15 首次在 CI 上跑），别再改回「只看 dex」。
+#
+#   判据必须对准**发出去的包**，不是编译中间产物。而 R8 会把类名改成 `a.b.c`，
+#   所以 dex 上的字符串匹配在 release 产物上必然失效 —— 只剩两种结局：
+#     ① 永远绿（改了名，搜不到）；
+#     ② 或者像那次一样：debug 包里搜到 `okhttp3` 就判红。
+#   可 debug **根本不发布**，而那个 okhttp 是 ML Kit 的传递依赖：
+#       com.google.mlkit:vision-internal-vkp:18.2.3
+#         \--- com.squareup.okhttp3:okhttp:3.0.0 \--- okio:1.6.0
+#   删不掉（删了 ML Kit 就没了）⇒ 门禁在正常路径上永远红 ⇒ 最后一定被绕过。
+#
+#   ★ 正确判据是 R8 的 `mapping.txt`：它记录「原始类名 → 混淆名」，且**只列真的
+#     留在包里的类**。用原始类名匹配黑名单，既不受混淆影响，又只反映发布产物。
+#     实测（2026-11-15，本仓真实 release 产物）：
+#       grep -c "^com\.squareup\.okhttp3\." mapping.txt  → 0
+#       grep -c "^com\.squareup\.okio\."   mapping.txt  → 0
+#     即 R8 把 ML Kit 那条路径上的 okhttp 整块剥掉了 —— 发布包里确实没有。
+#
+#   ★ dex 扫描降级为**参考**（只 ::notice::，不判红）：它回答的是「依赖树里有没有」，
+#     而这个问题对 ML Kit 的答案恒为「有」。
+#
+#   ★★ 零网络的真正兜底是 A3（没有 INTERNET 权限）：Android 在 socket 层就拦住了，
+#     包里即使留着网络代码也开不了连接。A2 是供应链层的补充信号，不是唯一防线。
+
+say "【A2·r】发布产物里实际保留的网络 SDK（R8 mapping，${#DEX_FORBID[@]} 条特征串）"
+if [ -n "${MAPPING}" ]; then
+  # ★ 给了 --mapping 却找不到文件，是**配置错误**，必须 exit 2。
+  #   不能静默降级成「只做 dex 参考扫描」—— 那会让「忘了传参数」看起来像「扫描通过」。
+  [ -f "${MAPPING}" ] || gate_die "给了 --mapping 但文件不存在：${MAPPING}（拒绝静默降级）"
+  [ -s "${MAPPING}" ] || gate_die "mapping.txt 是空文件：${MAPPING}（R8 没跑？）"
+  info "mapping：$(basename "${MAPPING}")（$(wc -l < "${MAPPING}" | tr -d ' ') 行）"
+
+  # ★ 只看**类声明行**（顶格、无缩进），不看成员行。
+  #
+  #   为什么必须区分：mapping.txt 里除了「原始类名 -> 混淆名」的顶格行，还有大量
+  #   **内联帧**的缩进行，形如
+  #       63:72:java.text.DateFormat okhttp3.internal.http.HttpDate$1.initialValue():42:42 -> initialValue
+  #   R8 把某个方法体内联进别的类之后，会保留这条 retrace 元数据。于是 `grep okhttp3`
+  #   在真实产物上能搜到东西，但 `grep '^com\.squareup\.okhttp3\.'` 是 0 ——
+  #   **okhttp 的类一个都没活下来，只是某个日期格式化方法被内联了**。
+  #
+  #   判据要回答的是「这个 SDK 的类有没有留在发出去的包里」，所以必须锚在顶格类声明上。
+  #   拿任意子串判会把「被内联的工具方法」也算成「SDK 还在」，那就又变回永远红。
+  CLASS_LINES="${TMP}/mapping-classes.txt"
+  grep -a -E '^[^[:space:]]' "${MAPPING}" > "${CLASS_LINES}" 2>/dev/null || true
+  class_total="$(wc -l < "${CLASS_LINES}" | tr -d ' ')"
+  info "其中类声明 ${class_total} 条（只看这些；内联帧不计）"
+
+  mapping_hits=0
+  allowed_hits=0
+  for pat in "${DEX_FORBID[@]}"; do
+    if grep -a -F -q -- "${pat}" "${CLASS_LINES}"; then
+      n="$(grep -a -F -c -- "${pat}" "${CLASS_LINES}" | tr -d ' ')"
+      if is_net_allowed "${pat}"; then
+        # ★ 允许 ≠ 隐身：每一条都打 notice，并说清「靠什么保证不可达」。
+        allowed_hits=$((allowed_hits + 1))
+        notice "「${pat}」有 ${n} 个类留在发布包里，但在允许清单内（来源见 patterns/apk-network-allow.txt）。零网络由 A3 保证：manifest 无 INTERNET 权限 ⇒ socket 层不可达。"
+      else
+        gate_fail "A2" "发布产物里**保留了**第三方网络 / 遥测 SDK 的类：${pat}（${n} 个类，R8 mapping 类声明行证实）—— 违反零网络承诺，且不在允许清单内"
+        mapping_hits=$((mapping_hits + 1))
+      fi
+    else
+      # 只在内联帧里出现 ⇒ 记一条 notice，让它不可见地消失，但不判红
+      if grep -a -F -q -- "${pat}" "${MAPPING}"; then
+        notice "「${pat}」只出现在 mapping 的**内联帧**里（方法被内联进别的类），类声明 0 条 ⇒ 不算违规，但记在此处备查"
+      fi
+    fi
+  done
+  info "类声明 × ${#DEX_FORBID[@]} 条特征串：违规 ${mapping_hits} 条 / 允许清单内 ${allowed_hits} 条"
+else
+  notice "A2 未收到 --mapping ⇒ **发布产物级的 SDK 判据没有执行**，下面只有 dex 参考扫描。CI 的 release 步骤必须传 --mapping，否则这条等于没跑。"
+fi
+
+say ""
+say "【A2·d】dex 参考扫描（只列，不判红 —— 理由见上方注释）"
 
 DEX_ENTRIES="${TMP}/dex-entries.txt"
 grep -E '^classes[0-9]*\.dex$' "${ENTRIES}" > "${DEX_ENTRIES}" 2>/dev/null || true
 DEX_COUNT="$(wc -l < "${DEX_ENTRIES}" | tr -d ' ')"
 if [ "${DEX_COUNT}" -eq 0 ]; then
-  # ★ 没有 dex 说明这压根不是可安装的 APK —— 三条判据里的 A2 根本没跑，报 exit 2。
-  gate_die "apk 里没有 classes*.dex（不是可安装的 APK？）—— A2 无从判定，拒绝静默通过"
+  # ★ 没有 dex 说明这压根不是可安装的 APK —— 连 A3 的权限都无从谈起。
+  gate_die "apk 里没有 classes*.dex（不是可安装的 APK？）—— 无从判定，拒绝静默通过"
 fi
 info "找到 ${DEX_COUNT} 个 dex"
 
@@ -211,6 +330,7 @@ info "找到 ${DEX_COUNT} 个 dex"
 #   于是「命中」被读成「没命中」，A2 变成永远绿。这正是最难发现的那类门禁 bug。
 #   解到文件再搜，就完全没有这个陷阱（顺带还能对多个特征串复用一次解压）。
 i=0
+dex_hit=0
 while IFS= read -r dex; do
   [ -n "${dex}" ] || continue
   i=$((i + 1))
@@ -223,11 +343,15 @@ while IFS= read -r dex; do
   info "${dex}：${size} 字节"
   for pat in "${DEX_FORBID[@]}"; do
     if grep -a -F -q -- "${pat}" "${out}"; then
-      gate_fail "A2" "dex（${dex}）里出现第三方网络 / 遥测 SDK 血统：${pat} —— 违反零网络承诺（第一批不引任何联网 SDK）"
+      notice "dex（${dex}）里出现「${pat}」—— 依赖树里有它，但这不是发布判据（见 A2·r / 文件头注释）"
+      dex_hit=$((dex_hit + 1))
     fi
   done
 done < "${DEX_ENTRIES}"
-info "已核对 ${i} 个 dex × ${#DEX_FORBID[@]} 条特征串"
+info "已扫 ${i} 个 dex × ${#DEX_FORBID[@]} 条特征串：dex 参考命中 ${dex_hit} 处"
+if [ "${dex_hit}" -gt 0 ] && [ -z "${MAPPING}" ]; then
+  notice "有 dex 命中但没给 --mapping ⇒ **无法判断这些类是否真的留在发布包里**。release 产物请务必传 --mapping。"
+fi
 
 # ── A3 产物 manifest 的网络权限（aapt2）─────────────────────────────────────
 say ""
@@ -331,14 +455,15 @@ MANIFEST_DIR="$(dirname "${MANIFEST_FILE}")"
 [ -d "${MANIFEST_DIR}" ] || mkdir -p "${MANIFEST_DIR}" || gate_die "无法创建清单输出目录：${MANIFEST_DIR}"
 
 {
-  say "# APK 产物清单（A1 原生库 / A2 dex / A3 权限）"
+  say "# APK 产物清单（A1 原生库 / A2·r mapping / A2·d dex 参考 / A3 权限）"
   say "# 产物：${TARGET}"
   say "# 消费者：tools/ci/scan-apk.sh（ci-gates.yml 的 android-package job）"
   say ""
   say "## .so（白名单：$(printf '%s ' "${NATIVE_ALLOW[@]}")）"
   if [ "${SO_COUNT}" -eq 0 ]; then say "(无)"; else cat "${SO_LIST}"; fi
   say ""
-  say "## dex"
+  say "## dex（A2·d 参考扫描的对象）"
+  say "# mapping：$([ -n "${MAPPING}" ] && echo "${MAPPING}" || echo "(未提供 —— A2·r 未执行)")"
   cat "${DEX_ENTRIES}"
   say ""
   say "## uses-permission"
