@@ -28,6 +28,8 @@ import com.shottuner.app.model.ManualParams
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 /**
  * 相机引擎：负责 CameraX 绑定与手动参数的写入。
@@ -99,6 +101,22 @@ class CameraEngine(
     /** 上一次记过日志的镜头朝向。null = 还没记过，用来把「镜头档案」日志压到每次切换一条。 */
     private var loggedFront: Boolean? = null
 
+    /**
+     * 当前这颗镜头的等效焦距（35mm 口径）。**0 = 算不出来**。
+     *
+     * 由 `LENS_INFO_AVAILABLE_FOCAL_LENGTHS` + `SENSOR_INFO_PHYSICAL_SIZE` 现算，
+     * 公式与 `HardwareProbe` 逐字一致（焦距 × 43.267 / 传感器对角线），
+     * 这样前置与后置的数字在同一把尺子上。
+     *
+     * 为什么宁可给 0 也不给个"差不多"的默认值：这个数会进 R05（广角人像）与
+     * `FramingCoach` 的广角判定，编一个数出来会让前置也吃到"切 2x"的建议。
+     * 0 在本项目 common 里的语义就是"未知"，规则侧自然会闭嘴。
+     */
+    private var equivFocalMm: Int = 0
+
+    /** 当前镜头的等效焦距，0 = 未知。切镜头后由 `readCapabilities()` 刷新。 */
+    fun currentEquivFocalMm(): Int = equivFocalMm
+
     /** null 表示交还给相机自动曝光（AE） */
     private var manual: ManualParams? = null
 
@@ -160,30 +178,58 @@ class CameraEngine(
     }
 
     /**
+     * 翻转镜头的返回值。
+     *
+     * 不用裸 Boolean 是因为调用方（`MainActivity`）还要处理第二件事：
+     * **翻转会把手动曝光复位成自动**（曝光参数是镜头级能力，见 [toggleCamera]）。
+     * 只回一个 boolean 的话，UI 只能靠"翻完再看 `isManual()`"去猜；一旦将来多一个
+     * 复位动作，猜法就会失效，而界面上"说自动、实际手动"是绝不能出现的状态。
+     */
+    class ToggleResult(
+        /** 是否真的换到了另一侧。false = 切不过去，已回退到原来那一侧 */
+        val switched: Boolean,
+        /** 是否因为这次翻转把本机写入（手动 ISO / 快门）复位成了自动 */
+        val manualReset: Boolean
+    )
+
+    /**
      * 翻转前 / 后摄。
      *
-     * 实现要点（三条缺一不可）：
-     * 1. `CameraSelector` 只在 bind 时生效，所以翻完必须 `unbindAll` 再重新 bind ——
+     * 实现要点（四条缺一不可）：
+     * 1. **曝光先回自动**：ISO / 快门是镜头级能力，后摄的区间搬到前置上常常不成立。
+     *    前置若不支持 `AE_MODE_OFF`，搬过去会让 bind 降级成「仅预览」——
+     *    用户点快门才发现相机废了，那是本功能最差的失败形态。所以先清 `manual` 再翻。
+     * 2. `CameraSelector` 只在 bind 时生效，所以翻完必须 `unbindAll` 再重新 bind ——
      *    这件事 [bind] 内部已经做了，本方法**只走 bind 一条路**，绝不自己再拼一遍
      *    UseCase（那样两条 `bindToLifecycle` 分支的降级逻辑就得抄两份）；
-     * 2. 因此 `bind` 的两级降级（完整 → 仅预览）对前置一样生效，
-     *    前置不支持手动曝光时会落到「仅预览」，而不是黑屏；
-     * 3. 切不过去要**回退**：把 [isFront] 和画面都退回原来那一侧，用户至少还能继续拍。
+     * 3. 因此 `bind` 的两级降级（完整 → 仅预览）对前置一样生效；
+     * 4. 切不过去要**回退**：把 [isFront] 和画面都退回原来那一侧，用户至少还能继续拍。
+     *    注意回退**不恢复**手动曝光：参数已经清掉了，硬塞回旧值就得再 bind 一次、再黑一帧，
+     *    所以统一回自动，并通过 [ToggleResult.manualReset] 让 UI 把这件事说出来。
      *
-     * @return true = 已切到另一侧且预览起来了（可能是 [BindResult.PREVIEW_ONLY]，
-     *         此时"不能在本机拍"是这台设备对这个镜头的限制，由快门回调自己说话）；
-     *         false = 切不过去，已回退到原来那一侧。
+     * @return 见 [ToggleResult]
      */
-    fun toggleCamera(): Boolean {
+    fun toggleCamera(): ToggleResult {
         if (cameraProvider == null) {
             // 还没 start() 到 provider 就点了翻转：不静默，日志留证据，由 UI 给提示
             Diag.w(TAG, "翻转失败：ProcessCameraProvider 尚未就绪")
-            return false
+            return ToggleResult(switched = false, manualReset = false)
         }
+        // 清字段而不是 `applyManual(null)`：后者内部会 bind() 一次，
+        // 等于"先在后摄上白重建一遍 UseCase、紧接着又 unbind 换前置"，
+        // 多一段黑屏、多一次 setSurfaceProvider，效果完全一样。
+        val manualCleared = manual != null
+        if (manualCleared) {
+            manual = null
+            Diag.d(TAG, "翻转前把手动曝光复位为自动（参数不跨镜头搬）")
+        }
+
         val target = !isFront
         isFront = target
         // 这一次**不报错**：还有退路，先报出来会闪一条"相机打不开"的常驻错误条。
-        if (bind(reportErrors = false) != BindResult.FAILED) return true
+        if (bind(reportErrors = false) != BindResult.FAILED) {
+            return ToggleResult(switched = true, manualReset = manualCleared)
+        }
 
         // 切不过去：状态与画面一起退回去，别把用户丢在一块黑屏上
         Diag.w(TAG, "翻转失败：${if (target) "前置" else "后置"}镜头绑定失败，回退")
@@ -191,7 +237,7 @@ class CameraEngine(
         // 回退这次**要报错**：连原来那一侧都绑不回来的话，那是真正的"相机打不开"，
         // 必须让用户看到常驻错误条 + 重试按钮，而不是一句"翻转失败"。
         bind(reportErrors = true)
-        return false
+        return ToggleResult(switched = false, manualReset = manualCleared)
     }
 
     /** 写入手动曝光参数；传 null 恢复自动曝光 */
@@ -407,9 +453,23 @@ class CameraEngine(
                 c2.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)
             val focal: FloatArray? =
                 c2.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            val physSize: android.util.SizeF? =
+                c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
 
             val supportsManualSensor = aeModes?.contains(CameraMetadata.CONTROL_AE_MODE_OFF) == true
             val focalMm = if (focal != null && focal.isNotEmpty()) focal[0] else 0f
+            // 等效焦距：与 `HardwareProbe` 同一公式（焦距 × 全画幅对角线 / 传感器对角线），
+            // 保证前置与后置的数字可以直接比。读不到传感器物理尺寸就给 0（未知），
+            // 不拿后摄的值冒充 —— 这个数会进 R05 的广角判定。
+            val equiv = if (focalMm > 0f && physSize != null &&
+                physSize.width > 0f && physSize.height > 0f
+            ) {
+                (focalMm * FULL_FRAME_DIAGONAL_MM /
+                    hypot(physSize.width.toDouble(), physSize.height.toDouble())).roundToInt()
+            } else {
+                0
+            }
+            equivFocalMm = equiv
 
             caps = CameraCaps(
                 isoMin = isoRange?.lower ?: 50,
@@ -429,7 +489,7 @@ class CameraEngine(
                     TAG,
                     "镜头档案 ${if (isFront) "前置" else "后置"}：ISO ${caps.isoMin}–${caps.isoMax} · " +
                         "快门 ${caps.exposureMinNs}–${caps.exposureMaxNs}ns · " +
-                        "焦距 ${caps.focalLengthMm}mm · " +
+                        "焦距 ${caps.focalLengthMm}mm / 等效 ${equivFocalMm}mm · " +
                         "手动曝光 ${if (supportsManualSensor) "支持" else "不支持"}"
                 )
             }
@@ -438,10 +498,15 @@ class CameraEngine(
             // "这台机器不支持手动"和"读能力时抛异常"是两件事，日志里要能分辨。
             Diag.w(TAG, "读取相机能力失败，退回默认上限", e)
             caps = CameraCaps.UNKNOWN
+            // 等效焦距也要一起退回未知：留着上一颗镜头的数字会让 R05 拿错尺子
+            equivFocalMm = 0
         }
     }
 
     private companion object {
         private const val TAG = "Camera"
+
+        /** 全画幅对角线（mm）。与 `HardwareProbe` 同值，保证两端算出的等效焦距可比。 */
+        private const val FULL_FRAME_DIAGONAL_MM = 43.267
     }
 }

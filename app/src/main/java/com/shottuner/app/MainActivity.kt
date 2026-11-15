@@ -59,6 +59,7 @@ import com.shottuner.app.analysis.ScoreBoard
 import com.shottuner.app.analysis.ScoreDimension
 import com.shottuner.app.analysis.ScoreResult
 import com.shottuner.app.camera.CameraEngine
+import com.shottuner.app.camera.LensSignals
 import com.shottuner.app.coach.FaceInfo
 import com.shottuner.app.coach.FramingCoach
 import com.shottuner.app.coach.SubjectBox
@@ -1227,18 +1228,63 @@ class MainActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(flipUnlockRunnable)
         uiHandler.postDelayed(flipUnlockRunnable, FLIP_LOCK_MS)
 
-        val ok = try {
+        val result = try {
             eng.toggleCamera()
         } catch (e: Throwable) {
             Diag.e(TAG, "翻转摄像头抛异常", e)
-            false
+            CameraEngine.ToggleResult(switched = false, manualReset = false)
         }
-        if (!ok) {
-            showCameraNotice(
-                "翻转失败",
-                "这台设备切不到另一侧的摄像头（可能被别的应用占用）。已留在当前镜头，可以直接继续拍。"
-            )
+
+        // 引擎在翻转前就把手动曝光复位了（ISO / 快门不跨镜头搬），UI 必须跟着复位。
+        // 只复位引擎不复位 UI，就会出现"界面说手动、相机在自动"——比翻转失败更糟，
+        // 因为用户会按一个根本不生效的参数去判断画面。
+        if (result.manualReset) resetManualUiState()
+
+        // 连回退都失败时，引擎已经弹了那条**常驻**的"相机打不开"错误条（带重试）。
+        // 这时再用一次性提示去盖它，等于把唯一的行动建议换成一句安慰话，所以让位。
+        val persistentErrorShowing =
+            binding.llCameraError.visibility == View.VISIBLE && !cameraNoticeTransient
+
+        if (!persistentErrorShowing) {
+            when {
+                // 切换成功、且刚才确实在手动档 → 告诉用户曝光回自动了
+                result.switched && result.manualReset -> showCameraNotice(
+                    "已切到${if (eng.isFront) "前置" else "后置"}，曝光回到自动",
+                    "本机写入已停止，参数锁定也一起解除：ISO / 快门是镜头级能力，" +
+                        "两个镜头的可用区间不同，照搬会偏。要手动就在新镜头上重新开一次。"
+                )
+                // 切换失败、但曝光被复位了 → **必须**说，否则用户会以为"翻失败了，参数还在"
+                !result.switched && result.manualReset -> showCameraNotice(
+                    "翻转失败，曝光已回到自动",
+                    "这台设备切不到另一侧的摄像头（可能被别的应用占用），已留在当前镜头。" +
+                        "曝光在翻转前就复位了 —— 参数搬不过去，需要手动请重新开启本机写入。"
+                )
+                !result.switched -> showCameraNotice(
+                    "翻转失败",
+                    "这台设备切不到另一侧的摄像头（可能被别的应用占用）。已留在当前镜头，可以直接继续拍。"
+                )
+                // 切换成功且本来就在自动档：什么都没变，不打扰
+            }
         }
+    }
+
+    /**
+     * 把手动曝光相关的 UI 状态整体复位到「自动」。
+     *
+     * 复位的四个字段各有分工，少一个都会留下"界面对不上相机"的痕迹：
+     * - `autoMode`：本机写入开关（决定 `btnMode` 文案与自动收敛循环是否继续写）；
+     * - `appliedIso` / `appliedShutterNs`：上一次写进相机的值，也是收敛阈值与
+     *   "当前读数"的来源，不清零会让下一次写入的判据基于旧镜头；
+     * - `locked` / `lockedRec`：锁定 = "把这套参数写死"（`toggleLock` 内部就会 applyManual），
+     *   手动都没了还挂着锁定状态，等于显示一组不会生效的数字。
+     */
+    private fun resetManualUiState() {
+        autoMode = false
+        locked = false
+        lockedRec = null
+        appliedIso = 0
+        appliedShutterNs = 0L
+        updateModeUi()
     }
 
     /**
@@ -1725,7 +1771,9 @@ class MainActivity : AppCompatActivity() {
     /** 把 FrameStats 和设备能力折算成纯 Kotlin 信号，知识层不碰 Android 类型。 */
     private fun buildTechSignals(): TechSignals {
         val snap = lastStats
-        val hasTele = profile.lenses.size > 1
+        // 长焦同理要按镜头折算（前置没有长焦）：`TechniqueMatcher` 用 `hasTele` 过滤
+        // `requiresTele` 的条目，前置时还声称有长焦，就会推荐"用长焦拍特写"。
+        val hasTele = lensSignals().hasTele
         val longExposure = profile.caps.exposureMaxNs >= 1_000_000_000L
         if (snap == null) {
             return TechSignals(
@@ -2238,27 +2286,48 @@ class MainActivity : AppCompatActivity() {
      * - `mirrored` 恒 false —— 这个值描述的是**画面有没有左右翻**，不是"是不是前置"。
      *   3.2.0 的前置通路明确「预览与成片都不镜像」（见 `CameraEngine` 类注释），
      *   取景方向和成片一致，所以前置时 `roll` 的符号也不需要翻转；
+     * - `hasTele` / `equivFocalMm` 由 [LensSignals] 按**当前镜头**折算：前置恒无长焦，
+     *   焦距只用前置自己的数（算不出来给 0 = 未知）。拿后摄档案喂前置，会让 R05 劝用户
+     *   「切到 2x」—— 前置的 2x 是数字变焦，画质塌方；见 [LensSignals] 的 KDoc；
      * - `coveredTopics` 本版恒空：还没有"用户已学过"的持久化，R08 因此永远有资格出牌。
      */
-    private fun buildPromptSignals(): PromptSignals = PromptSignals(
-        tech = buildTechSignals(),
-        roll = levelRoll,
-        pitch = levelPitch,
-        tab = if (currentTab == TAB_VIDEO) PromptEngine.TAB_VIDEO else PromptEngine.TAB_PHOTO,
-        videoIntentOrdinal = videoIntent.ordinal,
-        scene = currentScene,
-        hasTele = profile.lenses.size > 1,
-        equivFocalMm = profile.equivFocalMm,
-        gridOn = guidesOn,
-        gridOffAgoMs = if (guidesOn || gridOffAt < 0L) {
-            Long.MAX_VALUE
-        } else {
-            (SystemClock.elapsedRealtime() - gridOffAt).coerceAtLeast(0L)
-        },
-        coveredTopics = emptySet(),
-        sessionCount = coachTicks,
-        mirrored = false,
-        stability = (motionEma / MOTION_SCALE_DEG).coerceIn(0f, 1f)
+    private fun buildPromptSignals(): PromptSignals {
+        val lens = lensSignals()
+        return PromptSignals(
+            tech = buildTechSignals(),
+            roll = levelRoll,
+            pitch = levelPitch,
+            tab = if (currentTab == TAB_VIDEO) PromptEngine.TAB_VIDEO else PromptEngine.TAB_PHOTO,
+            videoIntentOrdinal = videoIntent.ordinal,
+            scene = currentScene,
+            hasTele = lens.hasTele,
+            equivFocalMm = lens.equivFocalMm,
+            gridOn = guidesOn,
+            gridOffAgoMs = if (guidesOn || gridOffAt < 0L) {
+                Long.MAX_VALUE
+            } else {
+                (SystemClock.elapsedRealtime() - gridOffAt).coerceAtLeast(0L)
+            },
+            coveredTopics = emptySet(),
+            sessionCount = coachTicks,
+            mirrored = false,
+            stability = (motionEma / MOTION_SCALE_DEG).coerceIn(0f, 1f)
+        )
+    }
+
+    /**
+     * 当前镜头的档案（是否有长焦 / 等效焦距）。
+     *
+     * 折算逻辑在纯函数 [LensSignals.of] 里，这里只负责把两个来源接上：
+     * `profile`（设备级，前置时它描述的仍是后置主摄）与 `CameraEngine`（当前这一颗）。
+     * 抽出来是因为 `buildPromptSignals()` 与 `buildTechSignals()` 都要用同一份，
+     * 各算一次迟早出现"提示引擎说有长焦、技法页说没有"。
+     */
+    private fun lensSignals(): LensSignals.Values = LensSignals.of(
+        isFront = engine?.isFront == true,
+        backHasTele = profile.lenses.size > 1,
+        backEquivFocalMm = profile.equivFocalMm,
+        frontEquivFocalMm = engine?.currentEquivFocalMm() ?: 0
     )
 
     /**
@@ -3219,13 +3288,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restoreAuto() {
-        locked = false
-        lockedRec = null
-        autoMode = false
-        appliedIso = 0
-        appliedShutterNs = 0L
         engine?.applyManual(null)
-        updateModeUi()
+        // 与翻转镜头时的复位走同一条路：两处各写一份字段清单，迟早漏一处
+        resetManualUiState()
     }
 
     /**
