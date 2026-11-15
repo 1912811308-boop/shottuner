@@ -8,6 +8,86 @@
 > ★ 但内部 `versionCode` **仍然单调递增**（Android 的 33、iOS 的 1，两端独立）：
 > 系统靠 versionCode 判断能不能覆盖安装，**回退会导致装不上**。它与用户看到的版本号是两回事。
 
+## 1.3.0 (versionCode 39 / iOS build 7) - 2026-11-15 - 「前置摄像头 + 照拨真拨」
+
+这一版补的是相机功能面上**根本没有**的东西，不是打磨。
+
+### 两端：前置摄像头
+
+之前两端的相机通路都硬编码后摄（Android `DEFAULT_BACK_CAMERA`、iOS `AVCaptureDevice.default(position: .back)`），
+所以技法库里那 5 条自拍技法只能翻看、永远进不了推送池。
+
+**★ 镜像我没按常规做**：预览与成片**都不镜像**。
+
+大多数相机 App 自拍时镜像预览（像照镜子）。但这是个**构图教练** —— 镜像预览下说「往左移一点」，
+成片里会变成往右，教练的指令和结果对不上。宁可手感不像照镜子，也不要每句话都反着执行。
+代价写在这里：习惯镜像自拍的人会觉得别扭。
+
+实现上有个不显然的坑：前置默认就是镜像的，而且「自动镜像为真时直接设 `isVideoMirrored`」会抛 ObjC 异常。
+所以必须先 `automaticallyAdjustsVideoMirroring = false` 再设 `isVideoMirrored = false`，两行顺序不能换。
+换镜头后 connection 会被重建，单次设置会漏，所以加了 `mirroringDirty` 兜底在第一帧补设。
+
+### iOS：照拨真拨
+
+`setManualExposure` 早就写好了，但**全仓 0 调用点** —— iOS 的「照拨」一直只是把数字念给你听，
+而 Android 是真拨的。现在补上状态机（`ExposureAssist`）：
+
+- 值没变就**一个相机 API 都不调**（避免每 500ms 抖一次相机）
+- 在途只保留最新一条（避免 `setManualExposure` 与 `resumeAutoExposure` 争 `lockForConfiguration`）
+- 离页 / 进后台 / 换镜头 / 关开关都会 `resumeAutoExposure`，不允许停在「开关亮着、相机在自动」
+- **带锁时拒绝切 format/frameRate**，而不是内部静默解锁 —— 静默解锁会造成界面上看不出来的状态
+
+### Android：自拍技法进入推送池（运行时条件）
+
+`pushEligibleIds` 原来是静态排除：`byId.keys - BROWSE_ONLY_IDS - SELFIE_IDS`（75 条）。
+保留这个无参版本（后置口径，老调用点语义不变），新增 `pushEligibleIds(includeSelfie:)`，
+前置时 80 条。`PromptScheduler.setAvailableTipIds` 换池时会把不在新池里的当前卡撤掉。
+
+### Android：翻转镜头时曝光回自动
+
+曝光参数是**镜头级能力**，不能跨传感器搬。开着「本机写入」翻到前置，后摄的 ISO/快门照原样写进去，
+若前置不支持 `AE_MODE_OFF`，bind 会降级成「仅预览」——用户点快门才发现相机废了。
+
+所以翻之前先清手动参数，**并同步复位 UI**（5 个字段）+ 给一句可见提示。只复位引擎不复位 UI
+会变成「界面说手动、相机在自动」，和 iOS 侧明确拒绝的那种状态是同一种病。
+
+### Android：前置不再建议切长焦
+
+`hasTele` / `equivFocalMm` 原来一直读后置档案，前置时会建议「切 2 倍拍人像」——
+而前置的 2 倍是数码变焦，画质塌方。新增纯函数 `LensSignals` 统一出口，
+`PromptSignals` 与 `TechSignals` 都改读它（后者不改的话，技法页照样会推「用长焦拍特写」）。
+
+### CI：APK 产物扫描 + 隐私版本一致性
+
+零网络的产物级保证此前**只覆盖 ipa**：源码门禁扫不到二进制，产物门禁只跑 iOS。
+APK 里混进二进制网络 SDK，六道门禁一道都不会红。
+
+新增 `scan-apk.sh`，三条判据：`lib/**.so` 白名单（穷举，一个都没有也红）、
+`classes*.dex` 的网络 SDK 黑名单、`aapt2` 读 manifest 权限。
+
+两个不显然的点：
+- **`firebase` 不在黑名单里**。ML Kit 自己依赖 firebase-components / firebase-installations，
+  真实合规包的 dex 里 `grep -F firebase` 命中 6 处。写进去 = 每个合规包都红。
+- **同时也扫 debug 包**。release 开了 R8，`okhttp3` 会被重命名成 `a.b.c`，黑名单在混淆后的 dex 上基本失效。
+  两个包互补：release 证明「发出去的包没有网络权限、没有陌生 .so」，debug 证明「依赖树里没混进联网 SDK」。
+
+另新增 `check-privacy-version.sh`：Android 把政策版本编在**键名**里（`privacy_accepted_v1`），
+改正文忘了改键名，老用户会静默沿用旧同意。现在核四处（正文文件名 / Android 键名 / `R.raw` 引用 / iOS `PrivacyText.version`）。
+
+### 仍然缺什么（这一版没做，按优先级）
+
+1. **iOS 参数建议的阻尼没接**。`IosParamBridge.recommend` 里 `current` 仍写死 `null`，
+   照拨开着时每 500ms 按**绝对值**重算一次。场景稳定时没事，但「调上去 → 画面变亮 → 下拍说该压 →
+   调下来 → 又说该提」这种闭环振荡是有可能的。要接真实 `ManualParams`，得同时改 Kotlin 签名与
+   Swift 调用点，两处本机都编不了 —— 单独一版做，红了能单独回退。
+2. **Android 一个既有 bug**：`onCameraReady()` 每次 bind 成功都会 `autoMode = false`，
+   而手动档每写一次参数都触发 bind ⇒ 收敛循环停摆、按钮文案回落到「本机写入（可选）」，
+   而相机其实还在手动。方向与第 1 条相反，但同样是「界面与实际不一致」，且**在 1.3.0 之前就有**。
+3. **功能页在前置时仍给「拍人切到 46mm」**（`FeatureAdvisor` 在 shared，入参是 `DeviceProfile`，
+   不知道当前是哪颗镜头）。要么给它加「当前镜头」入参，要么前置时加一句「以下建议基于后置主摄」。
+4. **T22 真机标定仍未做**（CAL-1 场景映射 / CAL-2 四维分基线）。`VisionCalibrationCollector` 仍是零调用点。
+5. **iOS 从未在真机安装过**。这一版新增的 Swift（前置切换、照拨状态机）同样只是「编译通过」。
+
 ## 1.2.0 (versionCode 38 / iOS build 6) - 2026-11-14 - 「两端对齐：补完单边缺的四块」
 
 这一版没有新算法，补的是**两边不对称**的地方 —— 每一边都有对方已有、自己没有的东西。
