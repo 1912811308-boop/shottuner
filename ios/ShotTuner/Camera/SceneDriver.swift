@@ -116,6 +116,16 @@ final class SceneDriver {
     /// ★ `orientation: .right`：竖屏拍摄时相机给的是横向缓冲，不转就会把人脸框和
     ///   朝向整体歪 90°。本 App 的取景页锁竖屏，所以恒为 `.right`。
     ///   （若将来支持横屏取景，这里要按 `Display` 的旋转换朝向。）
+    ///
+    /// ★ **前置摄像头也用 `.right`，不要改成 `.leftMirrored`**：
+    ///   前提是 `CameraSession` 已经把「不镜像」显式设到了 preview / photo /
+    ///   videoDataOutput 三条 connection 上（见 `CameraSession.applyMirroringPolicy`）。
+    ///   缓冲没有镜像时，前置与后摄的几何完全一致，朝向自然也是同一个。
+    ///   ⇒ 反过来：**如果哪天有人把镜像打开了**（比如为了「自拍像照镜子」），
+    ///     这里必须同步改成 `.leftMirrored`，否则人脸会左右颠倒 ——
+    ///     而画面看起来「挺正常」，只是所有构图判断都在反方向。
+    ///     这也是为什么本任务要求「预览与成片都不镜像」：让这两处的假设保持一致，
+    ///     比让用户看到镜像自拍重要得多（这是个构图教练，不是自拍 App）。
     func submit(pixelBuffer: CVPixelBuffer) {
         guard isRunning else { return }
         detector.analyze(pixelBuffer: pixelBuffer, orientation: .right) { [weak self] ai in

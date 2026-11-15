@@ -39,6 +39,17 @@ struct ParamAdvice: Equatable {
     /// 建议感光度。
     var iso: Int
 
+    /// 建议曝光时间，纳秒。
+    ///
+    /// ★ 为什么界面已经有一行 `summary` 了还要这个字段：
+    ///   「照拨」开关要把建议值**真写进相机**（`CameraSession.setManualExposure`），
+    ///   而那需要一个数，不是 `1/60` 这种给人看的字符串。
+    ///   `shutterLabel` 是**吸附后**的显示文本，反向解析回纳秒就是第二份实现
+    ///   （还要处理 `2.5s` / `1/3` / 被 `coerceIn(minNs, maxNs)` 钳过的情况），
+    ///   所以这里把 `IosParamDto.shutterNs` 原样留下来 ——
+    ///   与 Android「照拨」写进 `SENSOR_EXPOSURE_TIME` 的是同一个数。
+    var shutterNs: Int64
+
     /// 快门显示文本，已吸附真实档位（`1/60` / `2.5s`）。
     var shutterLabel: String
 
@@ -65,6 +76,7 @@ struct ParamAdvice: Equatable {
         valid: false,
         sceneLabel: "",
         iso: 0,
+        shutterNs: 0,
         shutterLabel: "",
         kelvin: 0,
         evText: "",
@@ -157,6 +169,10 @@ final class ParamAdvisor: ObservableObject {
             sceneLabel: dto.sceneLabel,
             // Kotlin `Int` → Swift `Int32`，显式转。
             iso: Int(dto.iso),
+            // Kotlin `Long` → Swift `Int64`，同类型，直接传。
+            // ★ 这是「照拨」真拨时写进相机快门的那**一个数**（纳秒），
+            //   不要再从 `shutterLabel` 反解 —— 理由见字段注释。
+            shutterNs: dto.shutterNs,
             shutterLabel: dto.shutterLabel,
             kelvin: Int(dto.kelvin),
             evText: dto.evText,

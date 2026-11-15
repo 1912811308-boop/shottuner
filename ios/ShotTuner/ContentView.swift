@@ -90,6 +90,32 @@ struct ContentView: View {
     ///   iOS 版能打分、能给模式建议，唯独不给「该拨几档」。
     @StateObject private var paramAdvisor = ParamAdvisor()
 
+    /// 「照拨」的**真拨**执行器。
+    ///
+    /// ★ 它是「照拨」开关的唯一状态机：打开 → 把建议值写进相机；
+    ///   建议值变了 → 重新写（值没变不写）；关掉 / 离页 / 进后台 / 换镜头 → 交还自动。
+    ///   为什么单独一个类而不是几个 `@State` 布尔：那几件事必须**同时**发生
+    ///   （清去重键、发 `resumeAutoExposure`、让开关回到关），
+    ///   拆开写迟早会出现「开关关了、相机还锁着」这种无解状态。
+    ///
+    /// ★ 它自己不持有相机（弱引用 + `attach`）：相机是 `@State` 的 `session`，
+    ///   两者生命周期不同（session 从视图创建就有，本类要在起链路时才接得上）。
+    @StateObject private var exposureAssist = ExposureAssist()
+
+    /// 是否正在切换前后摄像头。
+    ///
+    /// ★ 重建 session 配置期间画面会黑几百毫秒（AVFoundation 的固有时延）。
+    ///   这段时间里按钮必须禁用 —— 否则连点两下会排两次 input 重建，
+    ///   第二次开始时第一次还没 commit，`canAddInput` 的判断就失去意义。
+    @State private var isSwitchingCamera = false
+
+    /// 换镜头失败时给用户看的那句话（`nil` = 没有错误）。
+    ///
+    /// ★ 为什么不复用 `captureFlow.lastError`：那条告警的标题是
+    ///   「这张没存进相册」，换镜头失败挂在那底下是纯误导；
+    ///   而且 `lastError` 是 `private(set)`，本视图根本写不进去。
+    @State private var cameraErrorText: String?
+
     /// Vision 场景识别（旁路）。
     ///
     /// ★ `@State` 而不是 `@StateObject`：它不是 `ObservableObject`，不发布任何状态 ——
@@ -198,6 +224,16 @@ struct ContentView: View {
                 //   留着一个 400ms 的定时器在后台空转，既是耗电，
                 //   也会让 `MissionEngine` 在用户看不见的时候继续派任务 / 记超时。
                 mission.stop()
+                // ★ 「照拨」也要交还自动曝光。
+                //
+                //   与上面两条同一个理由：相机锁的是**设备级**状态，它不跟着视图
+                //   生命周期走。用户按了 Home 键、App 进了后台，`onDisappear` **不会**
+                //   被调用（视图还在层级里），如果不在这里复位，相机就会一直停在
+                //   上一次的 ISO / 快门上 —— 回来时画面可能是全黑（比如进后台前
+                //   刚好在室内锁了 ISO 800，回来时人在户外），而界面上写着「照拨」，
+                //   用户完全没办法把它和「进过一次后台」联系起来。
+                //   开关本身也打回关（`turnOff` 里做），这样回来看到的是「没开」。
+                exposureAssist.turnOff()
             default:
                 // ★ 这里刻意用 `default` 而不是 `@unknown default`：
                 //   `@unknown default` 只对**枚举**合法，对结构体是编译错误。
@@ -219,6 +255,19 @@ struct ContentView: View {
         //   直接盯 `status` 才是因果正确的那条线，`scenePhase` 那条退化成保险。
         .onChange(of: cameraPermission.status) { status in
             if status.allowsCapture { startIfAllowed() }
+        }
+        // ★ 「照拨」开着时，建议值一变就跟着拨。
+        //
+        //   为什么挂在 `.onChange(of:)` 而不是让 `ParamAdvisor` 反过来调相机：
+        //     · `ParamAdvisor` 的职责是「算出该拨多少」，它不该知道相机的存在
+        //       （那样它就不能在功能页里只算不拨，也没法单独测）；
+        //     · 这一层是**唯一的接线点**（见文件头），跨模块的动作都该发生在这里。
+        //
+        //   去重（值没变就不调相机）与在途合并都在 `ExposureAssist` 内部做 ——
+        //   这里刻意保持一句话，因为「什么时候该拨」是接线方的事，
+        //   「怎么拨得省」是执行器的事，混在一起两边都会长草。
+        .onChange(of: paramAdvisor.advice) { advice in
+            exposureAssist.sync(with: advice)
         }
         // ★ 同意状态变了 → 立刻按新状态起链路（与 Android `acceptPrivacy()` 里
         //   那句 `refreshCameraState()` 同序：同意之后用户不该再点第二次）。
@@ -310,6 +359,27 @@ struct ContentView: View {
     private var cameraLayer: some View {
         CameraPreviewLayer(session: session)
             .ignoresSafeArea()
+            // ★ 换镜头失败必须**看得见**。切换是个「点了之后画面黑一下」的动作，
+            //   如果失败了却静默，用户看到的是「黑了一下又回到原来的画面」——
+            //   会以为按钮坏了，然后反复点。失败要明说失败在哪（"没有前置摄像头"
+            //   和"相机被占用"是完全不同的两件事，用户能做的补救也不同）。
+            //
+            // ★ 这条 `.alert` 挂在**预览层**这个节点上，与快门条那条（挂在
+            //   `ShutterBar` 上）是两个不同的节点 —— 同一节点挂两个 `.alert`
+            //   会重演本文件反复警告过的「同时为真时只有一个生效」那个坑。
+            .alert(
+                "没能切换镜头",
+                isPresented: Binding(
+                    get: { cameraErrorText != nil },
+                    // ★ `set` 分支不能省：`.alert` 关闭时会置回 false，
+                    //   不在这里清掉的话，下次进页面它还会自己弹出来一次。
+                    set: { presented in if !presented { cameraErrorText = nil } }
+                )
+            ) {
+                Button("好", role: .cancel) { cameraErrorText = nil }
+            } message: {
+                Text(cameraErrorText ?? "")
+            }
     }
 
     /// 取景覆盖层。
@@ -361,6 +431,22 @@ struct ContentView: View {
             onShutter: capture,
             onReview: { showingReview = true }
         )
+        // ★ 翻转按钮用 `overlay(alignment: .trailing)` 摆在快门条右侧，而不是给
+        //   `ShutterBar` 加一个参数、把它改成三等分：
+        //   ① `ShutterBar` 是 `ZStack`（左缩略图 + 居中快门），右侧**本来就是空的** ——
+        //      这是它当初刻意留的位（用 HStack 三等分会把快门推偏）；
+        //   ② 改它就要动 `PhotoReviewSheet.swift` 里的那个视图，而它现在是
+        //      「布局与回调，不持有状态机」的干净状态，为一个按钮破例不值得。
+        //
+        // ★ 那两行 padding 不是随手加的：
+        //   `ShutterBar` 自己在 body 里给了 `.padding(.top, 10)` 与 `.padding(.horizontal, 20)`，
+        //   overlay 的坐标系是**加完 padding 之后**的整块，所以这里补同样的值，
+        //   翻转按钮才会与快门同心、与左缩略图左右对称。
+        .overlay(alignment: .trailing) {
+            flipButton
+                .padding(.top, 10)
+                .padding(.trailing, 20)
+        }
         .sheet(isPresented: $showingReview) {
             // ★ 用 `if let` 而不是 `?? UIImage()`：
             //   兜底造一张空图会让复盘卡显示一块黑矩形 —— 那是「坏掉」的样子，
@@ -407,6 +493,77 @@ struct ContentView: View {
             Button("好", role: .cancel) { captureFlow.clearError() }
         } message: {
             Text(captureFlow.lastError ?? "")
+        }
+    }
+
+    /// 快门条右侧的「翻转镜头」按钮。
+    ///
+    /// ★ 图标用 `arrow.triangle.2.circlepath.camera`（系统相机 App 的同一套语义），
+    ///   用户不用学。
+    /// ★ 切换期间（`isSwitchingCamera`）：`disabled` + 降透明度。
+    ///   这是本仓的既有口径 —— 不做转圈动画，因为这个动作只有几百毫秒，
+    ///   一个转圈反而让「黑一下马上回来」变成「等一个动画」。
+    ///   但**必须**有明显的禁用感：不然用户会以为按钮没点着而连点。
+    private var flipButton: some View {
+        Button {
+            flipCamera()
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath.camera")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Palette.overlayText)
+                .frame(width: 40, height: 40)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSwitchingCamera || captureFlow.isCapturing)
+        .opacity(isSwitchingCamera ? 0.35 : 1.0)
+        // 取景器上的图标按钮没有文字，读屏必须补一句 —— 否则是「按钮」。
+        .accessibilityLabel(session.isFront ? "切换到后置摄像头" : "切换到前置摄像头")
+    }
+
+    /// 翻转前后摄像头。
+    ///
+    /// ★ 顺序：**先交还自动曝光，再换 input**，用 `turnOff` 的 completion 串起来。
+    ///   曝光模式是**设备级**状态，带着 `.custom` 换到另一颗传感器上，它会以上一颗的
+    ///   ISO / 快门起流（全黑或全白，而且不会自愈 —— 新设备的自动曝光已被我们关掉）。
+    ///   为什么不用「先调 turnOff 再调 toggleCamera」两句话：那两条都是异步入队的，
+    ///   写在一起看起来有序，实际谁先跑取决于队列 —— 这就是「看起来正确」的 bug。
+    private func flipCamera() {
+        guard !isSwitchingCamera, !captureFlow.isCapturing else { return }
+        isSwitchingCamera = true
+        exposureAssist.turnOff { [self] in
+            session.toggleCamera { result in
+                // `toggleCamera` 的回调保证在主线程，但闭包类型上没有 `@MainActor`
+                // 标注 ⇒ 显式跳回来（与 `CaptureFlow` 同一套写法）。
+                Task { @MainActor in
+                    finishCameraSwitch(result)
+                }
+            }
+        }
+    }
+
+    /// 换镜头的结果处理（主线程）。
+    ///
+    /// ★ 成功时必须做的一件事：**按新镜头重取设备档案**。
+    ///   `ParamAdvisor` 的 profile 是起链路时注入的（里面含 ISO / 快门的可用范围），
+    ///   换了传感器之后那份就过期了 —— 不重取的话，「照拨」会给出一组前置摄像头
+    ///   根本执行不了的数（`setExposureModeCustom` 会被系统钳，建议与成片对不上），
+    ///   功能页也会按后摄的档位说「能拍 4K」。
+    ///
+    /// ★ 重取的方式就是再调一次 `startParamAdvisor()`：`ParamAdvisor.start` 是幂等的
+    ///   （表已经在跑就只更新注入的依赖并立刻 tick 一次），不需要先 stop。
+    ///
+    /// - Parameter result: 切换结果。
+    @MainActor
+    private func finishCameraSwitch(_ result: Result<Void, Error>) {
+        isSwitchingCamera = false
+        switch result {
+        case .success:
+            startParamAdvisor()
+        case .failure(let error):
+            // 失败文案只有一个出处（`CameraSession.Failure.userMessage`）。
+            cameraErrorText = (error as? CameraSession.Failure)?.userMessage
+                ?? "切换相机失败，请再试一次。"
         }
     }
 
@@ -582,6 +739,21 @@ struct ContentView: View {
         // ★ 材质会自适应明暗，亮背景（天空/白墙）上它会变成白色，
         //   白字直接消失。把局部配色锁成深色，材质恒定渲成深色底。
         .environment(\.colorScheme, .dark)
+        // ★ 「照拨」失败要看得见：相机没锁上、开关却亮着，是这个功能最坏的形态
+        //   （用户以为自己在照拨，其实相机在自动）。`ExposureAssist` 在失败时会把
+        //   开关打回关，这条告警负责解释「为什么它自己关了」。
+        //   挂在**参考分面板**这个节点上，与快门条那条告警互不影响。
+        .alert(
+            "照拨没成功",
+            isPresented: Binding(
+                get: { exposureAssist.lastError != nil },
+                set: { presented in if !presented { exposureAssist.clearError() } }
+            )
+        ) {
+            Button("好", role: .cancel) { exposureAssist.clearError() }
+        } message: {
+            Text(exposureAssist.lastError ?? "")
+        }
     }
 
     /// 一行「照拨」：`ISO 400 · 1/60 · 5200K · EV +1.3`。
@@ -597,12 +769,7 @@ struct ContentView: View {
     ///   想看细节的走功能页（那里有完整理由）。
     private var paramRow: some View {
         HStack(spacing: 8) {
-            Text("照拨")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Palette.overlayTextSecondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Palette.overlayText.opacity(0.10), in: Capsule())
+            exposureAssistToggle
 
             Text(paramAdvisor.advice.summary)
                 // 等宽：数值每 500ms 可能变一次，非等宽会让整行左右抽动。
@@ -614,6 +781,73 @@ struct ContentView: View {
                 .minimumScaleFactor(0.75)
 
             Spacer(minLength: 0)
+        }
+    }
+
+    /// 行首那枚「照拨」胶囊 —— 它同时是**真拨开关**。
+    ///
+    /// ★ 为什么把原来的静态标签改成按钮，而不是在右边再加一个开关：
+    ///   ① 这枚胶囊原本写的就是「照拨」两个字，语义与开关**完全一致**，
+    ///      右边再加一个「照拨」等于同一行里两处同名、一处是标签一处是开关；
+    ///   ② 右侧那一行已经被 `summary` 占满，小屏（SE）再加 50pt 的开关，
+    ///      `summary` 会被压到截断 —— 而 EV 是最该看见的一项（见上面的注释）。
+    ///
+    /// ★ 状态怎么让人看出来：关 → 灰底灰字 + `circle.dotted`；
+    ///   开 → 主色实底 + 黑字 + `checkmark.circle.fill`。
+    ///   两处同时变（底色 + 图标）而不是只变颜色，是因为取景器背景可能是天空白，
+    ///   只靠颜色区分在强光下不可靠。
+    @ViewBuilder
+    private var exposureAssistToggle: some View {
+        if paramAdvisor.advice.valid {
+            Button {
+                toggleExposureAssist()
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: exposureAssist.isOn ? "checkmark.circle.fill" : "circle.dotted")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("照拨")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(exposureAssist.isOn ? Color.black : Palette.overlayTextSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    exposureAssist.isOn
+                        ? Palette.accent
+                        : Palette.overlayText.opacity(0.10),
+                    in: Capsule()
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                exposureAssist.isOn ? "关闭自动照拨，相机回到自动曝光" : "打开自动照拨，把建议的 ISO 和快门写进相机"
+            )
+        } else {
+            // 没有读数时保持原来那个纯标签的样子：这块整块都会被隐藏，
+            // 留着它只是为了 `paramRow` 的布局在 valid 切换那一瞬间不跳。
+            Text("照拨")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.overlayTextSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Palette.overlayText.opacity(0.10), in: Capsule())
+        }
+    }
+
+    /// 切换「照拨」。
+    ///
+    /// ★ 三件事必须按这个顺序：先问引擎开没开成、再关、最后才动状态 —— 因为
+    ///   `turnOn` 在「没有可用建议」时会返回 false（那时不该把开关点亮）。
+    private func toggleExposureAssist() {
+        if exposureAssist.isOn {
+            exposureAssist.turnOff()
+        } else {
+            // ★ 打开时顺便把设备档案刷新一次：用户很可能刚换过镜头或刚进页面，
+            //   而「照拨」用的是 profile 里的 ISO / 快门上限。
+            //   `startParamAdvisor` 是幂等的（在跑就只更新依赖），这里只是让
+            //   开关按下这一刻的 caps 一定是当前 format 的。
+            startParamAdvisor()
+            exposureAssist.turnOn(with: paramAdvisor.advice)
         }
     }
 
@@ -819,6 +1053,13 @@ struct ContentView: View {
         cameraPermission.refresh()
         guard cameraPermission.status.allowsCapture else { return }
 
+        // ★ 「照拨」执行器先拿到相机。
+        //   放在 `pipelineStarted` 闸门**之前**是刻意的：它是个纯赋值（弱引用），
+        //   重复调用无副作用，而放在闸门之后就有「第二次进来忘了注入」的风险 ——
+        //   那时用户在取景页点开关会静默无效（`turnOn` 里 `session == nil` 直接返回
+        //   false），开关不亮也不报错。这类「只在重启链路后失效」的 bug 最难查。
+        exposureAssist.attach(session)
+
         // 已经起过就只补传感器与任务定时器，绝不重入相机链路。
         //
         // ★ 这里要判各自的「已在跑」标志，不能无条件重起：
@@ -871,9 +1112,10 @@ struct ContentView: View {
 
     /// 起「照拨」建议的 500ms 驱动。
     ///
-    /// ★ 为什么 `profile` 在这里取一次就够：本 App 只用后置主摄，
-    ///   换镜头（超广/长焦）不在本期范围。`currentDeviceProfile()` 要读设备能力，
-    ///   每 500ms 调一次是白烧 CPU。
+    /// ★ 为什么 `profile` 在这里取一次就够：本期不做「后摄内部换镜头」（超广/长焦），
+    ///   唯一会换传感器的是**前后摄切换** —— 而那条路径在成功回调里会再调一次本方法
+    ///   （见 `finishCameraSwitch`），所以「换过了」这件事一定会重新取一次档案。
+    ///   除此之外 500ms 调一次 `currentDeviceProfile()`（要读设备能力）是白烧 CPU。
     ///
     /// ★ 为什么把 `sceneName` 做成闭包而不是传值：场景每帧都可能变，
     ///   传值就只能拿到「启动那一刻」的场景，功能页的「该开夜景/HDR」会永远按
@@ -940,6 +1182,11 @@ struct ContentView: View {
         motion.stop()
         mission.stop()
         paramAdvisor.stop()
+        // ★ 「照拨」必须在 `session.stop()` **之前**复位，而且必须真的复位。
+        //   曝光模式是设备级状态，`stopRunning()` 不会把它改回自动 ——
+        //   下次进页面（甚至下次冷启动）相机会停在手动档，取景一片死黑，
+        //   而界面上没有任何东西能解释。这是「离开页面必须复位」那条要求的实现点。
+        exposureAssist.turnOff()
         // ★ 旁路槽必须显式摘掉：`CameraSession` 是 `@State` 持有的长命对象，
         //   不清就会在页面已经关掉之后还往 `SceneDriver` 里喂帧 ——
         //   `SceneDriver.isRunning` 会挡住处理，但每帧仍要过一次跨队列转交，纯浪费。
