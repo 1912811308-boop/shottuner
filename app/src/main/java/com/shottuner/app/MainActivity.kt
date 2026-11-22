@@ -60,6 +60,7 @@ import com.shottuner.app.analysis.ScoreDimension
 import com.shottuner.app.analysis.ScoreResult
 import com.shottuner.app.camera.CameraEngine
 import com.shottuner.app.camera.LensSignals
+import com.shottuner.app.camera.ManualWriteGate
 import com.shottuner.app.coach.FaceInfo
 import com.shottuner.app.coach.FramingCoach
 import com.shottuner.app.coach.SubjectBox
@@ -124,7 +125,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
@@ -1233,6 +1233,21 @@ class MainActivity : AppCompatActivity() {
             onError = { failure -> runOnUiThread { showCameraError(failure) } }
         )
         engine = eng
+        // 新引擎的 `manual` 一定是 null（回到自动曝光），但 `autoMode` 是**用户的意图**、
+        // 跨引擎保留（见 [onCameraReady]）。两者对不上时，界面上就会写「停止本机写入」
+        // 而相机在自动 —— 与本类刚修的那个 bug 是同一种错位，只是入口换成了"重建引擎"
+        // （相机出错重试 [retryCamera]、重新授权都会走到这里）。
+        //
+        // 解法不是在这里再 applyManual 一次：那时 provider 还没就绪，`bind` 必然失败；
+        // 而且会多一次无谓的 unbind。这里只把「上次写进去的值」清零 ——
+        // [ManualWriteGate] 把 0 当作"还没写过"，于是**下一帧必定写**，
+        // 收敛循环自己会把当前推荐值重新落回相机，一次 bind 都不多。
+        if (autoMode) {
+            appliedIso = 0
+            appliedShutterNs = 0L
+            lastApplyAt = 0L
+            Diag.d(TAG, "重建引擎：autoMode 保留为 true，已把上次写入值清零，下一帧重新收敛")
+        }
         eng.start()
     }
 
@@ -1243,8 +1258,27 @@ class MainActivity : AppCompatActivity() {
         // 放在收错误条之后：错误条只影响 UI，池子每次都要同步。
         syncPushPool()
         renderDeviceInfo()
-        // 默认教练模式：只给数，不抢相机。用户拿原生相机拍，这里负责测光和教构图。
-        autoMode = false
+        // ★ 这里**不许**复位 `autoMode`（1.3.3 修复：写完一次就自我关闭）。
+        //
+        // bind 成功不等于「用户想回到自动」—— 我们自己写参数也会触发 bind：
+        // `applyManual()` 内部就是 unbind + 重新 bind，收敛循环每 1.2s 一次以上。
+        // 若在 bind 之后复位，用户点开「本机写入」会看到：写进去一次 → bind 成功 →
+        // 复位成自动 → 收敛循环（`if (autoMode && !locked)`）停摆、按钮文案回落成
+        // 「本机写入（可选）」，而相机其实还锁在手动值上。那就是「界面说自动、
+        // 相机在手动」—— 比不写入更糟，因为用户会照着不生效的读数判断画面。
+        //
+        // 结论：`autoMode` 是**用户的意图**，不是 bind 的产物。它只允许在这两处复位，
+        // 都是"意图真的变了"：
+        //   · `resetManualUiState()` —— 翻转镜头（`ToggleResult.manualReset`）：
+        //     ISO / 快门是镜头级能力，参数搬不过去；
+        //   · `toggleMode()` —— 用户自己点「停止本机写入」。
+        // 冷启动不受影响：字段默认值就是 false（教练模式：只给数，不抢相机）。
+        // 这一段只做**渲染**，不改任何状态。
+        Diag.d(
+            TAG,
+            "bind 完成：autoMode 保留为 $autoMode（locked=$locked，" +
+                "引擎手动=${engine?.isManual() == true}），不复位 —— bind 不代表用户想回自动"
+        )
         updateModeUi()
         renderFeatures()
     }
@@ -2052,7 +2086,13 @@ class MainActivity : AppCompatActivity() {
             renderSkills()
         }
 
-        if (autoMode && !locked) {
+        // 锁定 = 参数写死了，不再逐帧收敛。但「不知道相机现在是什么」时必须补写一次
+        // （`appliedIso == 0`）：重建引擎（相机出错重试）会把上次写入值清零，而这时
+        // 收敛循环是被 `locked` 挡住的话，界面会一直写着「解除锁定 / 停止本机写入」，
+        // 相机却在自动曝光 —— 与本类刚修的那个 bug 是同一种错位。
+        // 写一次之后 `appliedIso` 就非 0，条件立刻收回，不会变成每帧重绑。
+        val appliedUnknown = appliedIso == 0 || appliedShutterNs == 0L
+        if (autoMode && (!locked || appliedUnknown)) {
             maybeApply(display)
         }
     }
@@ -3343,26 +3383,31 @@ class MainActivity : AppCompatActivity() {
     /**
      * 自动写入节流：参数变化幅度达到阈值才重建 UseCase，
      * 避免频繁重绑导致的画面闪烁与对焦抖动。
+     *
+     * 判据本身在 [ManualWriteGate]（纯算术，有单测）—— 这里只负责副作用：
+     * 记住这次写了什么，然后交给引擎。注意它**不改** `autoMode`：
+     * 写参数是用户意图的**执行**，不是对意图的重新决定。
      */
     private fun maybeApply(rec: Recommendation) {
         val eng = engine ?: return
         if (!caps.supportsManualSensor) return
 
         val now = SystemClock.elapsedRealtime()
-        if (now - lastApplyAt < 1200) return
-
-        val isoThreshold = max(10, (appliedIso * 0.15f).roundToInt())
-        val shutterThreshold = max(2_000_000L, (appliedShutterNs * 0.2).toLong())
-
-        val isoFar = appliedIso == 0 || abs(rec.iso - appliedIso) > isoThreshold
-        val shutterFar = appliedShutterNs == 0L || abs(rec.shutterNs - appliedShutterNs) > shutterThreshold
-
-        if (isoFar || shutterFar) {
-            appliedIso = rec.iso
-            appliedShutterNs = rec.shutterNs
-            lastApplyAt = now
-            eng.applyManual(ManualParams(rec.iso, rec.shutterNs))
+        if (!ManualWriteGate.shouldWrite(
+                nowMs = now,
+                lastApplyAtMs = lastApplyAt,
+                appliedIso = appliedIso,
+                appliedShutterNs = appliedShutterNs,
+                targetIso = rec.iso,
+                targetShutterNs = rec.shutterNs
+            )
+        ) {
+            return
         }
+        appliedIso = rec.iso
+        appliedShutterNs = rec.shutterNs
+        lastApplyAt = now
+        eng.applyManual(ManualParams(rec.iso, rec.shutterNs))
     }
 
     private fun toggleMode() {
