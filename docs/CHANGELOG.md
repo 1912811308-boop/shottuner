@@ -8,6 +8,65 @@
 > ★ 但内部 `versionCode` **仍然单调递增**（Android 的 33、iOS 的 1，两端独立）：
 > 系统靠 versionCode 判断能不能覆盖安装，**回退会导致装不上**。它与用户看到的版本号是两回事。
 
+## 1.3.3 (versionCode 42 / iOS build 10) - 2026-11-22 - 「两个『界面说一套、相机做另一套』」
+
+这一版没有新功能，修的是同一类病：**界面上写的状态，和相机的实际状态不一致。**
+
+### Android：本机写入写一次就自我关闭
+
+调用链是干净的：
+
+```
+点开「本机写入」→ autoMode = true → 写一次参数
+  → applyManual() 内部 bind()          （CameraEngine.kt:244）
+  → onCameraReady() 里 autoMode = false  （MainActivity.kt:1247）
+  → 收敛循环停摆、按钮文案回落「本机写入（可选）」
+```
+
+结果：**写完一次参数，开关自己关了，而相机还锁在手动值上。**
+用户会照着不生效的读数判断画面 —— 比不写入更糟。
+
+根因是一句话：`autoMode` 是**用户的意图**，不是 bind 的产物。修法是把它从 `onCameraReady` 里删掉，
+只在「意图真的变了」两处复位：镜头切换（`resetManualUiState`）与用户主动关（`toggleMode`）。
+冷启动不受影响 —— 字段默认值就是 false。
+
+**顺手补了两个同源漏洞**（不补就是修一半）：
+
+1. **相机出错重试**会造新 `CameraEngine`，新引擎必然回到自动曝光，而 `autoMode` 保留 ⇒
+   界面写「停止本机写入」而相机在自动，且收敛循环因为 `applied*` 跨引擎保留而**救不回来**（一直挂着）。
+   解法不是补一次 `applyManual`（那时 provider 还没就绪，bind 必失败），而是把 `applied*` 清零 ——
+   `ManualWriteGate` 把 0 当「不知道相机现在是什么」，下一帧必写。
+2. **锁定 + 重建引擎**时同样对不上（`locked` 挡住了补写）⇒ 改成 `(!locked || appliedUnknown)`，
+   只补写一次，写完条件立刻收回。
+
+顺带把 `maybeApply` 的节流判据抽成纯算术 `ManualWriteGate`（11 条用例）。
+抽取的理由不是「为了有测试」，而是补丁 1 依赖一条不变量：**`applied == 0 ⟹ 下一帧必写`**。
+这条被人改掉，重试后的自愈会**静默失效**（不报错、只是界面和相机慢慢对不上），所以必须钉死。
+
+### iOS：照拨接上阻尼
+
+`IosParamBridge.recommend` 里 `current = null` 是 1.3.0 之前的事实（当时 iOS 确实不写相机）。
+1.3.0 加了照拨真拨之后，这段就成了隐患：阻尼恒 1.0 ⇒ 调上去画面变亮 → 下一拍说该压 →
+调下来又说该提，**可能每 500ms 来回振荡**。
+
+现在传真实已应用值：锚点从「场景预设」变成「当前参数」，阻尼 0.7，几何收敛。
+
+★ 不开照拨的人行为**零变化**：`ExposureAssist.appliedExposure` 先判 `isOn`，关着恒返回 nil，
+ContentView 折成 `(0,0)`，Kotlin 侧 `>0 才算有当前值` ⇒ 走与改动前逐字一致的冷启动分支。
+
+### 仍然缺什么
+
+1. **同族还有 4 处**（已记录，本轮未修，都不影响「写入能用」）：
+   - `toggleMode()` 开写入时用 `lastRecommendation` 而非 `lockedRec` ⇒ 锁定态下「关→再开」后，面板显示锁定组合、相机里是另一组
+   - `retryCamera()` 会顺手把镜头丢掉（新引擎 `isFront` 默认 false）⇒ 前置出错重试会被丢回后摄，UI 不说
+   - `bind()` 两级降级成「仅预览」时 `autoMode`/`locked` 都不动 ⇒ 界面写「在本机写入/已锁定」而连拍照都没有
+   - `restoreAuto()` 先 `applyManual(null)` 再复位字段，功能对但日志会误导排查的人
+2. **门禁盲区**：`check-swift-contract-args.sh` 只核 struct 契约，**不覆盖 Kotlin 门面的方法签名**。
+   所以「Kotlin 加了参数、Swift 调用点没跟上」这类错误在本机流水线上零告警通过 ——
+   1.3.3 的 iOS 改动只能靠人肉对齐四个标签。
+3. T22 真机标定仍未做；iOS 真机仍 0 次。
+
+
 ## 1.3.2 (versionCode 41 / iOS build 9) - 2026-11-15 - 「悬浮窗横屏跟随」
 
 clover 真机复现：小米 14 Pro 上用系统相机**横屏**拍，系统相机界面转了、自动旋转也开着，

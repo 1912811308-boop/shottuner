@@ -26,9 +26,10 @@ android {
         // 1.2.0=38（Android 成长页 / iOS 隐私门 + 图鉴进度 / 二进制扫描门禁），
         // 1.3.0=39（两端前置摄像头 + iOS 照拨真拨 + APK 产物扫描），
         // 1.3.1=40（主屏改说人话：先给动作，数字退到括号里），
-        // 1.3.2=41（悬浮窗横屏跟随：display 没转就用加速度计补）。
-        versionCode = 41
-        versionName = "1.3.2"
+        // 1.3.2=41（悬浮窗横屏跟随：display 没转就用加速度计补），
+        // 1.3.3=42（本机写入不再自我关闭 + iOS 照拨阻尼）。
+        versionCode = 42
+        versionName = "1.3.3"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
