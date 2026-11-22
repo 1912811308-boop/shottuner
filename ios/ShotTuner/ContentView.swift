@@ -1122,6 +1122,35 @@ struct ContentView: View {
     ///   第一帧算。闭包每次取样时现读 `ScoreCoordinator` 的 `@Published`，
     ///   保证建议与评分用的是**同一个场景**。
     private func startParamAdvisor() {
+        // ★ 闭环接线：把「相机此刻真被锁在哪」交给参数引擎。
+        //   没有这一行，`ParamAdvisor` 只能传 0/0 ⇒ Kotlin 侧 `current = null` ⇒
+        //   `ParamRecommender` 走冷启动（锚点取场景预设、阻尼 1.0，每拍给绝对值）。
+        //   而「照拨」开着时绝对值是**正反馈**：提亮 → 下一拍说过亮该压 → 压暗 →
+        //   下下拍又说该提，每 500ms 反向修正一次 —— 用户看到的是画面来回抖。
+        //   接上之后引擎走闭环（锚点 = 当前参数、阻尼 0.7）⇒ 几何收敛，稳定后不再变。
+        //
+        // ★ 为什么在**这里**赋值而不是在 `body` 里：与 `sceneNameProvider` 同一个理由 ——
+        //   `startParamAdvisor()` 是唯一的「起这条 500ms 链」入口（首次启动与
+        //   前后摄切换后各调一次），接在它里面就不可能出现「链在跑、provider 是 nil」。
+        //   `ParamAdvisor.start` 自身幂等，重复进入也只是把同一个闭包再赋一次。
+        //
+        // ★ `[exposureAssist]` 捕获列表：闭包被 `paramAdvisor` 长期持有，隐式捕获
+        //   会把整个 View 结构体（连同它所有的 `@State` / `@StateObject` 包装器）
+        //   一起留住。`ExposureAssist` 是 class，捕获它拿到的就是那**一个**对象 ——
+        //   既不拷贝状态，也不会成环（`ExposureAssist` 完全不认识 `ParamAdvisor`）。
+        //
+        // ★ 关掉「照拨」时这里会自动回到 0/0：`appliedExposure` 内部判 `isOn`
+        //   （见 `ExposureAssist` 那个属性的注释），所以「没开照拨」的用户
+        //   走的仍是 `current = null` 的老路径，行为与本改动之前逐字一致。
+        paramAdvisor.appliedProvider = { [exposureAssist] in
+            // 分开写而不是 `?? (iso: 0, shutterNs: 0)`：这里两个分支的语义不同
+            //（「没有已应用的曝光」vs「没人接线」），而且带标签元组的字面量在
+            // `??` 右侧要靠上下文推 Int32/Int64，写成显式分支就不留推断空间。
+            guard let applied = exposureAssist.appliedExposure else {
+                return (iso: Int32(0), shutterNs: Int64(0))
+            }
+            return applied
+        }
         paramAdvisor.start(
             profile: session.currentDeviceProfile(),
             sceneNameProvider: { [coordinator] in coordinator.sceneName }

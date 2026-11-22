@@ -113,6 +113,27 @@ final class ParamAdvisor: ObservableObject {
     ///   在 `ScoreCoordinator` 的 `@Published` 里，本类再存一份就成了第二个来源。
     private var sceneNameProvider: (@MainActor () -> String)?
 
+    /// 「相机此刻真被锁在」的曝光值。由接线方注入（接 `ExposureAssist`）。
+    ///
+    /// ★ 为什么要这个：`IosParamBridge.recommend` 现在接受 `currentIso` /
+    ///   `currentShutterNs`，有真实值才能走 `ParamRecommender` 的**闭环**路径
+    ///   （锚点 = 当前参数、阻尼 0.7，每拍只走七成偏差）。没有它就只能传 0/0，
+    ///   引擎退回冷启动（锚点 = 场景预设、阻尼 1.0，每拍给绝对值）——
+    ///   而「照拨」开着时绝对值是**正反馈**：提亮 → 下一拍说过亮该压 → 压暗 →
+    ///   下下拍又说该提，每 500ms 反向修正一次，肉眼看到的就是画面来回抖。
+    ///
+    /// ★ 为什么是 `var` 而不是并进 `start(...)` 的形参：
+    ///   它是**可变**依赖（关掉照拨之后就必须开始返回 0/0），而 `start` 只在起链路时
+    ///   调一次（`ContentView.startParamAdvisor` 是个幂等闸门）。做成 `start` 的形参，
+    ///   就会出现「第一次启动时照拨是关的 → provider 记下的答案永远是 0/0」。
+    ///   闭包每次 tick 现问一次，答案就永远跟着 `ExposureAssist` 的当前状态走。
+    ///
+    /// ★ 返回 `(0, 0)` 而不是 `nil`：`nil` 表达的是「没人接线」，而 0/0 表达的是
+    ///   「现在没有已应用的曝光」—— 后者是**正常状态**（绝大多数用户根本不开照拨）。
+    ///   两者对 Kotlin 门面是同一个结果（任一 ≤ 0 ⇒ `current = null` ⇒ 老路径），
+    ///   但在这里分开写，是为了让 `tick()` 里不必再判一次可选链。
+    var appliedProvider: (@MainActor () -> (iso: Int32, shutterNs: Int64))?
+
     private var timer: Timer?
 
     /// 是否正在跑（幂等闸门，见 `start`）。
@@ -160,9 +181,21 @@ final class ParamAdvisor: ObservableObject {
     /// 一次取样。
     private func tick() {
         guard let profile, let sceneNameProvider else { return }
+        // ★ 每拍现问一次「相机现在被锁在哪」，不要缓存：
+        //   开关可能刚被关掉（那时必须立刻退回 0/0 走冷启动），也可能刚下发了一组新值
+        //   （那时必须用新值当锚点）。缓存一份就成了第二个真相源，与 `ExposureAssist`
+        //   的 `applied` 迟早对不上 —— 而那个不一致的表现是「建议值卡住不动」。
+        // 没接 provider / provider 说没有已应用值 ⇒ (0, 0) ⇒ Kotlin 侧 `current = null`
+        // ⇒ 与引入这两个参数之前**逐字一致**的冷启动行为。
+        let applied: (iso: Int32, shutterNs: Int64) =
+            appliedProvider?() ?? (iso: 0, shutterNs: 0)
         let dto = IosParamBridge.shared.recommend(
             profile: profile,
-            sceneName: sceneNameProvider()
+            sceneName: sceneNameProvider(),
+            // Kotlin `Int` → Swift `Int32`，`Long` → `Int64`：闭包已经按这两个宽度
+            // 交付，这里直接传，不做二次转换（转两次最容易把 `Int`/`Int64` 混掉）。
+            currentIso: applied.iso,
+            currentShutterNs: applied.shutterNs
         )
         let mapped = ParamAdvice(
             valid: dto.valid,

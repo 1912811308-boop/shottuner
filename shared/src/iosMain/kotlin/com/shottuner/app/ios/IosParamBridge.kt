@@ -25,6 +25,7 @@
 package com.shottuner.app.ios
 
 import com.shottuner.app.device.DeviceProfile
+import com.shottuner.app.model.ManualParams
 import com.shottuner.app.model.Recommendation
 import com.shottuner.app.recommend.ParamRecommender
 import com.shottuner.app.text.NumFmt
@@ -80,7 +81,14 @@ class IosParamDto(
  * 「照拨」参数建议在 Swift 侧的门面。
  *
  * Kotlin 的 `object` 在 Swift 里是类属性单例 → 调用形态
- * `IosParamBridge.shared.recommend(profile:sceneName:)`，不是 `IosParamBridge()`。
+ * `IosParamBridge.shared.recommend(profile:sceneName:currentIso:currentShutterNs:)`，
+ * 不是 `IosParamBridge()`。
+ *
+ * ★ **Kotlin 的默认参数不会导出到 ObjC/Swift**：`ManualParams?` / `Float` 这类
+ *   带默认值的形参在 Swift 侧一律是必填（Kotlin/Native 只导出完整签名的那一个
+ *   重载）。所以这里**不用**默认值，而是把「有没有当前值」编码成一个显式约定
+ *   （两个都 > 0 才算有，见 `recommend`），让调用点是必填的、也就不会有一端漏改
+ *   却还能编译过去的情况。
  */
 object IosParamBridge {
 
@@ -93,8 +101,18 @@ object IosParamBridge {
      * @param sceneName `SceneType` 的枚举名。未知 / 空串一律落 `GENERAL`，
      *   与 `IosBridge.analyzeFrame` 同一个解析函数（`sceneFromName`），
      *   不允许出现第二套解析口径 —— 否则同一帧会出现「建议按夜景算、评分按通用算」。
+     * @param currentIso 相机**此刻真被锁在**的感光度。0 / 负数 = 「没有当前值」
+     *   （照拨关着，相机在自动档），此时走冷启动路径，行为与引入本参数之前完全一致。
+     * @param currentShutterNs 相机此刻真被锁在的曝光时间（纳秒）。0 / 负数 = 同上。
+     *   ★ 两个参数必须**同时**有效才算「有当前值」：只锁了一半的相机不存在，
+     *   而拿一个 0 当锚点会把建议值直接推到上下限（见下面的注释）。
      */
-    fun recommend(profile: DeviceProfile, sceneName: String): IosParamDto {
+    fun recommend(
+        profile: DeviceProfile,
+        sceneName: String,
+        currentIso: Int,
+        currentShutterNs: Long
+    ): IosParamDto {
         // ★ 统计量的唯一来源。Swift 一个数都不传，也就没有「填 0 顶替」的机会。
         //   为 null 说明还没算过任何一帧 —— 这是合法的冷启动状态，不是错误。
         val stats = IosFrameCache.latest
@@ -102,15 +120,42 @@ object IosParamBridge {
 
         val scene = sceneFromName(sceneName)
 
-        // `current = null`：iOS 侧没有「已应用的手动参数」这个概念
-        //（相机在自动档，我们只是建议），所以阻尼系数取 1.0（全量给出建议值）。
-        // 若将来接了手动曝光并回读相机当前值，这里要传真实的 ManualParams，
-        // 否则会把「已经调到位了」当成「差得很远」，来回给相反的建议。
+        // ★ 这里为什么可以传「真实的当前值」了（1.3.0 之后的事实变了）：
+        //   1.3.0 加了 `ExposureAssist` —— 「照拨」开关打开时会真的调
+        //   `CameraSession.setManualExposure` 把 ISO / 快门写进相机，
+        //   所以 iOS 侧**已经**有了「已应用的手动参数」这个概念。
+        //   原来这里写死 `current = null` 的那个理由（相机一直在自动档）不再成立。
+        //
+        // ★ 传真实值为什么是「收敛」而不是「振荡」：
+        //   `ParamRecommender.recommend` 两条路径的区别就是**锚点**与**阻尼**：
+        //     · `current == null`（冷启动）：锚点 = 场景预设，阻尼 1.0 ⇒ 每拍都给绝对值；
+        //     · `current != null`（闭环）：锚点 = 锚在**相机现在的 ISO/快门**上，阻尼 0.7
+        //       ⇒ 目标是 `当前值 × 2^(0.7·偏差)`，即「在现有基础上再走七成」。
+        //   而照拨开着时，画面亮度正是这组参数造成的结果，于是形成闭环：
+        //     用绝对值（旧行为）：tick1「画面暗，提 2 档」→ 相机提亮 → tick2 一看过亮
+        //       「压 2 档」→ 相机压暗 → tick3 又「提 2 档」…每 500ms 一次全量反向修正，
+        //       这就是那条会让人眼晕的来回振荡。
+        //     用真实值（本行为）：tick_n 的偏差随画面接近目标而**单调变小**，
+        //       且 0.7 < 1 保证每步都不过冲 ⇒ 呈几何收敛，稳定后建议值不再变，
+        //       `ExposureAssist` 的去重键也就跟着不再下发（一个相机 API 都不调）。
+        //
+        // ★ 判据是「两个都 > 0」，不是「!= 0」：
+        //   0 / 负数不是合法曝光参数（`ManualParams.exposure` 会算成 0），
+        //   拿它当锚点会让 `totalExposure` 归零、建议值被钳到上下限 ——
+        //   比冷启动还离谱。所以任一无效就退回 `null`，走和以前**逐字一致**的老路径：
+        //   不开照拨的人（绝大多数）看到的行为一个像素都不变。
+        val current: ManualParams? =
+            if (currentIso > 0 && currentShutterNs > 0L) {
+                ManualParams(currentIso, currentShutterNs)
+            } else {
+                null
+            }
+
         val rec = ParamRecommender.recommend(
             stats = stats,
             scene = scene,
             caps = profile.caps,
-            current = null
+            current = current
         )
 
         return IosParamDto(

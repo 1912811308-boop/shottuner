@@ -20,14 +20,18 @@
 //   所以每个回调都显式 `Task { @MainActor in ... }` 跳回来 ——
 //   与 `CaptureFlow` 里那条「闭包类型上没有 `@MainActor` ⇒ 显式跳回」的口径一致。
 //
-// ★ 与 Android 的差距（**已知**，改不了，属于 shared 侧的事）：
-//   `IosParamBridge.recommend` 里 `current = null` 写死，即 iOS 走的是
+// ★ 与 Android 的差距（**已补齐**，此处留档免得再被写回去）：
+//   1.3.0 时 `IosParamBridge.recommend` 里 `current = null` 是写死的 —— 即 iOS 走的是
 //   参数引擎的「冷启动」路径（锚点取场景预设、阻尼 1.0，每次给**绝对值**），
 //   而不是 Android 那种「把上次写入的真实参数递回去」的闭环路径。
-//   后果：建议值是绝对目标值，「照拨」下发之后画面会向目标收敛，收敛稳定后
-//   建议值不再变 ⇒ 不抖；但若模型与实际传感器响应差得多，理论上可能出现
-//   半秒一次的来回找（每 tick 都是全量修正）。本期不动 shared（边界约束），
-//   这里只做两件事抑制它：**值没变就不下发** + **在途只保留最新一条**。
+//   「照拨」变成真拨之后这条就成了隐患：绝对建议值是正反馈 ——
+//   调上去 → 画面变亮 → 下一拍说「太亮该压」→ 调下来 → 又说「该提」，
+//   每 500ms 反向修正一次，肉眼看到的就是来回抖。
+//   现在门面多了 `currentIso` / `currentShutterNs`，本类通过 `appliedExposure`
+//   把「已下发的那组值」只读地交出去（见那个属性的注释），闭环接上之后
+//   建议值呈几何收敛，稳定后连去重键都不再变。
+//   ★ 下面两条抑制手段**保留**（闭环之外还需要的安全带）：
+//   **值没变就不下发** + **在途只保留最新一条**。
 
 import Combine
 import Foundation
@@ -79,6 +83,36 @@ final class ExposureAssist: ObservableObject {
 
     /// 已经下发成功（或正在下发）的那组值。
     private var applied: Applied?
+
+    /// 相机此刻**真被锁在**的那组曝光值；`nil` = 没有手动曝光（自动档）。
+    ///
+    /// ★ 这是给 `ParamAdvisor` 的**只读**出口：参数引擎要走闭环（阻尼 0.7）就必须知道
+    ///   「上一拍我到底把相机拨到了多少」，否则它只能当相机在自动档，每拍都给绝对值 —
+    ///   而「照拨」开着时绝对值就是正反馈：提亮 → 下一拍说过亮该压 → 压暗 → 又说该提，
+    ///   每 500ms 反向修正一次，肉眼看到的就是来回抖。
+    ///
+    /// ★ 为什么是**计算属性**而不是把 `applied` 改成 `internal var`：
+    ///   状态必须归本类独占。开一个可写口子，别处就能在 `isOn == false` 时把 `applied`
+    ///   写成非 nil、或跳过 `resumeAutoExposure` 直接改去重键 —— 那时开关与相机就脱钩了，
+    ///   而界面上没有任何东西能解释「开关关着、画面还是死的」。
+    ///
+    /// ★ 为什么 `isOn` 也参与判据：关开关时 `applied` 已经清空（见 `turnOff`），
+    ///   这里再判一次是**兜底**——`finished` 的失败路径、`pendingReset` 这些异步窗口里
+    ///   可能出现「`isOn` 已置 false 但 `applied` 还没走到赋值点」的瞬间。
+    ///   对本属性来说，只要开关不在「开」，答案就必须是 nil：调用方据此退回冷启动路径，
+    ///   而那正是「没开照拨的人行为不变」的实现点。
+    ///
+    /// ★ 语义边界：`applied` 是**已下发**的值，不保证 `setManualExposure` 的异步回调
+    ///   已经成功回来（在飞的那几百微秒里它就已经被置上了）。这对阻尼是合适的：
+    ///   反馈控制要的是「我请求了哪个值」，而不是「传感器确认了哪个值」；真失败时
+    ///   `finished` 会把 `applied` 清空并把开关打回关，下一拍自然回到冷启动。
+    var appliedExposure: (iso: Int32, shutterNs: Int64)? {
+        // `= self.applied` 写成显式：这个属性名与局部绑定名同名，
+        // 明写一遍就不用读者去分辨「这行绑的是成员还是刚绑的局部」。
+        guard isOn, let applied = self.applied else { return nil }
+        // `Applied.iso` 是 Swift `Int`，而 Kotlin 门面要的是 `Int32`/`Int64`。
+        return (iso: Int32(applied.iso), shutterNs: applied.shutterNs)
+    }
 
     /// 是否有一条 `setManualExposure` 在飞。
     ///
