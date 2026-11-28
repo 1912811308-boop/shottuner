@@ -8,6 +8,66 @@
 > ★ 但内部 `versionCode` **仍然单调递增**（Android 的 33、iOS 的 1，两端独立）：
 > 系统靠 versionCode 判断能不能覆盖安装，**回退会导致装不上**。它与用户看到的版本号是两回事。
 
+## 1.3.5 (versionCode 44 / iOS build 12) - 2026-11-28 - 「iOS 补齐：配色与提示」
+
+1.3.4 的两件改动只落了 Android。clover 问「苹果版本的呢」，一核发现 iOS 只吃到一半。
+
+### 一、iOS 隐私门改白（与 Android 统一）
+
+| 按钮 | 改前 | 改后 |
+|---|---|---|
+| 同意并继续（主） | `Palette.accent` 绿底 + 黑字 | **`Color.white` 实心 + 黑字**（21:1） |
+| 查看完整隐私政策（次） | 绿字 + 10% 白底 | **1pt 白描边 + 白字**，透明填充 |
+| 暂不同意（第三级） | 灰字无底 | **不动**（本来就对） |
+
+政策全文 sheet 的「关闭」原本是绿字，一并改成白字，与 Android 的 `btnPrivacyClose` 对齐。
+
+★ iOS **不存在** Android 那个「半透明底被 `SRC_IN` 着色变黑」的 bug —— SwiftUI 的
+`.background(实色)` 本身不透明。这次是**统一风格**，不是修 bug。
+
+### 二、iOS 取景提示接上技法库（这才是真正的缺口）
+
+**改前的结构差异**：
+- Android：`PromptEngine` 的 11 条规则 + R10 兜底轮播（1.3.4 改成 48 秒时间窗）
+- iOS：`ScoreBoard.recommendations.firstOrNull()` —— 只有按分数维度的建议
+
+结果：新增的 15 条技法上了 iOS 的图鉴（98 条），但**取景时一句都不会出现**。
+
+**改法（最小侵入）**：
+- 新增 `TechniqueTipFallback`（commonMain，纯函数），**复用** `PromptEngine` 的同一个
+  `fallbackPool(scene, nowMs)` 与 `fallbackText(id)` —— 不另写一套池子（两套必然分叉）
+- **剔掉精选 7 条**：那是 Android R10 的"保底话术"，iOS 不该退化成那两句
+- 相位按 `nowMs / FALLBACK_ROTATE_MS` 取，同一窗口内 100 次调用返回同一条，跨窗口才换
+- `IosBridge`：`primaryTip == null` 时才走兜底；**有建议时行为一个字不变**（连时钟都不读）
+
+**场景映射没有第二份**：`AiScene → SceneType` 全仓只有 `SceneClassifier.classify()` 一处，
+两端共用。`analyzeFrame` 拿到的 `sceneName` 已经是折好的 `SceneType` 枚举名。
+所以本次 **Android 侧一行没动**。
+
+**时钟**：用 `kotlin.time.TimeSource.Monotonic` 而不是墙钟。用户改表 / 系统校时会让墙钟往回跳，
+表现是"刚换过的口诀又退回去"——那种 bug 永远复现不了。**两端相位不同源**
+（Android 从开机算，iOS 从 `IosBridge` 首次加载算）：内容与节奏一致，"同时说同一句"没有。
+
+### 三、验证
+
+- 测试 **371 executed** 全绿（新增 6 条：窗口内稳定 / 跨窗轮换 / 永不选精选 /
+  空池返回 null / 整窗文案可解析 / **15 条批次 C 在 iOS 兜底里 15/15 可达**）
+- iosMain 做了真实编译验证：临时拷进 `androidMain` 编译（44 个 .class，含 `IosBridge`），
+  跑完删除，`git status` 干净
+- 门禁：common-purity（53 文件）/ no-network（100 文件）/ swift-contract-args（174 处构造点）全绿
+- **Swift 本机编不了**，本次靠 CI 的 macOS job 验证（改动集中在修饰符换值 +
+  一处 `.overlay` + `strokeBorder`，与 `GrowthView.swift:210` 同构）
+
+### 四、这轮暴露的两端不对等（记下来，没改）
+
+1. **iOS 没有冷却与驻留**：Android 的提示受 `PromptScheduler` 约束（8s 冷却 / 3s 最短驻留 /
+   urgent 可打断），iOS 兜底只受 48 秒窗口约束 —— **窗口内每一帧都渲染同一条**
+2. **食物技法在 AI 判成 FOOD 时不出现**：`AiScene.FOOD → GENERAL`，而 `food_*` 的
+   `trigger.scenes` 写的是 `INDOOR`，只有规则判定为 INDOOR 时才进池（Android 一样，不是新引入）
+3. **空卡片降级不对称**：某条 `oneLiner` 若为空，Android 只是这一拍不出牌（8 秒后换），
+   iOS 会整个 48 秒窗口都不画提示
+
+
 ## 1.3.4 (versionCode 43 / iOS build 11) - 2026-11-28 - 「黑按钮的根因，与新技巧的最后一公里」
 
 ### 一、隐私门「一片黑」：不是配色，是不可滚动
