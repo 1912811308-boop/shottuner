@@ -176,6 +176,15 @@ struct PrivacyGateView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     titleBlock
                     summaryBlock
+                    // ★ 三个出口的视觉层级（与 Android 1.3.4 同一套口径）：
+                    //   实心白 → 1pt 白描边 → 纯文字。层级靠**填充**区分，不靠颜色。
+                    //   三个按钮里都不再出现 `Palette.accent`（薄荷绿留给「参数 / 数值」）。
+                    //
+                    // ★ 这里**不是**在修 Android 那个「12% 半透明底被 accent 按 SRC_IN
+                    //   着色、alpha 被原样保留 ⇒ 深字压近黑底 ⇒ 看起来是个黑按钮」的 bug：
+                    //   SwiftUI 的 `.background(实色)` 是不透明的蒙版，`Palette.accent`
+                    //   在这里是实色填充，从来没有被压暗过。本次 iOS 侧只是**统一风格**
+                    //   （clover：「把全部的背景都调成白的，不要那个绿色的」）。
                     fullTextButton
                     agreeButton
                     denyButton
@@ -200,7 +209,10 @@ struct PrivacyGateView: View {
                             Button("关闭") {
                                 showingFullText = false
                             }
-                            .foregroundStyle(Palette.accent)
+                            // ★ 与「查看完整隐私政策」同一档：白字、无色块。
+                            //   Android 侧同一次改动里把政策全文页的「返回」从
+                            //   `st_accent` 改成了 `st_text`（白），两端在这里对齐。
+                            .foregroundStyle(Palette.overlayText)
                         }
                     }
             }
@@ -239,21 +251,52 @@ struct PrivacyGateView: View {
         .padding(.top, 16)
     }
 
+    /// 次按钮：「查看完整隐私政策」= 1pt 白描边 + 全透明填充 + 白字。
+    ///
+    /// ★ 三个出口的层级靠**填充**区分（实心白 → 1pt 白描边 → 纯文字），不靠颜色 ——
+    ///   与 Android 侧 1.3.4 的 `bg_btn_solid` / `bg_btn_outline` 同一套口径。
+    ///   `Palette.accent`（薄荷绿 #7FE3C0）在本应用里是「参数 / 数值」的语义色，
+    ///   按钮再抢一次这个色，用户就分不清哪个是数据、哪个是可点的地方。
+    ///
+    /// ★ 用 `strokeBorder` 而不是 `stroke`：`strokeBorder` 把线画在形状**内侧**，
+    ///   48pt 的高度就是 48pt；`stroke` 把线画在边界上、向外溢出半条线宽，
+    ///   同样的 `minHeight` 会比主按钮看起来宽一点点。本仓 `GrowthView` /
+    ///   `PhotoReviewSheet` / `VideoPlanView` 里的描边已经统一用 `strokeBorder`。
+    ///
+    /// ★ 不写 `.background(...)` 就是全透明填充（与 Android `solid #00000000` 等价），
+    ///   不需要显式给一个 `.clear` 底：描边本身由 `.overlay` 画在文字层之上。
     private var fullTextButton: some View {
         Button {
             showingFullText = true
         } label: {
             Text("查看完整隐私政策")
                 .font(.system(size: 14))
-                .foregroundStyle(Palette.accent)
+                .foregroundStyle(Palette.overlayText)
                 .frame(maxWidth: .infinity, minHeight: Layout.secondaryButtonHeight)
-                .background(Palette.overlayText.opacity(0.10))
-                .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous)
+                        .strokeBorder(Palette.overlayText, lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
         .padding(.top, 24)
     }
 
+    /// 主按钮：「同意并继续」= 不透明实心白底 + 近黑字。
+    ///
+    /// ★ 字色压的底：**不透明的白**（`Color.white`，ARGB #FFFFFFFF）。所以
+    ///   `Color.black` 字在这块白上的对比度是 21:1，是这套界面里最高的一处。
+    ///   与页面黑底（`body` 里的 `Color.black`）无关 —— 白底把黑底完全盖住了。
+    ///
+    /// ★ 用 `Color.white` 而不是 `Palette.overlayText`：后者虽然当前就是
+    ///   `Color.white`（`Palette.swift:57`，逐值相同、显示效果无差），但它的语义是
+    ///   「覆盖层上的**文字**主色」，拿来当**填充**会让下一个人以为这里在写文字样式。
+    ///   Android 侧的同一件事是用专门的 `st_btn_solid` 表达的；本次按约定不动
+    ///   `Palette`（其他页面还在用它），所以这里直接用 `Color.white`。
+    ///
+    /// ★ 与 Android `st_bg`（#0E1113）的差异：这里是 `Color.black`（#000000）。
+    ///   `Palette` 里没有近黑成员，且本次不允许改 `Palette`；在 15pt bold 的字号下
+    ///   #000000 与 #0E1113 在白底上的观感差异不可辨（对比度 21:1 vs 18.9:1）。
     private var agreeButton: some View {
         Button {
             // 写盘（版本号）+ 收起同意页。相机权限的申请由 `ContentView` 的
@@ -265,7 +308,7 @@ struct PrivacyGateView: View {
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.black)
                 .frame(maxWidth: .infinity, minHeight: Layout.primaryButtonHeight)
-                .background(Palette.accent)
+                .background(Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
