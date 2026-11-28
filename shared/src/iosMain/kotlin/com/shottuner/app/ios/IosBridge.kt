@@ -24,9 +24,11 @@ import com.shottuner.app.analysis.IosDimensionDto
 import com.shottuner.app.analysis.IosFrameAnalysisDto
 import com.shottuner.app.analysis.ScoreBoard
 import com.shottuner.app.analysis.ScoreDimension
+import com.shottuner.app.knowledge.TechniqueTipFallback
 import com.shottuner.app.model.SceneType
 import com.shottuner.app.sensors.LevelMath
 import com.shottuner.app.text.NumFmt
+import kotlin.time.TimeSource
 
 /**
  * iOS 侧的**跨语言门面**：Swift 侧唯一被允许直接触碰的 Kotlin API。
@@ -165,6 +167,37 @@ object IosBridge {
     )
 
     /**
+     * 兜底提示用的时间基准 —— **进程内的单调时钟**。
+     *
+     * ## 为什么这里可以读本地时钟，而 `IosGrowthBridge` 明令禁止
+     *
+     * `IosGrowthBridge` 那条规矩针对的是**墙钟**：「最近 7 天」若两端各取各的日历时刻，
+     * 跨时区 / 跨月会切出不同窗口，而且偶发到查不出来 —— 所以那里的 `now` 必须由 Swift 传。
+     *
+     * 这里要的只是**相对相位**：技法轮换的窗口长度（48 秒）是自相对的，只要「同一次运行内
+     * 每 48 秒推进一格」即可，与日历、时区、系统校时全都无关。用 `Monotonic` 而不是
+     * 墙钟是必须的：用户改表 / 系统校时会让墙钟往回跳，往回跳的表现是**刚换过的口诀
+     * 又退回去**，而那是永远复现不了的 bug。
+     *
+     * ## 为什么不用 `SystemClock.elapsedRealtime()`
+     *
+     * 那是 Android API，iosMain 里没有。`kotlin.time.TimeSource.Monotonic` 是 stdlib 的
+     * 跨平台单调时钟，两端语义一致（都是"自某个固定起点单调递增的毫秒"），也不引入任何
+     * 平台 API。
+     *
+     * ## 起点在进程内，与 Android 不同相
+     *
+     * Android 的起点是开机时刻，iOS 这里是 `IosBridge` 首次被加载的时刻，所以**两端不会
+     * 停在同一个窗口序号上**。这是刻意的取舍：要对齐相位就得让 Swift 传一个与 Android
+     * 同源的时刻，而 iOS 拿不到 `elapsedRealtime()`；传墙钟又会把上面那串问题带回来。
+     * 产品上要的是「两端轮换的**内容与节奏**一致」，不是「两端同时说同一句」。
+     */
+    private val tipClock: TimeSource.Monotonic.ValueTimeMark = TimeSource.Monotonic.markNow()
+
+    /** 兜底提示的当前时刻（毫秒）。纯读值，不改变任何状态。 */
+    private fun tipNowMs(): Long = tipClock.elapsedNow().inWholeMilliseconds
+
+    /**
      * 「一帧 YUV 进、四维参考分 + 一条提示 + 直方图出」——iOS 取景浮层的唯一入口。
      *
      * ## 为什么是一次调用出全部
@@ -195,12 +228,18 @@ object IosBridge {
      * 3. **构图提示由本函数内部算，不接受外部传入。** 见下面「构图为什么不再由
      *    Swift 传入」一节 —— 上一版有 15 个 hint 参数，那是设计错误。
      *
-     * ## 提示只给一条
+     * ## 提示只给一条，但有两个来源
      *
-     * [IosFrameAnalysisDto.tipText] 取 `recommendations.firstOrNull()`。
+     * [IosFrameAnalysisDto.tipText] 优先取 `recommendations.firstOrNull()`。
      * `ScoreBoard` 内部最多会给 3 条（每维度 1 条），但产品口径是
      * 「提示卡只说一句话」：浮层空间有限，三条并列用户也不知道先做哪件。
      * 需要完整清单时应当另开一次调用，而不是把这个字段改成数组。
+     *
+     * ★ 1.3.4 补充：`ScoreBoard` **一条建议都没有**时（画面没有硬伤，四个维度都拿满了），
+     *   改从技法库按场景轮换给一条 —— 见 [TechniqueTipFallback]。两个来源的优先级是固定的，
+     *   分数建议永远优先；技法轮换只是"没话说时的一句口诀"，且 `tipDimension` 保持空串
+     *   （技法条目没有维度绑定，不许为了"字段有值"编一个维度出来）。
+     *   这条补丁的由来：15 条新技巧（批次 C）在 iOS 上只进了图鉴，取景时一句都不出现。
      *
      * ## 数组边界
      *
@@ -296,6 +335,38 @@ object IosBridge {
         // 产品口径：提示卡只说一条。ScoreBoard 最多给 3 条，这里只取最重要的一条。
         val primaryTip = scoreResult.recommendations.firstOrNull()
 
+        // ── 提示的两个来源，优先级严格是「先分数建议、后技法轮换」 ────────────────
+        //
+        // ★ ScoreBoard 有建议时，下面三个字段**逐字保持原样**（tipId / tipText /
+        //   tipDimension 全部来自 primaryTip）。这次改动只是在它为 null 时补一条，
+        //   不调整、不插队、不改口径 —— 已有用户看到的提示语一个字都不该变。
+        //
+        // ★ 为什么会走到兜底：ScoreBoard 的建议是**按分数维度**给的（四个维度里哪个没拿满），
+        //   画面没毛病时它一条都没有 —— 于是 1.3.4 那 15 条新技巧上了 iOS 图鉴却从不被推出。
+        //   [TechniqueTipFallback] 补的就是这一段，与 Android 的 R10 共用同一个池子。
+        var tipId = ""
+        var tipText = ""
+        var tipDimension = ""
+        if (primaryTip != null) {
+            tipId = primaryTip.tipId
+            tipText = primaryTip.text
+            // lowercase() 在 Kotlin 里是 locale 无关的（等价于 Locale.ROOT），
+            // 不会在土耳其语环境下把 "LEVEL" 变成 "leveL" 之类的怪东西。
+            tipDimension = primaryTip.dimension.name.lowercase()
+        } else {
+            val fallbackId = TechniqueTipFallback.pick(scene, tipNowMs())
+            // 解析不出文案就**这一拍空着**，绝不推一张没有动作的空卡片 ——
+            // 与 Android 的 R10 同一个口径（见 PromptEngine 的 R10 里那行注释）。
+            val fallbackText = if (fallbackId == null) "" else TechniqueTipFallback.text(fallbackId)
+            if (fallbackId != null && fallbackText.isNotEmpty()) {
+                tipId = fallbackId
+                tipText = fallbackText
+                // tipDimension 刻意留空串：技法条目**没有维度绑定**（1.3.4 的刻意决定）。
+                // 为了让这个字段"看起来有值"而硬塞一个维度，等于告诉 UI「这句是曝光维度的问题」，
+                // 而它其实只是一句口诀 —— 缺数据不许伪装成有数据。
+            }
+        }
+
         // 任务卡的数据源复用这一次分析，不重新算一遍：Swift 的 400ms tick
         // （IosMissionBridge.tick）要组装 MissionSample，而 stats / hint / recs
         // 正是这次 analyzeFrame 内部算出来的东西 —— 丢掉了就得跨语言重传整帧字节。
@@ -316,11 +387,9 @@ object IosBridge {
             exposure = dimensionDto(dimensions, ScoreDimension.EXPOSURE),
             composition = dimensionDto(dimensions, ScoreDimension.COMPOSITION),
             clarity = dimensionDto(dimensions, ScoreDimension.CLARITY),
-            tipId = primaryTip?.tipId ?: "",
-            tipText = primaryTip?.text ?: "",
-            // lowercase() 在 Kotlin 里是 locale 无关的（等价于 Locale.ROOT），
-            // 不会在土耳其语环境下把 "LEVEL" 变成 "leveL" 之类的怪东西。
-            tipDimension = primaryTip?.dimension?.name?.lowercase() ?: "",
+            tipId = tipId,
+            tipText = tipText,
+            tipDimension = tipDimension,
             meanLuma = stats.meanLuma,
             p05 = stats.p05,
             p50 = stats.p50,

@@ -203,7 +203,12 @@ object PromptEngine {
      *
      * `internal` 而不是 `private`：轮换之后「池子有哪些 id」不再能从出牌面反推
      * （一个周期只有 6 个 tick，8 条的池子每周期只能播到 6 条），测试必须直接读池子
-     * 才能断言"上限 8 条""精选在最前""窗口真的在滑"。生产侧只有 R10 一个调用点。
+     * 才能断言"上限 8 条""精选在最前""窗口真的在滑"。
+     *
+     * 生产侧有两个调用点，**都在这一份池子上**：
+     * R10（Android 的兜底轮播）与 [TechniqueTipFallback]（iOS 在 `ScoreBoard`
+     * 没有建议时的兜底）。iOS 那边刻意不另写池子 —— 两套池子必然分叉，
+     * 而分叉只表现为"两端教的东西不一样"，不会有任何报错。
      *
      * @param nowMs 当前时刻。同一个 `nowMs` 必然给出同一个池子（纯函数）。
      */
@@ -283,12 +288,26 @@ object PromptEngine {
      * （「手肘弯出角，人瘦一圈」），`oneLiner` 才是口诀（「手肘别贴着腰」）。
      *
      * 返回空串 = 这条候选解析不出文案。调用方必须**跳过**它，绝不允许推出空卡片。
+     *
+     * `internal` 而不是 `private`：[TechniqueTipFallback]（iOS 兜底）取文案也走这里。
+     * 让它自己写一份 id → 文案的映射就是第二份实现 —— 精选表与 `oneLiner` 的取舍
+     * 会立刻分叉，而且分叉只表现为"两端口诀措辞不同"，不会报错。
      */
-    private fun fallbackText(id: String): String {
+    internal fun fallbackText(id: String): String {
         FALLBACK_TEXT[id]?.let { return it }
         val technique = TechniqueBookV15.byId[id] ?: return ""
         return technique.oneLiner
     }
+
+    /**
+     * 某个 id 是否属于**精选话术**（[FALLBACK_TEXT] 的键）。
+     *
+     * 存在的唯一理由是给 [TechniqueTipFallback] 用：iOS 兜底要**剔掉精选**再轮换
+     * （精选是 Android R10 的保底句，iOS 已有 `ScoreBoard` 的分数建议，不该退化成那几句）。
+     * 这里只回答"是不是"，不把整张表交出去 —— 表本身仍是引擎的私有实现，
+     * 外部拿到键集就会有人拿它拼第二套池子。
+     */
+    internal fun isCuratedFallbackText(id: String): Boolean = id in FALLBACK_TEXT
 
     /** 百分比格式化，避免各处各写一遍。 */
     private fun pct(value: Float): String = NumFmt.fixed(value.coerceIn(0f, 1f) * 100f, 0)
