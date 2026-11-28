@@ -2239,10 +2239,10 @@
 
                     <!--
                       三个出口的视觉层级（v1.3.4）：实心白 → 1dp 白描边 → 纯文字。
-                      改之前三个里有两个带 st_accent（绿），而主按钮更是踩了
-                      "12% 白底被 accent 按 SRC_IN 着色"这个坑，实际渲染成近黑 +
-                      深色字 ⇒ 就是 clover 说的"那个按钮是黑的"。根因写在
-                      drawable/bg_btn_solid.xml 顶部，别再往主按钮上加 backgroundTint。
+                      改之前三个里有两个是绿色，而主按钮更是踩了"12% 白底被主色按 SRC_IN
+                      着色"这个坑，实际渲染成近黑 + 深色字 ⇒ 就是 clover 说的
+                      "那个按钮是黑的"。根因与约束写在 drawable/bg_btn_solid.xml 顶部，
+                      别再往主按钮上加 backgroundTint。
                     -->
                     <TextView
                         android:id="@+id/btnPrivacyFull"
