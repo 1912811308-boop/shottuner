@@ -139,13 +139,28 @@ object PromptEngine {
     )
 
     /**
-     * 兜底池里**从技法库补进来**的候选上限（不含前面两条精选，合计最多 8 条）。
+     * 兜底池里**从技法库补进来**的窗口大小（不含前面两条精选，合计最多 8 条）。
      *
-     * 为什么要有上限：R10 是轮播，用户每 `GUIDE_INTERVAL_MS` 才看到一句。池子越大，
+     * 为什么要有上限：R10 是轮播，用户每 `GUIDE_INTERVAL_MS` 才看到一句。窗口越大，
      * 同一条再次轮到要等的时间就越长 —— 8 条已经是 64 秒一轮，再大就变成"偶尔说一句话
      * 的陌生卡片"，反而不像提示。上限的存在不是为了省内存。
+     *
+     * 注意它限制的是**一个窗口**的大小，不是"总共能轮到几条"：库内候选按窗口整体滑动，
+     * 见 [buildFallbackWindows]。所以这个 6 不会把技法库里多出来的条目永久挡在外面。
      */
     private const val FALLBACK_LIBRARY_LIMIT = 6
+
+    /**
+     * 兜底窗口滑动周期（毫秒）= **一个完整轮播周期** = 引导间隔 × 窗口大小。
+     *
+     * 为什么是乘积而不是随手拍的数：一个窗口要 6 条 × 8 秒才播完一遍，播完之后再滑，
+     * 用户才不会在"还没轮到的条目"上被打断。取 48 秒，语义就是"上一窗播完了，换下一窗"。
+     *
+     * 为什么每次滑**一整窗**而不是滑 1 条：PORTRAIT 的库内候选有二十来条，滑 1 条要
+     * 二十多个周期才能轮完，用户等不到；按窗口步进，3~5 个周期就能把库里同一场景的
+     * 条目全轮一遍（15 条批次 C 在 3 个周期内全部可达，`PromptEngineTest` 守着）。
+     */
+    const val FALLBACK_ROTATE_MS: Long = SchedulerConfig.GUIDE_INTERVAL_MS * FALLBACK_LIBRARY_LIMIT
 
     /** 每个场景**精选**的两条口诀。id 与顺序都是历史打磨过的，不许动。 */
     private fun curatedFallback(scene: SceneType): List<String> = when (scene) {
@@ -159,17 +174,16 @@ object PromptEngine {
     }
 
     /**
-     * 场景 → 可以补进兜底池的技法分类。
+     * 场景 → 可以补进兜底池的技法分类（**主判据**）。
      *
-     * 两条边界：
      * - **食物没有自己的 `SceneType`**。`food_*` 那几条的 `trigger.scenes` 本来写的就是
      *   `INDOOR`，所以食物分类挂在 INDOOR 上，而不是硬造一个场景值。
-     * - **GENERAL 刻意留空**。往通用场景里塞 `BASIC` 会稀释「先做稳基本功」这条主张
-     *   （`TechniqueMatcher` 的起步包出于同样的理由只从 BASIC 取），所以通用场景
-     *   永远只轮播那两条精选。
+     * - **GENERAL 在这里留空**：往通用场景里塞 `BASIC` 会稀释「先做稳基本功」这条主张
+     *   （`TechniqueMatcher` 的起步包出于同样的理由只从 BASIC 取）。通用场景靠下面
+     *   那条「技法自己声明过这个场景」的从判据取候选，而不是靠分类硬塞。
      *
-     * `STREET` / `MACRO` 在这里没有对应项：`SceneType` 里不存在街头与微距的取值。
-     * 这两类仍然只有「浏览」和 `TechniqueMatcher` 的推荐池两个入口，不假装能轮播。
+     * `STREET` / `MACRO` / `PARAMS` / `PITFALL` 在 `SceneType` 里没有同名取值，
+     * 这几类靠 [fallbackCandidates] 的从判据（技法自己的 `trigger.scenes`）进来。
      */
     private fun sceneCategories(scene: SceneType): Set<TechCategory> = when (scene) {
         SceneType.NIGHT -> setOf(TechCategory.NIGHT)
@@ -182,41 +196,83 @@ object PromptEngine {
     }
 
     /**
-     * 兜底轮播池：**精选两条保底 + 技法库里同场景的候选**。
+     * 兜底轮播池：**精选两条保底 + 当前窗口的库内候选**。
      *
-     * 顺序固定为「精选在前、库内按 id 字典序在后」，这是测试能钉住池子的前提：
-     * 排序一变成哈希序，今天绿的用例明天就会随机红。
+     * 顺序固定为「精选在前、库内按 id 字典序在后」，且窗口只按 `nowMs` 步进 ——
+     * 这是测试能钉住池子的前提：排序一沾上哈希序，今天绿的用例明天就会随机红。
      *
-     * 库内候选的三条剔除：仅浏览（缺的是信号，推了也验证不了）、自拍（这里按后置口径，
-     * 前置的放开在 `pushEligibleIds` 那侧做）、运镜（录像页的事，进图片页的兜底池是错的）。
+     * `internal` 而不是 `private`：轮换之后「池子有哪些 id」不再能从出牌面反推
+     * （一个周期只有 6 个 tick，8 条的池子每周期只能播到 6 条），测试必须直接读池子
+     * 才能断言"上限 8 条""精选在最前""窗口真的在滑"。生产侧只有 R10 一个调用点。
+     *
+     * @param nowMs 当前时刻。同一个 `nowMs` 必然给出同一个池子（纯函数）。
      */
-    private fun fallbackPool(scene: SceneType): List<String> = FALLBACK_POOLS[scene].orEmpty()
-
-    /** 池子算一次就够：它是纯函数，而 R10 每个 tick 都会问。 */
-    private val FALLBACK_POOLS: Map<SceneType, List<String>> by lazy {
-        SceneType.values().associateWith { buildFallbackPool(it) }
+    internal fun fallbackPool(scene: SceneType, nowMs: Long): List<String> {
+        val windows = FALLBACK_WINDOWS[scene].orEmpty()
+        if (windows.isEmpty()) return emptyList()
+        return windows[poolCycle(nowMs).mod(windows.size.toLong()).toInt()]
     }
 
-    private fun buildFallbackPool(scene: SceneType): List<String> {
-        val curated = curatedFallback(scene)
-        val categories = sceneCategories(scene)
-        if (categories.isEmpty()) return curated
+    /** 当前处在第几个轮播周期。 */
+    private fun poolCycle(nowMs: Long): Long = nowMs / FALLBACK_ROTATE_MS
 
+    /**
+     * 每个场景的**全部窗口**，按周期序号索引（`窗口序号 = poolCycle mod 窗口数`）。
+     *
+     * 为什么不按 `(scene, cycle)` 做可变缓存：窗口数是固定的（= 候选数 / gcd(候选数, 窗口大小)），
+     * 把整张表一次算出来之后，`fallbackPool` 就退化成一次数组下标 ——
+     * 每 tick 零分配、零锁、无并发问题。可变缓存反而要处理"遍历时被改"和"表无限增长"。
+     *
+     * 表在第一次访问时算一次，之后只读。
+     */
+    private val FALLBACK_WINDOWS: Map<SceneType, List<List<String>>> by lazy {
+        SceneType.values().associateWith { buildFallbackWindows(it) }
+    }
+
+    private fun buildFallbackWindows(scene: SceneType): List<List<String>> {
+        val curated = curatedFallback(scene)
+        val candidates = fallbackCandidates(scene)
+        if (candidates.isEmpty()) return listOf(curated)
+
+        val windows = ArrayList<List<String>>(candidates.size)
+        var offset = 0
+        do {
+            val rotated = candidates.drop(offset) + candidates.take(offset)
+            windows.add(curated + rotated.take(FALLBACK_LIBRARY_LIMIT))
+            offset = (offset + FALLBACK_LIBRARY_LIMIT) % candidates.size
+        } while (offset != 0 && windows.size < candidates.size)
+        return windows
+    }
+
+    /**
+     * 某场景的库内候选（**已排好序、已剔除、跨所有窗口共用**）。
+     *
+     * 入选条件是两个判据取并集：
+     * 1. 主判据：分类对得上 （[sceneCategories]）；
+     * 2. 从判据：这条技法自己的 `trigger.scenes` 里写了当前场景。
+     *
+     * 为什么需要从判据：`PARAMS` / `PITFALL` / `STREET` / `MACRO` 四类在 `SceneType` 里
+     * 没有同名取值，只看分类永远进不了池 —— 批次 C 里「光比大就开 HDR」「拍前扫一遍四条边」
+     * 这些就会变成纯摆设。而技法自己的 `trigger.scenes` 是**它自己声明过的适用场景**
+     * （例如 `params_portrait_mode_distance` 写的就是 PORTRAIT），比我在这里替它猜一个
+     * 分类映射准确。
+     *
+     * 三条剔除：仅浏览（缺的是信号，推了也验证不了）、自拍（这里按后置口径，前置的放开
+     * 在 `pushEligibleIds` 那侧做）、运镜（录像页的事，进图片页的兜底池是错的）。
+     */
+    private fun fallbackCandidates(scene: SceneType): List<String> {
+        val categories = sceneCategories(scene)
+        val curated = curatedFallback(scene).toHashSet()
         val ignored = TechniqueBookV15.BROWSE_ONLY_IDS + TechniqueBookV15.SELFIE_IDS
-        val taken = curated.toHashSet()
-        val appended = ArrayList<String>(FALLBACK_LIBRARY_LIMIT)
-        val candidates = TechniqueBookV15.combined
-            .filter { it.category in categories && it.category != TechCategory.CAMERA_MOVE }
-            .map { it.id }
-            .distinct()
-            .sorted()
-        for (id in candidates) {
-            if (appended.size >= FALLBACK_LIBRARY_LIMIT) break
-            if (id in ignored) continue
-            if (!taken.add(id)) continue
-            appended.add(id)
+
+        val ids = ArrayList<String>()
+        for (technique in TechniqueBookV15.combined) {
+            if (technique.category == TechCategory.CAMERA_MOVE) continue
+            if (technique.category !in categories && scene !in technique.trigger.scenes) continue
+            if (technique.id in ignored || technique.id in curated) continue
+            ids.add(technique.id)
         }
-        return curated + appended
+        return ids.distinct().sorted()
     }
 
     /**
@@ -438,7 +494,7 @@ object PromptEngine {
                     now - w.lastCandidateAt >= SchedulerConfig.IDLE_TRIGGER_MS
                 if (hasHard || !idle || !s.tech.hasStats || s.stability >= STABLE_THRESHOLD) null
                 else {
-                    val pool = fallbackPool(s.scene)
+                    val pool = fallbackPool(s.scene, now)
                     if (pool.isEmpty()) null
                     else {
                         val id = pool[((now / SchedulerConfig.GUIDE_INTERVAL_MS).toInt()).mod(pool.size)]
@@ -524,9 +580,17 @@ object PromptEngine {
         ) + MOVE_TEXT.keys + ALL_FALLBACK_POOL_IDS
     }
 
-    /** 全部场景兜底池的并集。池子本身是懒加载的，这里也懒一次。 */
+    /**
+     * 全部场景、**全部窗口**兜底池的并集。
+     *
+     * 必须是并集而不是"当前窗口"：窗口随 `nowMs` 滑动，某个时刻会推出另一批 id。
+     * 若声明集合只覆盖一个窗口，「引擎发射的 id 必须都在声明集合内」那条断言会
+     * 在**特定时刻**红，而且极难复现（取决于跑测试的那一帧 `now`）。
+     */
     private val ALL_FALLBACK_POOL_IDS: Set<String> by lazy {
-        SceneType.values().flatMap { fallbackPool(it) }.toSet()
+        SceneType.values().flatMap { scene ->
+            curatedFallback(scene) + fallbackCandidates(scene)
+        }.toSet()
     }
 
     /**

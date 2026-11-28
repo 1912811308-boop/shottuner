@@ -3,6 +3,7 @@ package com.shottuner.app.knowledge
 import com.shottuner.app.model.SceneType
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -293,121 +294,221 @@ class PromptEngineTest {
         assertFalse(PromptEngine.evaluate(shaky, 20_000L, lastCandidateAt = 1_000L).any { it.ruleId == "R10_fallback_guide" })
     }
 
-    // ── R10 兜底池：从技法库取之后的可达性 ─────────────────────────────────────
+    // ── R10 兜底池：窗口轮换之后的可达性 ────────────────────────────────────────
     //
     // 背景：R10 的池子原来是写死的 7 个 id、每场景 2 条。批次 C 那 15 条技法虽然进了
     // `pushEligibleIds`、也进了图鉴，但**没有任何规则会推到它们** —— 用户视角是
-    // 「说是有新技巧，拍的时候一次都没见过」。池子改成「精选 2 条 + 库内候选」之后，
-    // 下面这 5 条用例是「新技巧不是摆设」唯一的机器证明。
+    // 「说是有新技巧，拍的时候一次都没见过」。
     //
-    // 探池子的办法：R10 每 `GUIDE_INTERVAL_MS` 轮一条，所以拿不同的 `now` 反复问
-    // `candidateFor` 就能把整条池子枚举出来。32 次足够绕完一圈（池子上限 8 条），
-    // 这样测的是**真实出牌面**，不是反射出来的内部数组。
+    // 现在池子 = 精选 2 条 + 一个会随时间滑动的库内窗口（见 `PromptEngine.buildFallbackWindows`）。
+    // 下面这组用例是「新技巧不是摆设」唯一的机器证明，分三层：
+    //   1. 当前窗口就有新条目（`batchCEntriesReachTheFallbackPool`）；
+    //   2. 所有窗口并起来，15 条一条不少（`allBatchCEntriesReachSomeFallbackWindow`）；
+    //   3. 池子的**不变式**：可解析 / 无禁推 / 确定性 / 有界 / 真的在滑。
+    //
+    // 两种观测口径，别混：
+    //   - `pool(cycle)` = 该周期的整条池子（上限 8 条）；
+    //   - `shownInCycle(cycle)` = 该周期 6 个 tick 里**真正推出来的** id。
+    // 一个周期只有 6 个 tick（48 秒 ÷ 8 秒），所以 8 条的池子每周期只能播到 6 条 ——
+    // 两个口径都必须覆盖全 15 条，否则"能进池"只是纸面资格。
 
-    /** 枚举某场景的兜底池（顺序 = 轮播顺序）。 */
-    private fun fallbackPoolOf(scene: SceneType): List<String> {
-        val seen = LinkedHashSet<String>()
-        for (k in 0 until 32) {
-            val candidate = PromptEngine.candidateFor(
-                "R10_fallback_guide",
-                signals(tech = tech(meanLuma = 0.5f), roll = 0f, scene = scene, stability = 0.05f),
-                k * SchedulerConfig.GUIDE_INTERVAL_MS
-            ) ?: continue
-            seen.add(candidate.tipId)
+    /** 批次 C 的 15 条 id。新增条目若也想被这条用例守住，加进来即可。 */
+    private val batchCIds = listOf(
+        "portrait_elbow_angle", "portrait_look_off_lens", "portrait_no_three_count",
+        "night_tap_to_focus", "night_lock_exposure",
+        "food_wipe_plate_edge", "food_show_the_cut",
+        "landscape_vertical_for_tall", "landscape_human_scale",
+        "indoor_kill_ceiling_light", "indoor_corner_ultrawide",
+        "pitfall_check_edges", "pitfall_finger_on_lens",
+        "params_portrait_mode_distance", "params_hdr_for_big_contrast"
+    )
+
+    /** 兜底轮播需要的信号：有统计、端平、稳定、空闲（`candidateFor` 默认无硬候选）。 */
+    private fun calmSignals(scene: SceneType): PromptSignals =
+        signals(tech = tech(meanLuma = 0.5f), roll = 0f, scene = scene, stability = 0.05f)
+
+    /** 第 [cycle] 个周期里 R10 真正会推出来的候选（6 个 tick，按时间顺序）。 */
+    private fun candidatesInCycle(scene: SceneType, cycle: Int): List<PromptCandidate> {
+        val out = ArrayList<PromptCandidate>(6)
+        for (tick in 0 until 6) {
+            val now = cycle * PromptEngine.FALLBACK_ROTATE_MS + tick * SchedulerConfig.GUIDE_INTERVAL_MS
+            PromptEngine.candidateFor("R10_fallback_guide", calmSignals(scene), now)?.let { out.add(it) }
         }
-        return seen.toList()
+        return out
+    }
+
+    private fun shownInCycle(scene: SceneType, cycle: Int): List<String> =
+        candidatesInCycle(scene, cycle).map { it.tipId }
+
+    /**
+     * 核心断言（一）：**15 条批次 C 全部至少进过一次池，而且全部至少被真正推出来过一次**。
+     *
+     * 为什么两个口径都要断言：只断言"进过池"会漏掉一种情况 —— 条目在池子里，
+     * 但每个周期的那 6 个 tick 恰好都轮不到它（池子 8 条、周期 6 tick）。那种条目
+     * 对用户等于不存在。所以第二个断言直接看 `candidateFor` 的真实出牌。
+     *
+     * 不许写成 `size >= 3`：那样换成任意 3 条都能过，等于没测。这里逐条比。
+     */
+    @Test
+    fun allBatchCEntriesReachSomeFallbackWindow() {
+        val reachableInPool = HashSet<String>()
+        val reachableInTicks = HashSet<String>()
+        for (scene in SceneType.values()) {
+            for (cycle in 0..40) {
+                reachableInPool += PromptEngine.fallbackPool(scene, cycle * PromptEngine.FALLBACK_ROTATE_MS)
+                reachableInTicks += shownInCycle(scene, cycle)
+            }
+        }
+
+        val notInAnyWindow = batchCIds.filter { it !in reachableInPool }
+        assertTrue(
+            notInAnyWindow.isEmpty(),
+            "这些批次 C 条目任何窗口都进不了池：$notInAnyWindow"
+        )
+
+        val neverEmittable = batchCIds.filter { it !in reachableInTicks }
+        assertTrue(
+            neverEmittable.isEmpty(),
+            "这些批次 C 条目进了池、但 41 个周期里一次都没被推出来：$neverEmittable"
+        )
+        assertEquals(15, batchCIds.count { it in reachableInTicks }, "批次 C 必须 15 条全部可达")
     }
 
     /**
-     * 核心断言：批次 C 的条目**必须真的能被 R10 推出来**。
+     * 核心断言（二）：**当前这一刻**（`now = 0`）的池子里就得有新条目。
      *
-     * 只写 `size >= 3` 会留下"换成任意 3 条都算过"的漏洞，所以下面同时点名了
-     * 四条分属不同场景的 id —— 它们一旦被挤掉（比如有人调小了上限、或按分类改错了映射），
-     * 这里会立刻红。
+     * 光有"41 个周期之后总会出现"是不够的：如果新条目全被排到很后面的窗口，
+     * 用户前十几分钟看到的还是那两句老口诀。这条钉住"第一批窗口就有新东西"。
      */
     @Test
     fun batchCEntriesReachTheFallbackPool() {
-        val pools = SceneType.values().associateWith { fallbackPoolOf(it) }
+        val pools = SceneType.values().associateWith { PromptEngine.fallbackPool(it, 0L) }
         val reachable = pools.values.flatten().toSet()
 
-        val batchC = listOf(
-            "portrait_elbow_angle", "portrait_look_off_lens", "portrait_no_three_count",
-            "night_tap_to_focus", "night_lock_exposure",
-            "food_wipe_plate_edge", "food_show_the_cut",
-            "landscape_vertical_for_tall", "landscape_human_scale",
-            "indoor_kill_ceiling_light", "indoor_corner_ultrawide",
-            "pitfall_check_edges", "pitfall_finger_on_lens",
-            "params_portrait_mode_distance", "params_hdr_for_big_contrast"
-        )
-        val hit = batchC.filter { it in reachable }
+        val hit = batchCIds.filter { it in reachable }
+        assertTrue(hit.size >= 3, "第一批窗口里至少要有 3 条批次 C，实得 ${hit.size} 条：$hit")
+
+        // 逐场景点名：任何一个场景的第一批窗口被挤空，这里就红
         assertTrue(
-            hit.size >= 3,
-            "批次 C 至少要有 3 条真的能进兜底池，实得 ${hit.size} 条：$hit"
+            "params_portrait_mode_distance" in pools.getValue(SceneType.PORTRAIT),
+            "人像第一批窗口里没有「人像模式站开一米半」"
         )
-        assertTrue("portrait_elbow_angle" in pools.getValue(SceneType.PORTRAIT), "人像池里没有新条目")
-        assertTrue("night_lock_exposure" in pools.getValue(SceneType.NIGHT), "夜景池里没有新条目")
-        assertTrue("food_show_the_cut" in pools.getValue(SceneType.INDOOR), "室内/食物池里没有新条目")
-        assertTrue("landscape_human_scale" in pools.getValue(SceneType.LANDSCAPE), "风光池里没有新条目")
+        assertTrue(
+            "food_show_the_cut" in pools.getValue(SceneType.INDOOR),
+            "室内/食物第一批窗口里没有「切开把断面冲着镜头」"
+        )
+        assertTrue(
+            "landscape_human_scale" in pools.getValue(SceneType.LANDSCAPE),
+            "风光第一批窗口里没有「画面里放个人」"
+        )
+        assertTrue(
+            "pitfall_check_edges" in pools.getValue(SceneType.GENERAL),
+            "通用场景第一批窗口里没有「按快门前扫一遍四条边」"
+        )
     }
 
     /**
-     * 池里的每个 id 都解析得出文案。
+     * 池里每个 id 都解析得出文案（**多个周期都要成立**）。
      *
      * 解析失败的表现是 R10 退回一句泛泛的「先解决画面硬伤，再谈构图」—— 那等于
-     * 用户花钱看了张空卡片。所以这里断言**没有任何一次轮播落到那句兜底话上**，
-     * 同时断言文案不为空。
+     * 用户花钱看了张空卡片。所以断言没有任何一次出牌落到那句兜底话上。
      */
     @Test
     fun fallbackPoolHasNoUnresolvableIds() {
         val generic = "先解决画面硬伤，再谈构图"
         val broken = ArrayList<String>()
+        var checked = 0
         for (scene in SceneType.values()) {
-            for (k in 0 until 32) {
-                val candidate = PromptEngine.candidateFor(
-                    "R10_fallback_guide",
-                    signals(tech = tech(meanLuma = 0.5f), roll = 0f, scene = scene, stability = 0.05f),
-                    k * SchedulerConfig.GUIDE_INTERVAL_MS
-                ) ?: continue
-                if (candidate.action.isBlank() || candidate.action == generic) {
-                    broken.add("$scene/${candidate.tipId}")
+            for (cycle in 0..40) {
+                val candidates = candidatesInCycle(scene, cycle)
+                assertTrue(
+                    candidates.isNotEmpty(),
+                    "$scene 在周期 $cycle 一条都推不出来 —— 池子空了，这条断言会变成空转"
+                )
+                for (candidate in candidates) {
+                    checked++
+                    if (candidate.action.isBlank() || candidate.action == generic) {
+                        broken.add("$scene/周期$cycle/${candidate.tipId}")
+                    }
                 }
             }
         }
+        assertTrue(checked > 200, "只检查了 $checked 次出牌，覆盖不足，断言形同虚设")
         assertTrue(broken.isEmpty(), "这些候选解析不出文案：$broken")
     }
 
-    /** 仅浏览、自拍、运镜一个都不许进兜底池。 */
+    /** 仅浏览、自拍、运镜一个都不许进兜底池（**每一个周期**都要成立）。 */
     @Test
     fun fallbackPoolExcludesSelfieAndBrowseOnly() {
         val banned = TechniqueBookV15.SELFIE_IDS + TechniqueBookV15.BROWSE_ONLY_IDS
         for (scene in SceneType.values()) {
-            val pool = fallbackPoolOf(scene)
-            val leaked = pool.filter { it in banned }
-            assertTrue(leaked.isEmpty(), "$scene 的兜底池里出现了禁推条目：$leaked")
+            for (cycle in 0..40) {
+                val pool = PromptEngine.fallbackPool(scene, cycle * PromptEngine.FALLBACK_ROTATE_MS)
+                val leaked = pool.filter { it in banned }
+                assertTrue(leaked.isEmpty(), "$scene 周期 $cycle 的兜底池里出现了禁推条目：$leaked")
 
-            val moveLeaked = pool.filter { TechniqueBookV15.byId[it]?.category == TechCategory.CAMERA_MOVE }
-            assertTrue(moveLeaked.isEmpty(), "$scene 的兜底池里出现了运镜条目：$moveLeaked")
+                val moveLeaked = pool.filter {
+                    TechniqueBookV15.byId[it]?.category == TechCategory.CAMERA_MOVE
+                }
+                assertTrue(moveLeaked.isEmpty(), "$scene 周期 $cycle 的兜底池里出现了运镜条目：$moveLeaked")
+            }
         }
     }
 
-    /** 池子必须是确定性的：同一个 scene 连续问两次，id 序列完全相等。 */
+    /** 同一个 `nowMs` 必须给出同一个池子（纯函数，否则今天绿的用例明天会随机红）。 */
     @Test
     fun fallbackPoolIsDeterministic() {
         for (scene in SceneType.values()) {
+            for (cycle in listOf(0, 1, 2, 7, 41)) {
+                val now = cycle * PromptEngine.FALLBACK_ROTATE_MS
+                assertEquals(
+                    PromptEngine.fallbackPool(scene, now),
+                    PromptEngine.fallbackPool(scene, now),
+                    "$scene 周期 $cycle 的池子两次结果不一致"
+                )
+                assertEquals(
+                    shownInCycle(scene, cycle),
+                    shownInCycle(scene, cycle),
+                    "$scene 周期 $cycle 的出牌序列两次结果不一致"
+                )
+            }
+        }
+    }
+
+    /**
+     * 池子**真的在滑**：相邻两个周期的池子必须不同。
+     *
+     * 只对候选数超过一个窗口的场景成立 —— `ACTION`（3 条候选）和 `GENERAL`（6 条）
+     * 一个窗口就装得下，滑了也是同一组，这两类断言"不滑"。将来若它们多起来的条目
+     * 撑破了窗口，这条会红，届时把它们挪到上面那组即可（这是刻意的提醒，不是漏测）。
+     */
+    @Test
+    fun fallbackPoolRotatesAcrossCycles() {
+        val rotating = listOf(
+            SceneType.NIGHT, SceneType.BACKLIT, SceneType.PORTRAIT,
+            SceneType.LANDSCAPE, SceneType.INDOOR
+        )
+        for (scene in rotating) {
+            assertNotEquals(
+                PromptEngine.fallbackPool(scene, 0L),
+                PromptEngine.fallbackPool(scene, PromptEngine.FALLBACK_ROTATE_MS),
+                "$scene 的池子没有随周期滑动 —— 15 条新技巧就又会有条目永远轮不到"
+            )
+        }
+        for (scene in listOf(SceneType.ACTION, SceneType.GENERAL)) {
             assertEquals(
-                fallbackPoolOf(scene),
-                fallbackPoolOf(scene),
-                "$scene 的兜底池两次结果不一致 —— 排序一旦沾上哈希序，今天绿的用例明天会随机红"
+                PromptEngine.fallbackPool(scene, 0L),
+                PromptEngine.fallbackPool(scene, PromptEngine.FALLBACK_ROTATE_MS),
+                "$scene 的候选不足一个窗口，不该滑动"
             )
         }
     }
 
     /**
-     * 池子长度必须在 2..8 之间。
+     * 池子长度必须在 2..8 之间，且精选两条永远在前两位。
      *
-     * 下界 2 = 精选保底，上界 8 = 精选 2 + 库内 6。上界不是省内存，而是**轮播周期**：
-     * R10 每 8 秒才说一句话，8 条已经是 64 秒一轮。池子再大，同一条要等太久，
-     * 反而更像"没提示"。
+     * 上界 8 = 精选 2 + 窗口 6。上界不是省内存，而是**轮播周期**：R10 每 8 秒才说一句，
+     * 8 条已经是 64 秒一轮。窗口再大，同一条要等更久，反而更像"没提示"。
      */
     @Test
     fun fallbackPoolIsBounded() {
@@ -423,14 +524,16 @@ class PromptEngineTest {
             SceneType.GENERAL to listOf("light_white_add_black_minus", "basic_protect_highlights")
         )
         for (scene in SceneType.values()) {
-            val pool = fallbackPoolOf(scene)
-            assertTrue(pool.size in 2..8, "$scene 的池子长度是 ${pool.size}，应在 2..8")
-            assertEquals(pool.size, pool.distinct().size, "$scene 的池子里有重复 id：$pool")
-            // 精选两条必须仍在最前面：池子变大不许把打磨过的两句挤掉
+            for (cycle in 0..40) {
+                val pool = PromptEngine.fallbackPool(scene, cycle * PromptEngine.FALLBACK_ROTATE_MS)
+                assertTrue(pool.size in 2..8, "$scene 周期 $cycle 的池子长度是 ${pool.size}，应在 2..8")
+                assertEquals(pool.size, pool.distinct().size, "$scene 周期 $cycle 的池子里有重复：$pool")
+            }
+            // 精选两条必须仍在最前面：窗口滑动不许把打磨过的两句挤掉
             assertEquals(
                 curated.getValue(scene),
-                pool.take(2),
-                "$scene 的精选两句被挤出前两位了：$pool"
+                PromptEngine.fallbackPool(scene, 0L).take(2),
+                "$scene 的精选两句被挤出前两位了"
             )
         }
     }
