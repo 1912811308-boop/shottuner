@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  桌面长按图标的快捷方式（v1.3.4）。
+
+  存在的理由：Android 上「悬浮教练」每次都得走「打开 App → 找到功能页 → 点按钮 →
+  （首次还多一页说明）→ 系统录屏授权」这条路，而录屏授权是系统强制的、绕不过。
+  能做的是把前面几步压成一步：长按图标 →「开始悬浮教练」→ 直接到系统授权框。
+
+  ★ 只做"少点两下"，不做"绕过授权"：
+    这条 intent 落到的处理和普通点击**完全相同**（MainActivity.startFloatingCoach()）：
+    隐私未同意 → 照样弹隐私门；没悬浮窗权限 → 照样跳设置；录屏 → 照样弹系统框。
+
+  ★★ 这里**故意不写 android:targetPackage**，只靠 action + Manifest 里的 intent-filter 定位。
+    原因是本项目 debug 构建带 applicationIdSuffix=".debug"（见 app/build.gradle.kts），
+    而 targetPackage 在资源文件里**只能写字面量**，AGP 3.0 之后也不支持资源占位符。
+    写成 "com.shottuner.app" → debug 包里这条快捷方式的 component 指向另一个包，
+    长按图标要么看不到它、要么点了报"应用未安装"；要修就得再维护一份
+    app/src/debug/res/xml/shortcuts.xml，两份必须同步，漏一次就静默失效。
+    隐式 action 没有这个问题：release / debug 走的是同一个 action，
+    目标 Activity 由 AndroidManifest.xml 里的 intent-filter 决定，两个变体都成立。
+
+    代价（已接受，写在这里免得以后当成 bug 查）：用户同时装了正式包与 debug 包时，
+    系统可能弹一次"用哪个应用打开"。这是开发机才有的情形，且不影响两条包各自可用。
+
+    ⚠️ 顺带一条硬约束：shortcuts.xml 里的 <extra> 只能存**字符串**（系统按 String 塞进
+    Intent），而 Intent.getBooleanExtra() 对 String 是硬转型、会抛 ClassCastException。
+    所以 extra 只当冗余，判别主用 action —— 见 MainActivity.isCoachShortcutIntent()。
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="start_coach"
+        android:shortcutLongLabel="@string/shortcut_start_coach_long"
+        android:shortcutShortLabel="@string/shortcut_start_coach_short">
+
+        <!-- action 是 <intent> 唯一必填属性；targetClass/targetPackage 都可省（省了就是隐式） -->
+        <intent android:action="com.shottuner.app.action.START_COACH">
+            <extra
+                android:name="start_coach"
+                android:value="true" />
+        </intent>
+    </shortcut>
+</shortcuts>

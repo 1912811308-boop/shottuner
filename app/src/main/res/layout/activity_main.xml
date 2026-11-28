@@ -1676,7 +1676,7 @@
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
                 android:minHeight="44dp"
-                android:text="在系统相机上浮一个建议卡"
+                android:text="@string/float_btn_idle"
                 android:textColor="@color/st_accent"
                 android:textSize="11sp"
                 app:backgroundTint="@color/st_scrim"
@@ -2142,79 +2142,141 @@
       而且它是 Activity 的一部分，配置变更（旋转/字体缩放）时状态自然跟着走。
 
       z 序：它声明在最后，因此盖住包括 llControlBar 在内的全部内容。
+
+      ══ v1.3.4 重修：从「铺满的不可滚动 LinearLayout」改成「可滚动 + 居中卡片」══
+
+      改之前的形态：`llPrivacyGate` 是 LinearLayout，0dp/0dp 铺满、gravity=center_vertical、
+      **不可滚动**，子节点是 标题 + 五段说明 + 三个按钮。内容总高在短窗口下会超过可用高度，
+      而 LinearLayout 不会滚 —— 超出的部分被父容器直接裁掉，用户看到的就是一大片近黑底
+      （st_bg #0E1113）+ 一个也点不到的按钮区。clover 报的「首次进 App 隐私提示一片黑」
+      就是这个，不是渲染问题，是**布局不可滚动**。
+
+      现在的约束关系（动这里之前请先读一遍，四条互相咬合）：
+        1) NestedScrollView：0dp/0dp 铺满覆盖层 + fillViewport="true"
+           → 它会把唯一子 View 的最小高度抬到"视口高 − 上下 padding"，
+             这一步是"内容不足一屏也能居中"的前提；
+        2) 中间那层 ConstraintLayout：wrap_content，被 fillViewport 测成 EXACTLY 视口高
+           → 卡片用 top/bottom 双约束居中：内容不足一屏时居中显示，
+             内容超过一屏时这一层自然变高、整页可滚，**顶部不会被顶出去**；
+        3) 卡片 LinearLayout：0dp 宽 + start/end 双约束 + constraintWidth_max="480dp"
+           → 手机上宽度是"屏宽 − 2×24dp"，平板与横屏上封顶 480dp，不会拉成一条长条；
+             卡片底复用 bg_panel（#F212161A，比 st_bg 亮一档，20dp 圆角 + 1dp 白描边），
+             与其它面板是同一套视觉，不新造语言；
+        4) 三个出口按钮留在卡片里跟着正文一起滚。
+           ⚠️ 不要把它们拆出来做"固定底栏"：内容区一矮，正文在小屏上要滚两屏才能看到
+              "同意"，反而更难。滚动到底三种高度（竖屏 / 横屏 / 分屏）都成立。
+
+      上下留白：顶 16dp、底 24dp。不按横竖屏分档 —— Activity 在 Manifest 里锁了
+      `screenOrientation="portrait"`，`values-land` 永远不会被选中；而 16dp 本身
+      就是"收紧"的那一档，竖屏不显空旷、横屏（分屏 / 折叠展开）也留得住高度。
+      底部比顶部多 8dp 是给手势条 / 三键导航留的安全区：滚到底时最后一个按钮
+      （"暂不同意"）不能被系统手势区压住。
     -->
-    <LinearLayout
+    <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/llPrivacyGate"
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:background="@color/st_bg"
         android:clickable="true"
         android:focusable="true"
-        android:gravity="center_vertical"
-        android:orientation="vertical"
-        android:paddingHorizontal="28dp"
-        android:paddingVertical="32dp"
         android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="开始前请了解"
-            android:textColor="@color/st_text"
-            android:textSize="20sp"
-            android:textStyle="bold" />
+        <!-- 用 paddingStart/End/Top/Bottom 而不是 paddingHorizontal/Vertical：
+             后两个是 API 26 才有的属性，minSdk 是 24，在 24/25 上会被静默忽略。 -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/svPrivacyGate"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:fillViewport="true"
+            android:paddingStart="24dp"
+            android:paddingTop="16dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="24dp"
+            android:scrollbars="vertical"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent">
 
-        <TextView
-            android:id="@+id/tvPrivacySummary"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:lineSpacingMultiplier="1.45"
-            android:text="· 这个 App 不联网，也不上传任何东西 —— 它没有网络权限，技术上也做不到。\n\n· 你的照片只留在你自己的相册里，我们不留副本。\n\n· 曝光、构图、清晰度的分析全部在你的手机上完成。\n\n· 需要相机权限用于取景与拍照；「悬浮教练」还需要录屏与通知权限，二者都是可选的。\n\n· 你可以拒绝任何一项权限，只有对应功能不可用，其余照常。"
-            android:textColor="@color/st_text_body"
-            android:textSize="13sp" />
+            <androidx.constraintlayout.widget.ConstraintLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
 
-        <TextView
-            android:id="@+id/btnPrivacyFull"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:layout_marginTop="24dp"
-            android:background="@drawable/bg_thumb"
-            android:gravity="center"
-            android:text="查看完整隐私政策"
-            android:textColor="@color/st_accent"
-            android:textSize="14sp" />
+                <LinearLayout
+                    android:id="@+id/cardPrivacyGate"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_panel"
+                    android:orientation="vertical"
+                    android:padding="20dp"
+                    app:layout_constraintBottom_toBottomOf="parent"
+                    app:layout_constraintEnd_toEndOf="parent"
+                    app:layout_constraintStart_toStartOf="parent"
+                    app:layout_constraintTop_toTopOf="parent"
+                    app:layout_constraintWidth_max="480dp">
 
-        <TextView
-            android:id="@+id/btnPrivacyAgree"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="52dp"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_chip"
-            android:backgroundTint="@color/st_accent"
-            android:gravity="center"
-            android:text="同意并继续"
-            android:textColor="@color/st_bg"
-            android:textSize="15sp"
-            android:textStyle="bold" />
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="开始前请了解"
+                        android:textColor="@color/st_text"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/btnPrivacyDeny"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:layout_marginTop="4dp"
-            android:gravity="center"
-            android:text="暂不同意"
-            android:textColor="@color/st_text_dim"
-            android:textSize="13sp" />
-    </LinearLayout>
+                    <TextView
+                        android:id="@+id/tvPrivacySummary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:lineSpacingMultiplier="1.45"
+                        android:text="· 这个 App 不联网，也不上传任何东西 —— 它没有网络权限，技术上也做不到。\n\n· 你的照片只留在你自己的相册里，我们不留副本。\n\n· 曝光、构图、清晰度的分析全部在你的手机上完成。\n\n· 需要相机权限用于取景与拍照；「悬浮教练」还需要录屏与通知权限，二者都是可选的。\n\n· 你可以拒绝任何一项权限，只有对应功能不可用，其余照常。"
+                        android:textColor="@color/st_text_body"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/btnPrivacyFull"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="20dp"
+                        android:background="@drawable/bg_thumb"
+                        android:gravity="center"
+                        android:minHeight="48dp"
+                        android:text="查看完整隐私政策"
+                        android:textColor="@color/st_accent"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:id="@+id/btnPrivacyAgree"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/bg_chip"
+                        android:backgroundTint="@color/st_accent"
+                        android:gravity="center"
+                        android:minHeight="52dp"
+                        android:text="同意并继续"
+                        android:textColor="@color/st_bg"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/btnPrivacyDeny"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:gravity="center"
+                        android:minHeight="48dp"
+                        android:text="暂不同意"
+                        android:textColor="@color/st_text_dim"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </androidx.constraintlayout.widget.ConstraintLayout>
+        </androidx.core.widget.NestedScrollView>
+    </androidx.constraintlayout.widget.ConstraintLayout>
 
     <!--
       隐私政策全文页。与覆盖层同层级、声明更晚，所以能盖住覆盖层；

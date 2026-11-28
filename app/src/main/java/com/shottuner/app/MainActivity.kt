@@ -19,6 +19,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -371,6 +372,27 @@ class MainActivity : AppCompatActivity() {
     /** 用户点了「悬浮教练」，正在等通知权限的回调 */
     private var pendingCoachStart = false
 
+    /**
+     * 桌面快捷方式「开始悬浮教练」已经点了，但那会儿还没同意隐私（v1.3.4）。
+     *
+     * 用户的意图很明确（他就是要开悬浮教练），所以不在隐私门上把他劝退：
+     * 让他读完、点「同意并继续」之后自动接着走，省掉"再点一次按钮"这一步。
+     * 点「暂不同意」则清掉这个标记 —— 那是一次明确的拒绝，不该被记着。
+     */
+    private var pendingShortcutCoach = false
+
+    /**
+     * 「悬浮中 · 长按停止」这句提示，本次 Activity 会话是否已经说过。
+     *
+     * 需要它是因为两个窗口都会想说这句话：启动成功的那一刻（[startCoachService]），
+     * 以及从后台回到 App 时发现服务还在跑那一刻（[syncCoachEntryState]）。
+     * 两个都说一遍就是连响两声 Toast，所以谁先说谁把标记置真。
+     */
+    private var coachRunningHintShown = false
+
+    /** 省电白名单说明框正在显示。防止 onResume 连着来两次把两个框叠在一起 */
+    private var batteryHintShowing = false
+
     /** 上一次按返回键的时刻（双击退出用） */
     private var lastBackAt = 0L
 
@@ -501,8 +523,13 @@ class MainActivity : AppCompatActivity() {
         binding.btnFlip.setOnClickListener { onFlipClick() }
         binding.btnCopyVideo.setOnClickListener { copyVideoPlan() }
         binding.btnFloat.setOnClickListener { startFloatingCoach() }
+        // 长按停止是**隐藏交互**（v1.3.4 起由按钮文案「悬浮中 · 长按停止」显式提示）：
+        // 停止不需要任何系统授权，所以给它一个"不用回系统设置"的最短路径。
         binding.btnFloat.setOnLongClickListener {
             stopService(Intent(this, ScreenCaptureService::class.java))
+            // 服务的 onDestroy 是异步的，等它回来按钮会闪一下；用户点完就该立刻看到结果
+            renderFloatButton(running = false)
+            coachRunningHintShown = false
             Toast.makeText(this, "悬浮教练已停止", Toast.LENGTH_SHORT).show()
             true
         }
@@ -526,6 +553,9 @@ class MainActivity : AppCompatActivity() {
         // 决定"要不要申请权限 / 要不要启动 CameraEngine"。
         setupPrivacyGate()
         refreshCameraState()
+        // 桌面快捷方式「开始悬浮教练」（v1.3.4）。放在最后：隐私门已就位、
+        // 相机状态已收敛，这时再决定"要不要直接走悬浮教练流程"才不会和首帧渲染打架。
+        handleCoachShortcutIntent(intent, savedInstanceState)
     }
 
     // ---------------- G1 任务卡：UI 装配 ----------------
@@ -934,6 +964,12 @@ class MainActivity : AppCompatActivity() {
         binding.llPrivacyFull.visibility = View.GONE
         binding.llPrivacyGate.visibility = View.GONE
         refreshCameraState()
+        // 从桌面快捷方式进来的用户，意图已经表达过了（他要开悬浮教练）——
+        // 同意之后直接接着走，不再让他回功能页找一次按钮。
+        if (pendingShortcutCoach) {
+            pendingShortcutCoach = false
+            startFloatingCoach()
+        }
     }
 
     /**
@@ -944,6 +980,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun declinePrivacy() {
         privacyAccepted = false
+        // 「暂不同意」是一次明确的拒绝：快捷方式带来的待办意图到此作废
+        pendingShortcutCoach = false
         binding.llPrivacyFull.visibility = View.GONE
         binding.llPrivacyGate.visibility = View.GONE
         refreshCameraState()
@@ -3247,6 +3285,19 @@ class MainActivity : AppCompatActivity() {
             showPrivacyGate()
             return
         }
+        // 已经在跑了就不要再走一遍录屏授权（v1.3.4）。
+        // 不只是"少弹一个框"：第二次 ACTION_START 会在**同一个** Service 实例上
+        // 重建 MediaProjection 并覆盖 `overlay` 字段，上一个浮窗因此再没人 hold，
+        // 窗口就漏在屏幕上了。按钮文案这时显示的是「悬浮中 · 长按停止」，
+        // 想重启的话长按停止再单击，路径是通的。
+        if (ScreenCaptureService.isRunning) {
+            Toast.makeText(
+                this,
+                "悬浮教练已经在跑了。想重启就长按按钮停掉，再点一次",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
         // 第一次点：先给一页说明（这是给审核看的"为什么需要录屏+悬浮窗"的证据），
         // 用户点过「开始」之后就不再打扰。
         if (!uiPrefs.getBoolean(KEY_COACH_INTRO_SHOWN, false)) {
@@ -3376,8 +3427,181 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "启动失败，请重试", Toast.LENGTH_LONG).show()
             return
         }
+        // 服务是异步起的（startForeground 在 onStartCommand 里），这里先按"已起"渲染，
+        // 下次 onResume 会用 ScreenCaptureService.isRunning 校一次，错了会自己纠回来。
+        renderFloatButton(running = true)
+        // 这句 Toast 里已经带上了「长按按钮可关闭」，所以回到 App 时不再重复提示
+        coachRunningHintShown = true
         Toast.makeText(this, "悬浮卡已就位，去打开系统相机试试（长按按钮可关闭）", Toast.LENGTH_LONG).show()
         moveTaskToBack(true)
+    }
+
+    // ---------------- 悬浮教练入口：快捷方式 / 按钮状态 / 省电引导（v1.3.4） ----------------
+
+    /**
+     * 桌面长按图标 →「开始悬浮教练」的入口处理。
+     *
+     * ★ `savedInstanceState != null` 必须直接返回。旋转、分屏、字体缩放、深色模式切换
+     *   都会重建 Activity，而重建时系统把**同一个 Intent 原样**再递进来一次 ——
+     *   不看这个判据的话，用户每转一次屏就会再被弹一次系统录屏授权框，
+     *   看起来就像应用疯了。这条是本次改动里最容易漏、后果又最显眼的一处。
+     *
+     * ★ 走 post：onCreate 里窗口还没画出来，直接 chained 到 Settings / 录屏授权
+     *   会在首帧之前抢焦点。post 到根 View 上，等于"首帧排完之后再做"，
+     *   观感是"App 起来了，紧接着弹授权"，而不是"点了图标没反应"。
+     */
+    private fun handleCoachShortcutIntent(intent: Intent?, savedInstanceState: Bundle?) {
+        if (savedInstanceState != null) return
+        if (!isCoachShortcutIntent(intent)) return
+        binding.root.post {
+            if (isFinishing || isDestroyed) return@post
+            if (!privacyAccepted) {
+                // 隐私门此刻已经显示（setupPrivacyGate 负责）。这里只补一句解释，
+                // 让用户知道"点了同意就会继续"，而不是以为快捷方式失效了。
+                pendingShortcutCoach = true
+                Toast.makeText(
+                    this,
+                    "先看一眼隐私说明，点「同意并继续」后会自动开始",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@post
+            }
+            startFloatingCoach()
+        }
+    }
+
+    /**
+     * 判断这次启动是不是来自桌面快捷方式。
+     *
+     * ★ 主判据是 action，不是 extra。原因见 res/xml/shortcuts.xml 顶部注释：
+     *   `<extra>` 只能存字符串，系统会把 "true" 按 String 塞进 Intent，
+     *   而 `Intent.getBooleanExtra()` 对 String 做的是硬转型、会抛
+     *   ClassCastException —— 直接写 getBooleanExtra 就是一个必崩的入口。
+     *   所以这里按 Object 取出来、按类型分发，extra 只当冗余判据。
+     */
+    private fun isCoachShortcutIntent(intent: Intent?): Boolean {
+        if (intent == null) return false
+        if (intent.action == ACTION_START_COACH) return true
+        val raw: Any? = try {
+            @Suppress("DEPRECATION")
+            intent.extras?.get(EXTRA_START_COACH)
+        } catch (e: Throwable) {
+            null
+        }
+        return when (raw) {
+            null -> false
+            is Boolean -> raw
+            is String -> raw.equals("true", ignoreCase = true)
+            is Number -> raw.toInt() != 0
+            else -> false
+        }
+    }
+
+    /**
+     * 悬浮教练入口按钮的文案。
+     *
+     * 只是文案，不改交互 —— 单击启动、长按停止，两件事都还在。
+     * 目的是让"服务是不是还活着"这件事在界面上有个答案：
+     * 以前无论服务在跑还是被系统杀了，按钮长得一模一样，用户只能再点一次才知道。
+     */
+    private fun renderFloatButton(running: Boolean) {
+        binding.btnFloat.text = getString(
+            if (running) R.string.float_btn_running else R.string.float_btn_idle
+        )
+    }
+
+    /**
+     * 读一次服务的运行状态，同步按钮文案、必要时提示一次长按停止、必要时给省电引导。
+     *
+     * 只在 [onResume] 调，**不轮询**：服务状态变化必然伴随一次可见性变化
+     * （启动后 moveTaskToBack 退到后台，停止要么从通知栏、要么长按按钮回前台），
+     * 定时轮询纯粹是白烧电。
+     */
+    private fun syncCoachEntryState() {
+        val running = ScreenCaptureService.isRunning
+        renderFloatButton(running)
+        if (running && !coachRunningHintShown) {
+            coachRunningHintShown = true
+            Toast.makeText(this, "悬浮教练还在跑 · 长按按钮可停止", Toast.LENGTH_SHORT).show()
+        }
+        if (running) maybeShowBatteryHint()
+    }
+
+    /**
+     * 省电白名单引导：**一次性**，且可以跳过。
+     *
+     * 为什么值得专门说一次：悬浮教练是前台服务，MIUI / EMUI 这类 ROM 会在后台清理它。
+     * 被清掉的后果不是"重新点一下"，而是**录屏授权一起失效** —— 下次必须重新走一遍
+     * 系统授权框。这是 Android 的安全设计（录屏令牌是单次会话的），应用侧无解。
+     * 所以这里能做的只有一件事：告诉用户"把本应用加入省电白名单能大幅降低被清理的
+     * 概率"，以及"去哪儿改"。
+     *
+     * ★ 文案不承诺"点上就永不掉"。白名单只是降低概率，说成"永不清理"就是假话，
+     *   而且用户一旦真的被清掉，就会觉得整个功能是骗人的。
+     * ★ 用设置页跳转（[Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS]），
+     *   不用 ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS：后者要申请
+     *   REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 权限，部分 ROM 与商店会审核这一项。
+     * ★ 标记在弹框**之前**落盘：用户看完就杀进程 / 直接切走也不会再弹第二次。
+     */
+    private fun maybeShowBatteryHint() {
+        if (batteryHintShowing) return
+        if (uiPrefs.getBoolean(KEY_BATTERY_PROMPT_SHOWN, false)) return
+        // 已经在白名单里就没什么可说的了，直接记成已提示，省掉一次无意义的打扰
+        if (isIgnoringBatteryOptimizations()) {
+            uiPrefs.edit().putBoolean(KEY_BATTERY_PROMPT_SHOWN, true).apply()
+            return
+        }
+        batteryHintShowing = true
+        uiPrefs.edit().putBoolean(KEY_BATTERY_PROMPT_SHOWN, true).apply()
+        AlertDialog.Builder(this)
+            .setTitle("让悬浮教练留久一点")
+            .setMessage(
+                "悬浮教练开着的时候，手机系统（MIUI / 省电助手一类）可能会把它清掉。\n\n" +
+                    "被清掉之后，屏幕录制授权会一起失效 —— 下次得重新在系统弹窗里授权一次。" +
+                    "这是 Android 的安全限制，应用自己没法恢复，也没法替你记住。\n\n" +
+                    "把「光影调参」加入省电白名单，可以大幅降低被系统清理的概率（不等于永不清理）。" +
+                    "如果你觉得每次重新授权也能接受，那就先跳过。"
+            )
+            .setPositiveButton("去设置") { _, _ -> openBatteryOptimizationSettings() }
+            .setNegativeButton("不再提醒", null)
+            .setOnDismissListener { batteryHintShowing = false }
+            .show()
+    }
+
+    /** 是否已在系统省电白名单里。`isIgnoringBatteryOptimizations` 是 API 23+，minSdk 24 恒可用 */
+    private fun isIgnoringBatteryOptimizations(): Boolean = try {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        pm.isIgnoringBatteryOptimizations(packageName)
+    } catch (e: Throwable) {
+        // 读不到就当"没有"。宁可多提示一次，也不要因为一个查询失败把引导整个吞掉
+        Diag.w(TAG, "查询省电白名单状态失败", e)
+        false
+    }
+
+    /**
+     * 打开系统里能改"省电策略"的页面。
+     *
+     * 三级回退，因为各 ROM 的候选页不一样（MIUI 的省电策略在应用详情里，
+     * AOSP 在电池优化列表里）。每一步都 runCatching，跳不过去就往下试，
+     * 全失败才让用户自己找 —— 但即使那样也要给出路径，不能只说"失败"。
+     */
+    private fun openBatteryOptimizationSettings() {
+        val pkgUri = Uri.parse("package:$packageName")
+        val candidates = listOf(
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri),
+            Intent(Settings.ACTION_SETTINGS)
+        )
+        for (candidate in candidates) {
+            val opened = runCatching { startActivity(candidate) }.isSuccess
+            if (opened) return
+        }
+        Diag.w(TAG, "系统设置页全部打不开，只能提示用户手动改省电策略")
+        Toast.makeText(
+            this,
+            "打不开系统设置。请手动到「设置 → 应用 → 光影调参 → 省电策略」改成「无限制」",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     /**
@@ -3669,6 +3893,26 @@ class MainActivity : AppCompatActivity() {
         /** 悬浮教练说明页是否已展示过。只在用户点过「开始」后置真 */
         private const val KEY_COACH_INTRO_SHOWN = "coach_intro_shown"
 
+        /**
+         * 省电白名单引导是否已经弹过（v1.3.4）。
+         *
+         * 语义是"已经打扰过"，不是"用户点过去设置"—— 用户看过后选「不再提醒」、
+         * 直接返回、甚至杀掉进程，都算已打扰，不该再弹第二次。
+         */
+        private const val KEY_BATTERY_PROMPT_SHOWN = "coach_battery_prompt_shown"
+
+        /**
+         * 桌面快捷方式「开始悬浮教练」的 action。
+         *
+         * ★ 三处必须完全一致：这里、res/xml/shortcuts.xml 的 `<intent android:action>`、
+         *   AndroidManifest.xml 里 MainActivity 的第二个 intent-filter。
+         *   改一处漏一处不会编译报错 —— 只会表现为"长按图标点进去只是打开了 App"。
+         */
+        private const val ACTION_START_COACH = "com.shottuner.app.action.START_COACH"
+
+        /** 同上，快捷方式 intent 里的冗余标记（只能以 String 送达，见 isCoachShortcutIntent） */
+        private const val EXTRA_START_COACH = "start_coach"
+
         /** 说明文案。这里放教学内容，不放口号——用户要的是「下一步手怎么动」 */
         private val HELP_TEXT = """
 【照片怎么拨】
@@ -3720,6 +3964,8 @@ ISO 管干净与明亮 —— 越低越干净，弱光下每加一档噪点肉�
         // 从系统设置页授权回来时，相机不会自己重启（架构师 R3/R7）：
         // 这里统一收口，权限变更、进程被回收后返回、受限模式切回，都靠它收敛。
         refreshCameraState()
+        // 悬浮教练的运行状态也在这里收敛一次（读一个静态标记，不轮询、不查服务）
+        syncCoachEntryState()
     }
 
     override fun onPause() {

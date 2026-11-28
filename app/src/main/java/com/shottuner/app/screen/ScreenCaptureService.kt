@@ -70,6 +70,25 @@ class ScreenCaptureService : Service() {
         /** PendingIntent 的 requestCode。两个入口必须不同，否则会互相覆盖 */
         private const val REQ_CONTENT = 1001
         private const val REQ_STOP = 1002
+
+        /**
+         * 悬浮教练此刻是否真的在跑（v1.3.4）。
+         *
+         * 给 MainActivity 在 onResume 里读一次，用来决定入口按钮显示"在系统相机上浮一个
+         * 建议卡"还是"悬浮中 · 长按停止"。**只读标记，不 bind、不轮询** ——
+         * 为了一句文案去 bindService 会把服务的生命周期和界面绑在一起，得不偿失。
+         *
+         * ★ 为什么放在进程内的静态字段而不是 SharedPreferences：
+         *   它是**进程内状态**，不是用户偏好。进程一死（被系统杀 / 崩溃），录屏令牌也就没了，
+         *   服务必然不在跑 —— 这时静态字段随类一起重置成 false，**恰好就是正确答案**。
+         *   落盘反而会留下一个"上次写着 true"的陈旧值，需要额外的失效逻辑。
+         *
+         * ★ 别把它改写成"服务被杀了也能恢复"的线索：它只能如实反映本进程里
+         *   录屏管线是否建起来了，重建不了就是重建不了。
+         */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
     }
 
     private var projection: MediaProjection? = null
@@ -179,6 +198,9 @@ class ScreenCaptureService : Service() {
             return
         }
         projection = p
+        // 到这里才算"真的在跑"：前台服务已起、录屏令牌已换成 MediaProjection。
+        // 在上面任何一步失败都不会置真 —— 那几条路都会走 stopSelf() → cleanup()。
+        isRunning = true
 
         // Android 14 要求注册回调，否则部分机型会直接拒绝投屏
         p.registerCallback(object : MediaProjection.Callback() {
@@ -491,6 +513,9 @@ class ScreenCaptureService : Service() {
     }
 
     private fun cleanup() {
+        // 先落状态再拆管线：cleanup() 可从三条路进来（用户停止 / 投屏回调 onStop /
+        // onDestroy），而且可能被重复调用，置 false 是幂等的。
+        isRunning = false
         unregisterDisplayListener()
         try {
             aiVision.close()

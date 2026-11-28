@@ -80,6 +80,33 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              桌面长按图标的「开始悬浮教练」（v1.3.4）。
+
+              为什么是一条 intent-filter 而不是在 res/xml/shortcuts.xml 里写
+              targetPackage：debug 构建带 applicationIdSuffix=".debug"，targetPackage
+              在资源文件里只能写字面量、AGP 3.0 之后也不支持占位符 ——
+              写死正式包名会让 debug 包里的这条快捷方式指向另一个应用。
+              用 action 定位就没有变体差异（详见 shortcuts.xml 顶部注释）。
+
+              ★ DEFAULT 分类不能省：startActivity 发的隐式 intent 在解析时按默认带
+                CATEGORY_DEFAULT，filter 里少了它这条 intent 就匹配不上。
+
+              ★ 这个 action 落进 MainActivity 后只做一件事：调 startFloatingCoach()
+                （隐私门 / 悬浮窗权限 / 录屏授权三道门槛一个都不跳过）。
+                也就是说，外部应用**最多能让本应用弹一次隐私门或系统授权框**，
+                和"点一下桌面图标"没有区别，不构成新的越权面。
+            -->
+            <intent-filter>
+                <action android:name="com.shottuner.app.action.START_COACH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <!-- 静态快捷方式的注册点。必须写在带 MAIN/LAUNCHER 的那个 activity 上 -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <service
