@@ -74,7 +74,7 @@ object PromptEngine {
         val weight: Int,
         /**
          * 该规则在哪个 tab 生效。默认拍照页 —— 这是模式隔离的唯一实现方式（§5.4）：
-         * 不给 83 条技法逐个填白名单，而是让规则自带 tab 条件，
+         * 不给 98 条技法逐个填白名单，而是让规则自带 tab 条件，
          * 效果等价且不会漏填。取 [TAB_ANY] 表示全页适用。
          */
         val tabScope: Int = TAB_PHOTO,
