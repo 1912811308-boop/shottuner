@@ -1129,7 +1129,7 @@ object PhotographyBook {
     )
 
     /**
-     * 技法总库：39 条老库 + 44 条 v1.5 新库 = 83 条。
+     * 技法总库：39 条老库 + 59 条新库 = 98 条。
      *
      * `by lazy` 而不是直接赋值，是为了绕开两个 object 的初始化顺序问题：
      * [TechniqueBookV15] 的 `combined` 反过来又指向这里。惰性求值让谁先被

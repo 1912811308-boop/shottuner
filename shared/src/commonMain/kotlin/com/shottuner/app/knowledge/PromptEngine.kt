@@ -127,7 +127,7 @@ object PromptEngine {
         "move_walk_not_zoom" to "想拉近就走过去，别捏屏幕放大"
     )
 
-    /** R10 兜底池的卡片主文案。 */
+    /** R10 兜底池里**精选**那一部分的卡片主文案（id → 一句话）。 */
     private val FALLBACK_TEXT = mapOf(
         TIP_EXPOSURE_BASICS to "白加黑减：画面白多就加曝光，黑多就减曝光",
         TIP_PROTECT_HIGHLIGHT to "先保高光，亮部一糊就再也拉不回来",
@@ -138,8 +138,17 @@ object PromptEngine {
         TIP_HORIZON to "打开网格，把地平线压到横线上"
     )
 
-    /** 兜底轮播池：按场景给两条通用口诀。 */
-    private fun fallbackPool(scene: SceneType): List<String> = when (scene) {
+    /**
+     * 兜底池里**从技法库补进来**的候选上限（不含前面两条精选，合计最多 8 条）。
+     *
+     * 为什么要有上限：R10 是轮播，用户每 `GUIDE_INTERVAL_MS` 才看到一句。池子越大，
+     * 同一条再次轮到要等的时间就越长 —— 8 条已经是 64 秒一轮，再大就变成"偶尔说一句话
+     * 的陌生卡片"，反而不像提示。上限的存在不是为了省内存。
+     */
+    private const val FALLBACK_LIBRARY_LIMIT = 6
+
+    /** 每个场景**精选**的两条口诀。id 与顺序都是历史打磨过的，不许动。 */
+    private fun curatedFallback(scene: SceneType): List<String> = when (scene) {
         SceneType.NIGHT -> listOf(TIP_NIGHT_STATIC, TIP_EXPOSURE_BASICS)
         SceneType.BACKLIT -> listOf(TIP_BACKLIT_FACE, TIP_EXPOSURE_BASICS)
         SceneType.PORTRAIT -> listOf(TIP_EYES_THIRDS, TIP_HEADROOM)
@@ -147,6 +156,82 @@ object PromptEngine {
         SceneType.INDOOR -> listOf(TIP_NIGHT_STATIC, TIP_EXPOSURE_BASICS)
         SceneType.ACTION -> listOf(TIP_PROTECT_HIGHLIGHT, TIP_EXPOSURE_BASICS)
         SceneType.GENERAL -> listOf(TIP_EXPOSURE_BASICS, TIP_PROTECT_HIGHLIGHT)
+    }
+
+    /**
+     * 场景 → 可以补进兜底池的技法分类。
+     *
+     * 两条边界：
+     * - **食物没有自己的 `SceneType`**。`food_*` 那几条的 `trigger.scenes` 本来写的就是
+     *   `INDOOR`，所以食物分类挂在 INDOOR 上，而不是硬造一个场景值。
+     * - **GENERAL 刻意留空**。往通用场景里塞 `BASIC` 会稀释「先做稳基本功」这条主张
+     *   （`TechniqueMatcher` 的起步包出于同样的理由只从 BASIC 取），所以通用场景
+     *   永远只轮播那两条精选。
+     *
+     * `STREET` / `MACRO` 在这里没有对应项：`SceneType` 里不存在街头与微距的取值。
+     * 这两类仍然只有「浏览」和 `TechniqueMatcher` 的推荐池两个入口，不假装能轮播。
+     */
+    private fun sceneCategories(scene: SceneType): Set<TechCategory> = when (scene) {
+        SceneType.NIGHT -> setOf(TechCategory.NIGHT)
+        SceneType.BACKLIT -> setOf(TechCategory.LIGHT, TechCategory.SILHOUETTE)
+        SceneType.PORTRAIT -> setOf(TechCategory.PORTRAIT)
+        SceneType.LANDSCAPE -> setOf(TechCategory.LANDSCAPE)
+        SceneType.INDOOR -> setOf(TechCategory.INDOOR, TechCategory.FOOD)
+        SceneType.ACTION -> setOf(TechCategory.ACTION)
+        SceneType.GENERAL -> emptySet()
+    }
+
+    /**
+     * 兜底轮播池：**精选两条保底 + 技法库里同场景的候选**。
+     *
+     * 顺序固定为「精选在前、库内按 id 字典序在后」，这是测试能钉住池子的前提：
+     * 排序一变成哈希序，今天绿的用例明天就会随机红。
+     *
+     * 库内候选的三条剔除：仅浏览（缺的是信号，推了也验证不了）、自拍（这里按后置口径，
+     * 前置的放开在 `pushEligibleIds` 那侧做）、运镜（录像页的事，进图片页的兜底池是错的）。
+     */
+    private fun fallbackPool(scene: SceneType): List<String> = FALLBACK_POOLS[scene].orEmpty()
+
+    /** 池子算一次就够：它是纯函数，而 R10 每个 tick 都会问。 */
+    private val FALLBACK_POOLS: Map<SceneType, List<String>> by lazy {
+        SceneType.values().associateWith { buildFallbackPool(it) }
+    }
+
+    private fun buildFallbackPool(scene: SceneType): List<String> {
+        val curated = curatedFallback(scene)
+        val categories = sceneCategories(scene)
+        if (categories.isEmpty()) return curated
+
+        val ignored = TechniqueBookV15.BROWSE_ONLY_IDS + TechniqueBookV15.SELFIE_IDS
+        val taken = curated.toHashSet()
+        val appended = ArrayList<String>(FALLBACK_LIBRARY_LIMIT)
+        val candidates = TechniqueBookV15.combined
+            .filter { it.category in categories && it.category != TechCategory.CAMERA_MOVE }
+            .map { it.id }
+            .distinct()
+            .sorted()
+        for (id in candidates) {
+            if (appended.size >= FALLBACK_LIBRARY_LIMIT) break
+            if (id in ignored) continue
+            if (!taken.add(id)) continue
+            appended.add(id)
+        }
+        return curated + appended
+    }
+
+    /**
+     * 兜底文案：精选表优先，其次技法库的 [Technique.oneLiner]。
+     *
+     * 为什么用 `oneLiner` 而不是 `title`：R10 的卡片是「动作 + 为什么」两段式，
+     * 第一段必须是**一个能立刻做的动作**。`title` 是带判断力的短标题
+     * （「手肘弯出角，人瘦一圈」），`oneLiner` 才是口诀（「手肘别贴着腰」）。
+     *
+     * 返回空串 = 这条候选解析不出文案。调用方必须**跳过**它，绝不允许推出空卡片。
+     */
+    private fun fallbackText(id: String): String {
+        FALLBACK_TEXT[id]?.let { return it }
+        val technique = TechniqueBookV15.byId[id] ?: return ""
+        return technique.oneLiner
     }
 
     /** 百分比格式化，避免各处各写一遍。 */
@@ -355,7 +440,11 @@ object PromptEngine {
                 else {
                     val pool = fallbackPool(s.scene)
                     if (pool.isEmpty()) null
-                    else pool[((now / SchedulerConfig.GUIDE_INTERVAL_MS).toInt()).mod(pool.size)]
+                    else {
+                        val id = pool[((now / SchedulerConfig.GUIDE_INTERVAL_MS).toInt()).mod(pool.size)]
+                        // 解析不出文案就这一拍不出牌：宁可空着，也不推一张没有动作的空卡片
+                        if (fallbackText(id).isEmpty()) null else id
+                    }
                 }
             },
             action = { "先解决画面硬伤，再谈构图" },
@@ -414,25 +503,31 @@ object PromptEngine {
      * 三段来源，缺一不可：
      * - 单条规则的固定 id（R01–R08、R11）；
      * - R09 的运镜池文案表（`MOVE_TEXT` 的键就是它可能吐出的全部 id）；
-     * - R10 的兜底池文案表（`FALLBACK_TEXT` 同理）。
-     *
-     * 注意 `TIP_EYES_THIRDS` / `TIP_HEADROOM` 只出现在兜底池与 `FALLBACK_TEXT` 里，
-     * 没有任何单条规则直接点名它们，所以不能只从规则常量里收集。
+     * - R10 的**整个兜底池并集**（精选 7 条 + 库内候选）。它不能再只写
+     *   `FALLBACK_TEXT.keys`：池子从技法库取之后，R10 可以吐出任意一条库内候选，
+     *   清单漏登记就会被 `TechniqueBookV15Test.emittedIdsStayWithinTheDeclaredSet` 抓住。
      */
-    private val EMITTABLE_TIP_IDS: Set<String> = setOf(
-        TIP_HORIZON,
-        TIP_PROTECT_HIGHLIGHT,
-        TIP_NIGHT_STATIC,
-        TIP_EXPOSURE_BASICS,
-        TIP_BACKLIT_FACE,
-        TIP_WIDE_FACE,
-        TIP_NIGHT_NO_FLASH,
-        TIP_FOOD_45,
-        TIP_GET_CLOSER,
-        TIP_GRID,
-        TIP_EYES_THIRDS,
-        TIP_HEADROOM
-    ) + MOVE_TEXT.keys + FALLBACK_TEXT.keys
+    private val EMITTABLE_TIP_IDS: Set<String> by lazy {
+        setOf(
+            TIP_HORIZON,
+            TIP_PROTECT_HIGHLIGHT,
+            TIP_NIGHT_STATIC,
+            TIP_EXPOSURE_BASICS,
+            TIP_BACKLIT_FACE,
+            TIP_WIDE_FACE,
+            TIP_NIGHT_NO_FLASH,
+            TIP_FOOD_45,
+            TIP_GET_CLOSER,
+            TIP_GRID,
+            TIP_EYES_THIRDS,
+            TIP_HEADROOM
+        ) + MOVE_TEXT.keys + ALL_FALLBACK_POOL_IDS
+    }
+
+    /** 全部场景兜底池的并集。池子本身是懒加载的，这里也懒一次。 */
+    private val ALL_FALLBACK_POOL_IDS: Set<String> by lazy {
+        SceneType.values().flatMap { fallbackPool(it) }.toSet()
+    }
 
     /**
      * 求值。
@@ -514,7 +609,7 @@ object PromptEngine {
             return MOVE_TEXT[tipId] ?: rule.action(signals)
         }
         if (rule.id == "R10_fallback_guide") {
-            return FALLBACK_TEXT[tipId] ?: rule.action(signals)
+            return fallbackText(tipId).ifEmpty { rule.action(signals) }
         }
         return rule.action(signals)
     }

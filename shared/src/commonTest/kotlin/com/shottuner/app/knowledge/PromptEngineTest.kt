@@ -293,6 +293,148 @@ class PromptEngineTest {
         assertFalse(PromptEngine.evaluate(shaky, 20_000L, lastCandidateAt = 1_000L).any { it.ruleId == "R10_fallback_guide" })
     }
 
+    // ── R10 兜底池：从技法库取之后的可达性 ─────────────────────────────────────
+    //
+    // 背景：R10 的池子原来是写死的 7 个 id、每场景 2 条。批次 C 那 15 条技法虽然进了
+    // `pushEligibleIds`、也进了图鉴，但**没有任何规则会推到它们** —— 用户视角是
+    // 「说是有新技巧，拍的时候一次都没见过」。池子改成「精选 2 条 + 库内候选」之后，
+    // 下面这 5 条用例是「新技巧不是摆设」唯一的机器证明。
+    //
+    // 探池子的办法：R10 每 `GUIDE_INTERVAL_MS` 轮一条，所以拿不同的 `now` 反复问
+    // `candidateFor` 就能把整条池子枚举出来。32 次足够绕完一圈（池子上限 8 条），
+    // 这样测的是**真实出牌面**，不是反射出来的内部数组。
+
+    /** 枚举某场景的兜底池（顺序 = 轮播顺序）。 */
+    private fun fallbackPoolOf(scene: SceneType): List<String> {
+        val seen = LinkedHashSet<String>()
+        for (k in 0 until 32) {
+            val candidate = PromptEngine.candidateFor(
+                "R10_fallback_guide",
+                signals(tech = tech(meanLuma = 0.5f), roll = 0f, scene = scene, stability = 0.05f),
+                k * SchedulerConfig.GUIDE_INTERVAL_MS
+            ) ?: continue
+            seen.add(candidate.tipId)
+        }
+        return seen.toList()
+    }
+
+    /**
+     * 核心断言：批次 C 的条目**必须真的能被 R10 推出来**。
+     *
+     * 只写 `size >= 3` 会留下"换成任意 3 条都算过"的漏洞，所以下面同时点名了
+     * 四条分属不同场景的 id —— 它们一旦被挤掉（比如有人调小了上限、或按分类改错了映射），
+     * 这里会立刻红。
+     */
+    @Test
+    fun batchCEntriesReachTheFallbackPool() {
+        val pools = SceneType.values().associateWith { fallbackPoolOf(it) }
+        val reachable = pools.values.flatten().toSet()
+
+        val batchC = listOf(
+            "portrait_elbow_angle", "portrait_look_off_lens", "portrait_no_three_count",
+            "night_tap_to_focus", "night_lock_exposure",
+            "food_wipe_plate_edge", "food_show_the_cut",
+            "landscape_vertical_for_tall", "landscape_human_scale",
+            "indoor_kill_ceiling_light", "indoor_corner_ultrawide",
+            "pitfall_check_edges", "pitfall_finger_on_lens",
+            "params_portrait_mode_distance", "params_hdr_for_big_contrast"
+        )
+        val hit = batchC.filter { it in reachable }
+        assertTrue(
+            hit.size >= 3,
+            "批次 C 至少要有 3 条真的能进兜底池，实得 ${hit.size} 条：$hit"
+        )
+        assertTrue("portrait_elbow_angle" in pools.getValue(SceneType.PORTRAIT), "人像池里没有新条目")
+        assertTrue("night_lock_exposure" in pools.getValue(SceneType.NIGHT), "夜景池里没有新条目")
+        assertTrue("food_show_the_cut" in pools.getValue(SceneType.INDOOR), "室内/食物池里没有新条目")
+        assertTrue("landscape_human_scale" in pools.getValue(SceneType.LANDSCAPE), "风光池里没有新条目")
+    }
+
+    /**
+     * 池里的每个 id 都解析得出文案。
+     *
+     * 解析失败的表现是 R10 退回一句泛泛的「先解决画面硬伤，再谈构图」—— 那等于
+     * 用户花钱看了张空卡片。所以这里断言**没有任何一次轮播落到那句兜底话上**，
+     * 同时断言文案不为空。
+     */
+    @Test
+    fun fallbackPoolHasNoUnresolvableIds() {
+        val generic = "先解决画面硬伤，再谈构图"
+        val broken = ArrayList<String>()
+        for (scene in SceneType.values()) {
+            for (k in 0 until 32) {
+                val candidate = PromptEngine.candidateFor(
+                    "R10_fallback_guide",
+                    signals(tech = tech(meanLuma = 0.5f), roll = 0f, scene = scene, stability = 0.05f),
+                    k * SchedulerConfig.GUIDE_INTERVAL_MS
+                ) ?: continue
+                if (candidate.action.isBlank() || candidate.action == generic) {
+                    broken.add("$scene/${candidate.tipId}")
+                }
+            }
+        }
+        assertTrue(broken.isEmpty(), "这些候选解析不出文案：$broken")
+    }
+
+    /** 仅浏览、自拍、运镜一个都不许进兜底池。 */
+    @Test
+    fun fallbackPoolExcludesSelfieAndBrowseOnly() {
+        val banned = TechniqueBookV15.SELFIE_IDS + TechniqueBookV15.BROWSE_ONLY_IDS
+        for (scene in SceneType.values()) {
+            val pool = fallbackPoolOf(scene)
+            val leaked = pool.filter { it in banned }
+            assertTrue(leaked.isEmpty(), "$scene 的兜底池里出现了禁推条目：$leaked")
+
+            val moveLeaked = pool.filter { TechniqueBookV15.byId[it]?.category == TechCategory.CAMERA_MOVE }
+            assertTrue(moveLeaked.isEmpty(), "$scene 的兜底池里出现了运镜条目：$moveLeaked")
+        }
+    }
+
+    /** 池子必须是确定性的：同一个 scene 连续问两次，id 序列完全相等。 */
+    @Test
+    fun fallbackPoolIsDeterministic() {
+        for (scene in SceneType.values()) {
+            assertEquals(
+                fallbackPoolOf(scene),
+                fallbackPoolOf(scene),
+                "$scene 的兜底池两次结果不一致 —— 排序一旦沾上哈希序，今天绿的用例明天会随机红"
+            )
+        }
+    }
+
+    /**
+     * 池子长度必须在 2..8 之间。
+     *
+     * 下界 2 = 精选保底，上界 8 = 精选 2 + 库内 6。上界不是省内存，而是**轮播周期**：
+     * R10 每 8 秒才说一句话，8 条已经是 64 秒一轮。池子再大，同一条要等太久，
+     * 反而更像"没提示"。
+     */
+    @Test
+    fun fallbackPoolIsBounded() {
+        // 精选两句按 id 字面量写死（`PromptEngine` 里那些 TIP_* 是 private，
+        // 测试故意不跟着常量走：常量改了而行为没变时，这里应该红）
+        val curated = mapOf(
+            SceneType.NIGHT to listOf("night_handheld_static", "light_white_add_black_minus"),
+            SceneType.BACKLIT to listOf("portrait_backlit_face_first", "light_white_add_black_minus"),
+            SceneType.PORTRAIT to listOf("portrait_eyes_thirds", "portrait_headroom"),
+            SceneType.LANDSCAPE to listOf("landscape_horizon_level", "portrait_eyes_thirds"),
+            SceneType.INDOOR to listOf("night_handheld_static", "light_white_add_black_minus"),
+            SceneType.ACTION to listOf("basic_protect_highlights", "light_white_add_black_minus"),
+            SceneType.GENERAL to listOf("light_white_add_black_minus", "basic_protect_highlights")
+        )
+        for (scene in SceneType.values()) {
+            val pool = fallbackPoolOf(scene)
+            assertTrue(pool.size in 2..8, "$scene 的池子长度是 ${pool.size}，应在 2..8")
+            assertEquals(pool.size, pool.distinct().size, "$scene 的池子里有重复 id：$pool")
+            // 精选两条必须仍在最前面：池子变大不许把打磨过的两句挤掉
+            assertEquals(
+                curated.getValue(scene),
+                pool.take(2),
+                "$scene 的精选两句被挤出前两位了：$pool"
+            )
+        }
+    }
+
     @Test
     fun missingTipIdsAreSkippedSilently() {
         // 传空集合模拟"技法库里一条都查不到"：引擎必须一声不吭而不是崩溃。

@@ -1778,7 +1778,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 技法页顶部的图鉴进度：已解锁 N / 83 + 进度条。每次渲染技法页时刷新。 */
+    /** 技法页顶部的图鉴进度：已解锁 N / 98 + 进度条。每次渲染技法页时刷新。 */
     private fun renderDexProgress() {
         val unlocked = DexStore.unlockedCount(this)
         val total = DexStore.total()
