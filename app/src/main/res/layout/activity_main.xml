@@ -1463,7 +1463,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="已解锁 0 / 83"
+                    android:text="已解锁 0 / 98"
                     android:textColor="@color/st_text_dim"
                     android:textSize="11sp" />
 
@@ -1473,7 +1473,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="5dp"
                     android:layout_marginTop="4dp"
-                    android:max="83"
+                    android:max="98"
                     android:progress="0"
                     android:progressTint="@color/st_accent"
                     android:progressBackgroundTint="@color/st_scrim" />
@@ -2108,14 +2108,22 @@
                 android:textSize="13sp" />
         </ScrollView>
 
+        <!--
+          主按钮：「开始」。
+          ★ 原来是 `bg_chip` + `backgroundTint="@color/st_accent"` —— 与隐私门那个
+            「同意并继续」是**同一个 bug 的第二个实例**：bg_chip 的 solid 是
+            `#1FFFFFFF`（12% 白），backgroundTint 走 SRC_IN 只换色相、保留 12% alpha，
+            绿被压成近黑；再配 `textColor="@color/st_bg"`（#0E1113）就是深字压近黑底，
+            按钮整体读成一个黑条。换成不透明白底后，深字才第一次成立（19:1）。
+            根因与"不得再加 backgroundTint"的约束见 drawable/bg_btn_solid.xml 顶部。
+        -->
         <TextView
             android:id="@+id/btnCoachIntroStart"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="52dp"
             android:layout_marginTop="16dp"
-            android:background="@drawable/bg_chip"
-            android:backgroundTint="@color/st_accent"
+            android:background="@drawable/bg_btn_solid"
             android:gravity="center"
             android:text="开始"
             android:textColor="@color/st_bg"
