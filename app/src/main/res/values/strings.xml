@@ -2,24 +2,4 @@
 <resources>
     <string name="app_name">光影调参</string>
     <string name="tile_name">光影调参</string>
-
-    <!--
-      悬浮教练入口按钮的两个状态（v1.3.4）。
-
-      为什么要有"悬浮中"这一档：以前服务起没起，界面上一点线索都没有 ——
-      用户回到 App 只看到一个和刚才一模一样的按钮，分不清"我还没开"还是
-      "开着但被系统杀了"，于是每次都要点一遍才敢确定。文案是唯一不需要
-      额外 UI 就能回答这个问题的地方。
-
-      ⚠️ 两个文案都要能塞进 11sp、单行、宽度 = 面板宽的按钮里，别加长句。
-    -->
-    <string name="float_btn_idle">在系统相机上浮一个建议卡</string>
-    <string name="float_btn_running">悬浮中 · 长按停止</string>
-
-    <!--
-      桌面长按图标的快捷方式（res/xml/shortcuts.xml）。
-      快捷方式的 label 必须是字符串资源，不能内联。
-    -->
-    <string name="shortcut_start_coach_short">悬浮教练</string>
-    <string name="shortcut_start_coach_long">开始悬浮教练</string>
 </resources>

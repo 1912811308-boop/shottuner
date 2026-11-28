@@ -45,6 +45,18 @@
     <color name="st_hairline">#33FFFFFF</color>
 
     <!--
+      隐私门主按钮的实心白底（v1.3.4）。
+
+      ★ alpha 必须是不透明的 FF —— 这是"按钮变黑"那次的直接教训：
+        bg_chip 用的是 st_scrim（12% 白），一旦被 backgroundTint 按 SRC_IN 着色，
+        12% 的 alpha 会被原样保留，绿色压成 12% ≈ 近黑，再配深色字就成了"黑按钮"。
+        所以这个色**只给实心按钮用**，不要拿它去做面板/胶囊底（那种要半透明）。
+      ★ 不要用 st_accent 替代它：薄荷绿在本应用里是"参数与数值"的语义色，
+        按钮用它会和读数抢注意力（clover 原话："不要那个绿色的，不然很奇怪也不明显"）。
+    -->
+    <color name="st_btn_solid">#FFFFFFFF</color>
+
+    <!--
       直方图配色。alpha 是语义的一部分，所以单独命名而不是靠代码里 argb：
         st_hist_stroke  描边（70% 主色）
         st_hist_top / _mid / _bottom  渐变三个停靠点（80% → 13% → 全透明）

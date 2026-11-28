@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  隐私门「主按钮」底：**实心白**（v1.3.4）。
+
+  ★★ 这个文件的存在本身就是一条 bug 修复记录，先读完再改：
+
+  改之前主按钮（「同意并继续」）用的是 `@drawable/bg_chip` + `android:backgroundTint="@color/st_accent"`。
+  bg_chip 的 solid 是 `@color/st_scrim` = **#1FFFFFFF**（12% 白，它是给"页签选中态"
+  那种压在面板上的淡色块用的）。而 View 的 backgroundTint 默认走
+  `PorterDuff.Mode.SRC_IN`：着色只替换色相、**保留原 solid 的 alpha**。
+  于是薄荷绿 #7FE3C0 被压成 12% 不透明度，叠在卡片底 #12161A 上算出来大约是
+  #1F2F2E —— 和背景几乎同色；再配上 `textColor="@color/st_bg"`（#0E1113 近黑），
+  就是**深字压近黑底**，对比度约 1.15:1，肉眼看到的就是"一个黑按钮"。
+  clover 原话「那个按钮是黑的」指的就是它，不是整屏黑。
+
+  所以这里刻意把三件事分开写清楚，避免再次踩同一个坑：
+    1) solid 用**不透明**的 `st_btn_solid`（#FFFFFFFF），alpha 不留任何余地；
+    2) 纹理只由 corners 决定，不使用 stroke（白底上再加白描边等于没有）；
+    3) 使用者**不得**再给它加 `android:backgroundTint` —— 白底是终态，不需要着色。
+
+  另：主/次/拒绝三个按钮的层级靠"填充"区分（实心白 → 1dp 白描边 → 纯文字），
+  不靠颜色。整套界面里 st_accent（薄荷绿）是"参数/数值"的语义色，
+  按钮再抢一次这个色，用户就分不清哪个是数据、哪个是可点的地方。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/st_btn_solid" />
+    <corners android:radius="12dp" />
+</shape>

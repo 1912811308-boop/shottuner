@@ -1676,7 +1676,7 @@
                 android:insetTop="0dp"
                 android:insetBottom="0dp"
                 android:minHeight="44dp"
-                android:text="@string/float_btn_idle"
+                android:text="在系统相机上浮一个建议卡"
                 android:textColor="@color/st_accent"
                 android:textSize="11sp"
                 app:backgroundTint="@color/st_scrim"
@@ -2237,16 +2237,23 @@
                         android:textColor="@color/st_text_body"
                         android:textSize="13sp" />
 
+                    <!--
+                      三个出口的视觉层级（v1.3.4）：实心白 → 1dp 白描边 → 纯文字。
+                      改之前三个里有两个带 st_accent（绿），而主按钮更是踩了
+                      "12% 白底被 accent 按 SRC_IN 着色"这个坑，实际渲染成近黑 +
+                      深色字 ⇒ 就是 clover 说的"那个按钮是黑的"。根因写在
+                      drawable/bg_btn_solid.xml 顶部，别再往主按钮上加 backgroundTint。
+                    -->
                     <TextView
                         android:id="@+id/btnPrivacyFull"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="20dp"
-                        android:background="@drawable/bg_thumb"
+                        android:background="@drawable/bg_btn_outline"
                         android:gravity="center"
                         android:minHeight="48dp"
                         android:text="查看完整隐私政策"
-                        android:textColor="@color/st_accent"
+                        android:textColor="@color/st_text"
                         android:textSize="14sp" />
 
                     <TextView
@@ -2254,8 +2261,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
-                        android:background="@drawable/bg_chip"
-                        android:backgroundTint="@color/st_accent"
+                        android:background="@drawable/bg_btn_solid"
                         android:gravity="center"
                         android:minHeight="52dp"
                         android:text="同意并继续"
@@ -2263,6 +2269,7 @@
                         android:textSize="15sp"
                         android:textStyle="bold" />
 
+                    <!-- 拒绝/次要：纯文字，不加底。灰字（st_text_dim 6.3:1）够读但不抢眼 -->
                     <TextView
                         android:id="@+id/btnPrivacyDeny"
                         android:layout_width="match_parent"
@@ -2325,17 +2332,19 @@
                 android:textSize="12sp" />
         </ScrollView>
 
+        <!-- 返回 = 次按钮，与隐私门里的「查看完整隐私政策」同一档：白描边 + 白字（v1.3.4） -->
         <TextView
             android:id="@+id/btnPrivacyClose"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="48dp"
             android:layout_marginTop="10dp"
-            android:background="@drawable/bg_thumb"
+            android:background="@drawable/bg_btn_outline"
             android:gravity="center"
             android:text="返回"
-            android:textColor="@color/st_accent"
+            android:textColor="@color/st_text"
             android:textSize="14sp" />
+
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
