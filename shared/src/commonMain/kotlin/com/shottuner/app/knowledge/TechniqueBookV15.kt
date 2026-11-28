@@ -3,22 +3,26 @@ package com.shottuner.app.knowledge
 import com.shottuner.app.model.SceneType
 
 /**
- * v1.5 新增的 44 条技法。
+ * v1.5 / 1.6 新增的 59 条技法。
  *
  * ## 为什么不塞进 `PhotographyBook.all`
  * 老文件里那 39 条被 5 个测试和调度器按 id 引用，动它的风险远高于收益。
  * 这里独立成一个 object，由 [all] 与老库合并 —— 老库一行不改。
  *
  * ## 文案来源与字数口径
- * 全部来自 `docs/TECHNIQUE-v15.md`（产品经理交付，842 行，字数自查 0 违规）。
- * 转写时**逐个字段照抄**，只在三处做了机械处理：
+ * 批次 A/B（44 条）全部来自 `docs/TECHNIQUE-v15.md`（产品经理交付，842 行，
+ * 字数自查 0 违规）。转写时**逐个字段照抄**，只在三处做了机械处理：
  * 1. 去掉每段末尾的「（N 字）」字数标注 —— 那是校验用的，不该进 UI；
  * 2. `params` 的 `键=值；键=值` 拆成 `Pair` 列表；
  * 3. `trigger` 的 `scenes=A, B；key=value` 拆成构造参数。
  *
+ * 批次 C（15 条）是按同一套字段口径**新写**的，唯一标准是「不会拍照的人看完
+ * 能立刻做出一个动作」，所以 `oneLiner` 一律写成动作而不是结论。这 15 条
+ * 不绑评分维度，理由见 [BATCH_C] 上方的注释。
+ *
  * ## 分类分布（必须与产品口径一致，`TechniqueBookV15Test` 会数）
- * portrait 10 / move 8 / selfie 5 / pitfall 4 / landscape 4 / params 3 /
- * night 3 / light 3 / street 2 / food 2 = 44
+ * portrait 13 / move 8 / selfie 5 / pitfall 6 / landscape 6 / params 5 /
+ * night 5 / light 3 / street 2 / food 4 / indoor 2 = 59
  *
  * ## 三条「仅浏览」条目
  * [BROWSE_ONLY_IDS] 里的三条**不得出现在任何推送池**（`PromptEngine` 的规则、
@@ -1290,15 +1294,463 @@ object TechniqueBookV15 {
         )
     )
 
-    /** 全部 44 条，顺序按批次分组（自拍 → 运镜 → 参数 → 避坑 → 人像 → 街头 → 风光 → 夜景 → 用光 → 食物）。 */
+    // ── 批次 C：给小白补的 15 条 ──────────────────────────────────────────────
+    //
+    // 与批次 A / B 的区别只有一个：这 15 条**不绑定评分维度**（`TechniqueDex.DIMENSION_OF`
+    // 里全部登记为 `null`），所以它们只做「浏览」和「推送」，不参与解锁。
+    //
+    // 为什么明知会让分母虚高还要这么加：给一条技法绑维度，等于向用户承诺「照做就能
+    // 在某个维度上达标解锁」。可解锁的前提是 `ScoreBoard` 真的能测出这件事 —— 而
+    // 「擦盘子边」「别喊三二一」「手肘弯出角」这些都发生在按下快门之前，四维评分里
+    // 没有任何一维能看见它们。硬塞一个维度，换来的是一张永远亮不起来的卡片，
+    // 还会把「图鉴 = 我做成了」这件事变成「图鉴 = 我看过了」。
+    // 所以宁可让分母从 83 涨到 98，可解锁数仍然是 7。
+    //
+    // `check` 一节因此承担了全部反馈责任：既然系统判不出来，就得让用户自己一拍完
+    // 就能看出成不成 —— 这 15 条每条都给了一个**看得见的判据**。
+
+    private val PORTRAIT_C: List<Technique> = listOf(
+        Technique(
+            id = "portrait_elbow_angle",
+            title = "手肘弯出角，人瘦一圈",
+            category = TechCategory.PORTRAIT,
+            oneLiner = "手肘别贴着腰",
+            whenTo = "站着或坐着被拍、手臂垂在身体两侧时用。让两条胳膊离开身体，手肘自然弯出一个角，胳膊和腰之间留出一条能看到背景的缝。",
+            steps = listOf(
+                "先看手臂是不是贴在腰上，贴着就一定要改",
+                "两条胳膊往外挪开一点，手肘弯成角",
+                "手指自然握着，别摊平也别攥拳"
+            ),
+            params = listOf(
+                "手臂" to "离身体一拳",
+                "手肘" to "弯出角",
+                "手" to "松开不攥拳"
+            ),
+            why = "手臂贴紧身体时，胳膊和躯干连成一整块，外轮廓线消失了，人会显宽显壮。让胳膊离开身体、手肘弯出角，腰侧就多出一条背景透出来的缝，身体的轮廓被这条缝重新切出来，看起来才瘦。",
+            mistakes = listOf(
+                "双手抱在腰前，胳膊把腰压宽",
+                "手臂紧紧夹住身体，人变成一块"
+            ),
+            check = "看腰侧有没有一条能看到背景的缝，有就对了；没有说明胳膊还贴在身上。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.PORTRAIT),
+                minSkinRatio = 0.05f,
+                weight = 17
+            )
+        ),
+        Technique(
+            id = "portrait_look_off_lens",
+            title = "眼睛看镜头旁边，别直视",
+            category = TechCategory.PORTRAIT,
+            oneLiner = "眼神偏到镜头旁一点",
+            whenTo = "拍人像、对方盯着镜头笑得很僵时用。让对方把视线落到镜头旁边一个具体的东西上，比如你的耳朵或者手机侧后方的手指。",
+            steps = listOf(
+                "先看对方是不是一直死盯着镜头",
+                "伸出食指放在镜头侧后方，让他看那根手指",
+                "按快门前把手指收走，眼睛别跟着动"
+            ),
+            params = listOf(
+                "视线" to "镜头旁偏一点",
+                "参照" to "手指或耳朵",
+                "头部" to "不跟着转"
+            ),
+            why = "真盯着镜头看时，人会意识到自己在被拍，脸上的肌肉是绷着的，表情是摆出来的。视线偏开一点点，注意力从「被拍」转到「看东西」，眼神会松下来，拍出来像抓到的瞬间，而不是摆好的样子。",
+            mistakes = listOf(
+                "一直喊看镜头，越喊越僵",
+                "头跟着眼睛一起转过去，成了侧脸"
+            ),
+            check = "看眼睛是不是还朝着镜头方向、只是稍微偏一点；整张脸转过去就偏多了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.PORTRAIT),
+                minSkinRatio = 0.05f,
+                weight = 16
+            )
+        ),
+        Technique(
+            id = "portrait_no_three_count",
+            title = "别喊三二一，数到二就按",
+            category = TechCategory.PORTRAIT,
+            oneLiner = "数到二就按，别喊三",
+            whenTo = "给家人朋友拍合影、每次喊完三二一都有人闭眼时用。改成只数到二，数完立刻按快门，别留出第三下的空档。",
+            steps = listOf(
+                "先翻上次的照片，看有没有人闭着眼",
+                "只数到二，数完马上按快门",
+                "一次连拍三张，把闭眼的挑掉"
+            ),
+            params = listOf(
+                "口令" to "只数到二",
+                "连拍" to "一次三张",
+                "别做" to "数完停顿等表情"
+            ),
+            why = "人听到「三」会预期快门就在这一刻，很多人会下意识眨一下眼；而手机快门从按下到真正曝光还有一段延迟，这一眨眼正好落在曝光的那一瞬间。把口令停在前一拍，眼睛还没进入眨动的周期，快门就已经按完了。",
+            mistakes = listOf(
+                "喊完三还顿一下等大家笑，那一顿正好赶上眨眼",
+                "只拍一张，有人闭眼整张就废了"
+            ),
+            check = "放大看每个人的眼睛，都睁着就对了；有闭眼的直接重拍，别指望修图。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.PORTRAIT),
+                minSkinRatio = 0.04f,
+                weight = 15
+            )
+        )
+    )
+
+    private val NIGHT_C: List<Technique> = listOf(
+        Technique(
+            id = "night_tap_to_focus",
+            title = "夜景对不上焦，点最亮的灯",
+            category = TechCategory.NIGHT,
+            oneLiner = "点一下画面里最亮的灯",
+            whenTo = "夜里拍远处的东西、取景框里的画面一直在轻微前后抽动时用。用手指点一下画面里最亮的那盏灯，等对焦框变绿再按。",
+            steps = listOf(
+                "先看取景框是不是在轻微前后抽动",
+                "点一下画面里最亮的那盏灯或灯牌",
+                "等对焦框变绿，再按快门"
+            ),
+            params = listOf(
+                "对焦点" to "最亮的灯",
+                "时机" to "框变绿再按",
+                "别做" to "反复连点"
+            ),
+            why = "暗光下画面反差极低，对焦系统找不到能对比的边缘，就会不停来回找焦点，拍出来是糊的。灯和黑夜的交界处是画面里反差最大的地方，抓住那条边，对焦才有一个明确的落点。",
+            mistakes = listOf(
+                "对着纯黑的天空点，越点越糊",
+                "一边点一边按，焦点还没落定"
+            ),
+            check = "放大看灯的边缘，是一条清楚的细线就对了；边缘发虚说明还在找焦点。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.NIGHT),
+                weight = 18
+            )
+        ),
+        Technique(
+            id = "night_lock_exposure",
+            title = "长按屏幕锁曝光，别让它跳",
+            category = TechCategory.NIGHT,
+            oneLiner = "长按对焦点，锁住再拍",
+            whenTo = "夜里取景框里的亮度一会儿亮一会儿暗、怎么按都不对时用。长按画面里要拍的主体，等出现锁定提示或小锁图标，再构图按快门。",
+            steps = listOf(
+                "先看画面亮度是不是在忽明忽暗",
+                "长按要拍的主体一到两秒，直到出现锁定提示",
+                "锁住后再移动手机取景，亮度不会跟着变"
+            ),
+            params = listOf(
+                "操作" to "长按主体一到两秒",
+                "锁定" to "曝光与对焦",
+                "解除" to "点一下画面空白处"
+            ),
+            why = "自动曝光每一帧都在重新计算，画面里进出一点光源，它就把整体亮度拉一遍，成片和你在屏幕上看到的根本不是一张。锁定之后曝光值固定，取景框里有多亮，拍出来就有多亮，你能按看到的效果去取舍。",
+            mistakes = listOf(
+                "一直举着等它自己稳，结果每张亮度都不同",
+                "锁定后忘了解除，换到亮的地方全过曝"
+            ),
+            check = "半按快门前后取景框亮度没有变化，就说明锁住了；一变就说明没锁上。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.NIGHT, SceneType.INDOOR),
+                weight = 16
+            )
+        )
+    )
+
+    private val FOOD_C: List<Technique> = listOf(
+        Technique(
+            id = "food_wipe_plate_edge",
+            title = "擦一圈盘子边，画面干净",
+            category = TechCategory.FOOD,
+            oneLiner = "拿纸巾擦掉盘边酱汁",
+            whenTo = "拍刚端上来的菜、盘子边上沾了酱汁或指纹时用。先用纸巾把盘子外沿擦一圈，再把筷子架和餐巾纸挪出画面。",
+            steps = listOf(
+                "先看盘子边有没有溅出来的酱汁和手指印",
+                "用纸巾沿盘子外沿擦一圈，擦到能反光",
+                "把筷子、餐巾、手机挪出画面再拍"
+            ),
+            params = listOf(
+                "工具" to "干纸巾",
+                "重点" to "盘子外沿一圈",
+                "顺手" to "擦掉桌面反光的水渍"
+            ),
+            why = "一道菜在餐桌上是拿来吃的，在照片里却得像一件作品。盘子外沿那一圈污渍占的面积不大，却正好落在画面最干净的边缘上，观众的视线第一下就撞在那里，再好的摆盘也救不回来。",
+            mistakes = listOf(
+                "只擦盘子中间，留着外面那圈酱",
+                "打算后期裁掉，可酱汁的反光还在"
+            ),
+            check = "把照片缩小看，盘子外沿那一圈是干净的一条线就对了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.INDOOR),
+                weight = 15
+            )
+        ),
+        Technique(
+            id = "food_show_the_cut",
+            title = "切开把断面冲着镜头",
+            category = TechCategory.FOOD,
+            oneLiner = "切一刀，断面朝镜头",
+            whenTo = "拍汉堡、蛋糕、烧饼、溏心蛋这类有夹层的东西时用。先切一刀或者掰开，把切开的那一面转向镜头，再按快门。",
+            steps = listOf(
+                "先看这东西里面有没有夹层或流心",
+                "切一刀或者掰开，别切得太碎",
+                "把切面朝镜头，让截面正对着光"
+            ),
+            params = listOf(
+                "切口" to "一刀到底",
+                "朝向" to "切面正对镜头",
+                "馅料" to "轻轻压出一点"
+            ),
+            why = "汉堡蛋糕从外面看只是一个圆鼓鼓的壳，好吃的部分全在里面。切面露出的是分层、颜色和质地，这些才是眼睛能读出「好吃」的信息，而外壳的形状和颜色传达不了这件事。",
+            mistakes = listOf(
+                "切开之后还是拍外壳那一面",
+                "切得太碎，看不出层次"
+            ),
+            check = "照片里能一眼数出三层以上不同颜色，就说明切面拍到了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.INDOOR),
+                weight = 15
+            )
+        )
+    )
+
+    private val LANDSCAPE_C: List<Technique> = listOf(
+        Technique(
+            id = "landscape_vertical_for_tall",
+            title = "拍高的东西把手机竖起来",
+            category = TechCategory.LANDSCAPE,
+            oneLiner = "竖着拿，别横着砍断",
+            whenTo = "拍瀑布、高塔、大树、整面楼、立着的雕像这类竖着长的东西时用。把手机转成竖屏再拍，让它们从下到上完整装进画面。",
+            steps = listOf(
+                "先看要拍的东西是不是比画面高",
+                "把手机转成竖屏，横着拿一定装不下",
+                "手机上下微调，让顶和底都留一点空"
+            ),
+            params = listOf(
+                "方向" to "竖屏",
+                "留白" to "上下各留一点",
+                "别做" to "横屏硬塞"
+            ),
+            why = "手机横着拿时画面是个扁长方形，横向的余量大、纵向的余量小。竖着长的东西塞进扁框里，要么砍头要么砍脚，剩下的部分也只占中间一小条，大半面积都浪费在旁边的空处。",
+            mistakes = listOf(
+                "横着拍整座塔，只拍到中间一截",
+                "竖着拍又贴得太近，塔尖出了画面"
+            ),
+            check = "整座塔从头到脚都在画面里，上下还各留着一点空就对了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.LANDSCAPE),
+                weight = 16
+            )
+        ),
+        Technique(
+            id = "landscape_human_scale",
+            title = "画面里放个人，才显得大",
+            category = TechCategory.LANDSCAPE,
+            oneLiner = "找个人站进去当比例尺",
+            whenTo = "拍大山、大海、大瀑布、巨大建筑这类大场面时用。等一个路人走进画面，或者让同行的人站进去，让人只占画面很小一块。",
+            steps = listOf(
+                "先看画面里有没有能当参照的东西",
+                "等一个路人走进画面，或者让同行的人站进去",
+                "让那个人只占画面高度的一小段，别占满"
+            ),
+            params = listOf(
+                "人的高度" to "占画面一小段",
+                "位置" to "偏一侧",
+                "时机" to "等背对或侧身"
+            ),
+            why = "单独一片山或一片海，照片里没有可比较的尺寸，大脑会按「一张图」来读，读不出它有多大。人一进去，观众手里就有了一把熟悉的尺子，山的高、海的宽才被换算出来，大场面才真的显得大。",
+            mistakes = listOf(
+                "人站得太大，成了人像照，山变成背景板",
+                "人站在画面正中，把主体挡住了"
+            ),
+            check = "把照片给别人看，对方第一句是「这地方好大」就对了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.LANDSCAPE),
+                weight = 15
+            )
+        )
+    )
+
+    private val INDOOR_C: List<Technique> = listOf(
+        Technique(
+            id = "indoor_kill_ceiling_light",
+            title = "关掉头顶的灯，只留一盏",
+            category = TechCategory.INDOOR,
+            oneLiner = "顶灯关掉，留一盏侧光",
+            whenTo = "在室内拍人、脸上眼窝和鼻子下面有一团黑影时用。把头顶那盏灯关掉，只留窗光或一盏台灯从侧面照过来。",
+            steps = listOf(
+                "先看脸上眼窝、鼻子下、下巴下有没有黑影",
+                "关掉头顶那盏灯，房间暗一点不要紧",
+                "只留窗光或一盏台灯，从侧面照到脸上"
+            ),
+            params = listOf(
+                "顶灯" to "关掉",
+                "留" to "窗光或一盏台灯",
+                "方向" to "从侧面来"
+            ),
+            why = "灯正对头顶时，光被眉骨、鼻子、下巴挡住，在脸上留下几道硬边的黑影，人看起来疲惫显老。光从侧面来，眉毛和鼻子的影子落到脸的另一侧，反而变成了层次，脸就有了立体感。",
+            mistakes = listOf(
+                "怕拍暗就把顶灯和台灯全打开",
+                "关了顶灯却又开闪光灯，黑影换个地方还在"
+            ),
+            check = "看眼窝和鼻子下面还有没有明显的一团黑块，没有了就对了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.INDOOR),
+                weight = 17
+            )
+        ),
+        Technique(
+            id = "indoor_corner_ultrawide",
+            title = "小房间贴墙角，切超广角",
+            category = TechCategory.INDOOR,
+            oneLiner = "退到墙角，切0.5倍",
+            whenTo = "拍小房间、全屋、小店铺，怎么退都装不下整个空间时用。背贴到房间的一个角上，切到零点五倍超广角，把对角那条线装进画面。",
+            steps = listOf(
+                "先看房间是不是怎么退都装不全",
+                "背贴到房间的一个角上，手机端平",
+                "切到0.5倍，让对角线穿过画面"
+            ),
+            params = listOf(
+                "机位" to "房间的一个角",
+                "倍率" to "0.5x",
+                "高度" to "胸口"
+            ),
+            why = "普通镜头站在房间中间只看得见对面那面墙，两侧全被自己的视野切掉了。超广角把一个角对到对面的角，正好收进房间最长的那条对角线，同一个位置能多装进两倍的墙面和地面。",
+            mistakes = listOf(
+                "贴在墙角却只用一倍，还是装不全",
+                "离墙太近，画面四角全是墙的暗影"
+            ),
+            check = "四面墙里至少三面在画面里，房间显得比实际大就对了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.INDOOR),
+                weight = 15
+            )
+        )
+    )
+
+    private val PITFALL_C: List<Technique> = listOf(
+        Technique(
+            id = "pitfall_check_edges",
+            title = "按快门前扫一遍四条边",
+            category = TechCategory.PITFALL,
+            oneLiner = "先看画面四条边",
+            whenTo = "每次按快门前用，尤其是景点、街头、餐厅这些背景乱的地方。眼睛沿上下左右四条边扫一圈，看有没有半个路人或垃圾桶。",
+            steps = listOf(
+                "从画面左上角开始，沿边扫一圈",
+                "看到半个路人、电线杆、垃圾桶就挪一步",
+                "挪完再看四条边，确认干净了再按"
+            ),
+            params = listOf(
+                "顺序" to "左上起顺时针",
+                "重点" to "四条边",
+                "处理" to "挪一步或抬手机"
+            ),
+            why = "人的注意力会被画面中心的主体吸走，取景时四条边实际上是看不见的。半个人、一根柱子、一个垃圾桶，只要压在边上就会把视线往外拽，照片看着乱却说不清哪里乱——问题就在边上。",
+            mistakes = listOf(
+                "只看中间的主体，边上有半个人都没发现",
+                "打算裁图补救，结果把主体也裁掉了"
+            ),
+            check = "四条边附近没有只出现一半的东西，就说明扫干净了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.GENERAL),
+                weight = 14
+            )
+        ),
+        Technique(
+            id = "pitfall_finger_on_lens",
+            title = "画面一角发雾，先看手指",
+            category = TechCategory.PITFALL,
+            oneLiner = "按快门前看看镜头边",
+            whenTo = "单手举着手机拍、照片一角总是发白发灰、怎么擦都不见好时用。检查握持的手指有没有压在镜头边缘，把手指往下挪一寸。",
+            steps = listOf(
+                "先看照片是不是总有一个角发白或发灰",
+                "把手机翻过来，看手指有没有压到镜头边",
+                "手指往下挪一寸，改成双手托住手机"
+            ),
+            params = listOf(
+                "握姿" to "双手托住",
+                "手指" to "离开镜头边缘",
+                "顺手" to "擦一下镜头"
+            ),
+            why = "手指压在镜头边缘时不一定完全挡黑，它会让那一部分光线在镜片表面乱反射，形成一层发白的雾。这层雾只在一个角上，很容易被当成镜头脏，其实擦不掉，得挪手。",
+            mistakes = listOf(
+                "一直擦镜头，其实是手指压着",
+                "单手捏着手机下沿，食指正好挡住"
+            ),
+            check = "四个角亮度均匀，没有哪一角明显发白就对了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.GENERAL),
+                weight = 14
+            )
+        )
+    )
+
+    private val PARAMS_C: List<Technique> = listOf(
+        Technique(
+            id = "params_portrait_mode_distance",
+            title = "人像模式站开一米半再拍",
+            category = TechCategory.PARAMS,
+            oneLiner = "退到一米半，别贴脸",
+            whenTo = "用人像模式拍人、头发边缘被切掉或者虚化忽有忽无时用。往后退到一米半到两米，让上半身进画面，再按快门。",
+            steps = listOf(
+                "先看头发边缘有没有被切得很假",
+                "往后退到一米半到两米",
+                "半按确认对焦框套在人脸上，再按"
+            ),
+            params = listOf(
+                "距离" to "一米半到两米",
+                "取景" to "上半身",
+                "对焦" to "框套住脸"
+            ),
+            why = "人像模式的背景虚化是算出来的：手机先认出主体轮廓，再把背景模糊掉。站得太近时主体占满画面，边缘判不出来，算法就会把头发、耳朵一块当成背景擦掉；退开一点，轮廓完整，算法才有东西可认。",
+            mistakes = listOf(
+                "贴到半米用人像模式，头发和耳朵被算进背景",
+                "退得太远，虚化算不出层次，等于没开"
+            ),
+            check = "放大看头发边缘，还是一根一根的就对了；糊成一片说明算法判错了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.PORTRAIT),
+                minSkinRatio = 0.05f,
+                weight = 16
+            )
+        ),
+        Technique(
+            id = "params_hdr_for_big_contrast",
+            title = "光比太大，把HDR打开",
+            category = TechCategory.PARAMS,
+            oneLiner = "明暗差太多就开HDR",
+            whenTo = "拍窗外、拍逆光、拍亮着灯的屋子和墙角的暗处，亮的地方白成一片、暗的地方黑成一片时用。把相机设置里的 HDR 打开。",
+            steps = listOf(
+                "先看亮部和暗部是不是同时丢了细节",
+                "在相机设置里把 HDR 打开，或者设成自动",
+                "按完手别马上动，等它合成完再看"
+            ),
+            params = listOf(
+                "HDR" to "开或自动",
+                "手持" to "多停一秒",
+                "别做" to "开HDR还去拉曝光"
+            ),
+            why = "一张照片只能记录一段有限的明暗范围，窗外和屋里差得太多时，相机必须二选一。HDR 是连拍几张不同亮度的再合成，亮部取一张、暗部取一张，把两段拼回同一张，两头的细节就都在了。",
+            mistakes = listOf(
+                "开着 HDR 还大幅拉曝光，合成反而更假",
+                "一拍完就动手机，合成没完成画面发虚"
+            ),
+            check = "放大看窗户里和墙角，两边都还有纹理就对了。",
+            trigger = TechTrigger(
+                scenes = setOf(SceneType.BACKLIT, SceneType.INDOOR),
+                weight = 16
+            )
+        )
+    )
+
+    private val BATCH_C: List<Technique> = PORTRAIT_C + NIGHT_C + FOOD_C +
+        LANDSCAPE_C + INDOOR_C + PITFALL_C + PARAMS_C
+
+    /** 全部 59 条，顺序按批次分组（自拍 → 运镜 → 参数 → 避坑 → 人像 → 街头 → 风光 → 夜景 → 用光 → 食物 → 批次 C）。 */
     val list: List<Technique> = SELFIE + CAMERA_MOVE + PARAMS + PITFALL +
-        PORTRAIT + STREET + LANDSCAPE + NIGHT + LIGHT + FOOD
+        PORTRAIT + STREET + LANDSCAPE + NIGHT + LIGHT + FOOD + BATCH_C
 
     /**
-     * 全库 83 条（39 老 + 44 新）。
+     * 全库 98 条（39 老 + 59 新）。
      *
      * 这只是 [PhotographyBook.all] 的别名，**不是** `all + list` ——
-     * 后者会把 44 条算两遍（83 → 127），而且 `id` 唯一性断言会立刻红。
+     * 后者会把 59 条算两遍（98 → 157），而且 `id` 唯一性断言会立刻红。
      * 保留这个名字是因为调用点（`TechniqueMatcher`、测试）读起来更贴题。
      */
     val combined: List<Technique> by lazy { PhotographyBook.all }
@@ -1327,7 +1779,7 @@ object TechniqueBookV15 {
      * - `includeSelfie == true`（前置）→ 把 5 条自拍加回来，**仅浏览的 3 条仍然剔除**。
      *
      * 两个结果集都 `by lazy` 缓存：调用点（`MainActivity.onCameraReady`）会在每次
-     * bind 成功后调用一次，而 bind 因手动曝光重建时是秒级的 —— 每次重算 83 条减法
+     * bind 成功后调用一次，而 bind 因手动曝光重建时是秒级的 —— 每次重算 98 条减法
      * 纯属浪费，而且集合每次都变新对象会让下游的引用比较失效。
      *
      * 注意：本函数**只决定"能不能进池"**。这 5 条的文案、触发条件、是否真会出牌，
@@ -1347,11 +1799,11 @@ object TechniqueBookV15 {
         byId.keys - BROWSE_ONLY_IDS
     }
 
-    /** 44 条已经落地。调度器的技法过滤只在为 true 时启用。 */
+    /** 59 条已经落地。调度器的技法过滤只在为 true 时启用。 */
     fun isReady(): Boolean = list.size == EXPECTED_COUNT
 
-    /** 产品口径的条数。 */
-    const val EXPECTED_COUNT = 44
+    /** 产品口径的条数：批次 A/B 的 44 条 + 批次 C 的 15 条。 */
+    const val EXPECTED_COUNT = 59
 
     /** 分类分布，`TechniqueBookV15Test` 用它逐个对数。 */
     fun categoryCounts(): Map<TechCategory, Int> = list.groupingBy { it.category }.eachCount()

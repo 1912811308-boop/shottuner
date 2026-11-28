@@ -8,19 +8,19 @@ import com.shottuner.app.knowledge.TechniqueBookV15
 /**
  * 技法图鉴（G3「未完成的册子」）——**纯 JVM**。
  *
- * 本文件不 import 任何 `android.*`：83 条索引、维度归属、解锁判定、日期格式化
+ * 本文件不 import 任何 `android.*`：98 条索引、维度归属、解锁判定、日期格式化
  * 全部能在 `src/test` 下直接跑。真正的读写在 [DexStore]，那个才碰 Android。
  * （分家理由与 `ScoreHistory` / `ScoreHistoryStore` 一致，这里不重复。）
  *
- * ## 83 这个数是怎么来的
- * `PhotographyBook.all = legacy(39) + TechniqueBookV15.list(44)`，
+ * ## 98 这个数是怎么来的
+ * `PhotographyBook.all = legacy(39) + TechniqueBookV15.list(59)`（59 = 44 + 批次 C 15），
  * 全部遍历过一遍，**没有重复 id**（`DexStoreTest.idsAreUniqueAcrossSources` 守着）。
  * 注意 `TechniqueBookV15.byId` 是 `associateBy` 建出来的 Map —— 万一将来真的
  * 出现重复 id，那个 Map 会**静默丢掉一条**（后者覆盖前者），所以排重不能依赖它，
  * 必须像本文件这样直接数原始列表。
  *
  * ## 顺序
- * [all] 严格按 `PhotographyBook.all` 的顺序（39 条老库在前，44 条 v15 在后），
+ * [all] 严格按 `PhotographyBook.all` 的顺序（39 条老库在前，59 条 v15 在后），
  * 不改不排。图鉴是"册子"，页码要稳定：加新条目只会追加到末尾，不会让读者
  * 昨天看的第 12 条今天变成第 13 条。
  *
@@ -30,9 +30,9 @@ import com.shottuner.app.knowledge.TechniqueBookV15
  * `landscape_horizon_level` / `basic_protect_highlights` / `light_white_add_black_minus` /
  * `portrait_backlit_face_first` / `portrait_eyes_thirds` / `portrait_headroom` /
  * `move_elbow_tucked`。
- * 也就是说**当前可解锁的只有 7 条**，首页写「已解锁 12 / 83」在今天的工程上是走不到的。
+ * 也就是说**当前可解锁的只有 7 条**，首页写「已解锁 12 / 98」在今天的工程上是走不到的。
  * 图鉴入口想做到 12，得先让 G1 的 tip 词表扩到 12 条以上 —— 这是数据层说不了的，
- * 但把它写在这里，免得有人对着 83 干瞪眼。
+ * 但把它写在这里，免得有人对着 98 干瞪眼。
  */
 object TechniqueDex {
 
@@ -70,7 +70,7 @@ object TechniqueDex {
         map
     }
 
-    /** 83 条全量，顺序与知识库一致。 */
+    /** 98 条全量，顺序与知识库一致。 */
     fun all(): List<DexEntry> = entries
 
     /** 按 id 查；查不到返回 null（tipId 为空串或不在库里都会走到这里）。 */
@@ -93,7 +93,7 @@ object TechniqueDex {
     /** 按来源分组，用于排重与统计。 */
     fun bySource(source: String): List<DexEntry> = entries.filter { it.source == source }
 
-    /** 总条数。图鉴的分母；首页那个「/ 83」就用它，别写死数字。 */
+    /** 总条数。图鉴的分母；首页那个「/ 98」就用它，别写死数字。 */
     fun total(): Int = entries.size
 
     /** 全部 id（顺序同 [all]）。 */
@@ -113,7 +113,7 @@ object TechniqueDex {
     /**
      * 每条技法归属哪一维度。
      *
-     * 这是**本文件里唯一的人工判断**，83 条逐条写死，理由如下：
+     * 这是**本文件里唯一的人工判断**，98 条逐条写死，理由如下：
      * - 按内容分，不按分类分。`landscape_golden_blue_hour` 在 LANDSCAPE 类里，
      *   但它讲的是光比，归 EXPOSURE；`landscape_horizon_thirds` 讲的是地平线放哪条线，
      *   归 COMPOSITION。按分类一刀切会让 `byDimension` 退化成第二个分类视图，没有意义。
@@ -224,7 +224,30 @@ object TechniqueDex {
         "light_front_light_clear" to ScoreDimension.EXPOSURE,
         "light_overcast_soft" to ScoreDimension.EXPOSURE,
         "food_tele_compress" to ScoreDimension.COMPOSITION,
-        "food_steam_backlight" to ScoreDimension.EXPOSURE
+        "food_steam_backlight" to ScoreDimension.EXPOSURE,
+
+        // ── TechniqueBookV15 批次 C（15 条）────────────────────────────────────
+        // 全部为 null，**这是本轮刻意的产品决定**，不是漏填：
+        // 这 15 条发生在按下快门之前（擦盘子边、别喊三二一、手肘弯出角……），
+        // 四维评分里没有任何一维能看见它们。给它们绑维度，等于承诺一条
+        // 「照做就能解锁」却永远亮不起来的路。
+        // 结果：图鉴分母 83 → 98，可解锁条目仍然是上面那 7 条。
+        // 不登记的后果是 `unmappedIds()` 非空，`DexStoreTest` 会红 —— 所以这里必须逐条列。
+        "portrait_elbow_angle" to null,
+        "portrait_look_off_lens" to null,
+        "portrait_no_three_count" to null,
+        "night_tap_to_focus" to null,
+        "night_lock_exposure" to null,
+        "food_wipe_plate_edge" to null,
+        "food_show_the_cut" to null,
+        "landscape_vertical_for_tall" to null,
+        "landscape_human_scale" to null,
+        "indoor_kill_ceiling_light" to null,
+        "indoor_corner_ultrawide" to null,
+        "pitfall_check_edges" to null,
+        "pitfall_finger_on_lens" to null,
+        "params_portrait_mode_distance" to null,
+        "params_hdr_for_big_contrast" to null
     )
 }
 
@@ -269,7 +292,7 @@ object DexThresholds {
  * 是否该解锁一条技法。**纯 JVM**，签名里没有 `Context`，可直接单测。
  *
  * ## 为什么要两个条件
- * 只认"照做"会被刷：站在原地晃两下就能把 83 条推平，册子当天集满，第二天没人再来。
+ * 只认"照做"会被刷：站在原地晃两下就能把 98 条推平，册子当天集满，第二天没人再来。
  * 只认"得分"也不行：分是取景时的连续量，用户没动手也可能撞上高分。
  * 两个都要，解锁才同时代表"我做过"和"我做成了"。
  *
@@ -300,7 +323,7 @@ fun shouldUnlock(
     // 1. 没有 tipId → 没有"照做"这件事。全满分那句话不解锁任何条目
     if (tipId.isBlank()) return false
 
-    // 2. tipId 必须在图鉴里。解锁一个不存在的条目会让计数与 83 对不上
+    // 2. tipId 必须在图鉴里。解锁一个不存在的条目会让计数与 98 对不上
     if (TechniqueDex.byId(tipId) == null) return false
 
     // 3. 已解锁过 → 不重复计数，也不重复放动效
@@ -309,7 +332,7 @@ fun shouldUnlock(
     // 4. 日期拿不到 → 宁可不解锁，也不让"每天一条"这条规则失效
     if (today.isBlank()) return false
 
-    // 5. 同一天最多解锁一条：图鉴是长线钩子，一天推平 83 条等于没有钩子
+    // 5. 同一天最多解锁一条：图鉴是长线钩子，一天推平 98 条等于没有钩子
     if (!lastUnlockDate.isNullOrBlank() && lastUnlockDate == today) return false
 
     // 6. 纯知识条目（自拍 / 运镜 / 参数 / 避坑）：没有可判定的维度，不能解锁

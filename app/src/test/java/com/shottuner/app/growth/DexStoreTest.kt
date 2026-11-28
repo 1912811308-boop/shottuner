@@ -24,7 +24,7 @@ import org.junit.Test
  * 把它们单独列出来，是提醒接手的人：CI 全绿不等于这三件事成立。
  *
  * ## 每条用例对应一条"绝不能错"的口径
- *   - 83 条一个都不能少、一个都不能重；
+ *   - 98 条一个都不能少、一个都不能重；
  *   - 没测到的维度按"未测"处理，不能当 0 分放行；
  *   - 全满分那句 tipId 为空的话，不解锁任何条目；
  *   - 一天最多一条。
@@ -45,8 +45,8 @@ class DexStoreTest {
 
     @Test
     fun all_containsEveryTechniqueInTheBook() {
-        assertEquals("图鉴条数必须与知识库一致", 83, TechniqueDex.total())
-        assertEquals(83, TechniqueDex.all().size)
+        assertEquals("图鉴条数必须与知识库一致", 98, TechniqueDex.total())
+        assertEquals(98, TechniqueDex.all().size)
         assertEquals("total() 与 all() 必须同源", TechniqueDex.all().size, TechniqueDex.total())
     }
 
@@ -55,9 +55,9 @@ class DexStoreTest {
         val v15 = TechniqueDex.bySource(TechniqueDex.SOURCE_V15)
         val book = TechniqueDex.bySource(TechniqueDex.SOURCE_BOOK)
 
-        assertEquals("v15 那 44 条", 44, v15.size)
+        assertEquals("v15 那 59 条（批次 A/B 44 + 批次 C 15）", 59, v15.size)
         assertEquals("老库那 39 条", 39, book.size)
-        assertEquals("两个来源加起来必须是全部 83 条", 83, v15.size + book.size)
+        assertEquals("两个来源加起来必须是全部 98 条", 98, v15.size + book.size)
     }
 
     // ── 2. 排重 ───────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ class DexStoreTest {
         )
 
         // 两个来源的 id 不能有交集：有交集说明同一条技法被登记了两次，
-        // 83 这个分母会虚高，而 byId 里谁覆盖谁纯属运气
+        // 98 这个分母会虚高，而 byId 里谁覆盖谁纯属运气
         val v15Ids = TechniqueDex.bySource(TechniqueDex.SOURCE_V15).map { it.id }.toSet()
         val bookIds = TechniqueDex.bySource(TechniqueDex.SOURCE_BOOK).map { it.id }.toSet()
         assertEquals(
@@ -135,7 +135,7 @@ class DexStoreTest {
     }
 
     @Test
-    fun byDimension_plusNullEntries_accountsForAllEightyThree() {
+    fun byDimension_plusNullEntries_accountsForAllNinetyEight() {
         var grouped = 0
         for (dimension in ScoreDimension.values()) {
             grouped += TechniqueDex.byDimension(dimension).size
@@ -143,10 +143,46 @@ class DexStoreTest {
         val knowledgeOnly = TechniqueDex.all().count { it.dimension == null }
 
         assertEquals(
-            "四维条目 + 纯知识条目 必须等于 83（四维 $grouped + 纯知识 $knowledgeOnly）",
-            83,
+            "四维条目 + 纯知识条目 必须等于 98（四维 $grouped + 纯知识 $knowledgeOnly）",
+            98,
             grouped + knowledgeOnly
         )
+    }
+
+    /**
+     * 批次 C 那 15 条**不绑维度**是刻意的产品决定，不是漏填。
+     *
+     * 它们都发生在按下快门之前（擦盘子边、别喊三二一、手肘弯出角……），四维评分里
+     * 没有任何一维看得见。给它们绑维度，等于承诺一条「照做就能解锁」却永远亮不起来的路。
+     * 所以图鉴分母从 83 涨到 98，可解锁条目仍然是那 7 条。
+     *
+     * 这条断言的作用是：将来有人想给其中一条补维度时，会先看到这段理由。
+     */
+    @Test
+    fun batchCEntriesStayOutOfEveryDimension() {
+        val batchC = listOf(
+            "portrait_elbow_angle",
+            "portrait_look_off_lens",
+            "portrait_no_three_count",
+            "night_tap_to_focus",
+            "night_lock_exposure",
+            "food_wipe_plate_edge",
+            "food_show_the_cut",
+            "landscape_vertical_for_tall",
+            "landscape_human_scale",
+            "indoor_kill_ceiling_light",
+            "indoor_corner_ultrawide",
+            "pitfall_check_edges",
+            "pitfall_finger_on_lens",
+            "params_portrait_mode_distance",
+            "params_hdr_for_big_contrast"
+        )
+        assertEquals("批次 C 必须是 15 条", 15, batchC.size)
+        for (id in batchC) {
+            val entry = TechniqueDex.byId(id)
+            assertNotNull("批次 C 的 $id 必须在图鉴里", entry)
+            assertNull("$id 不绑维度，别把它塞进某一维去凑可解锁数", entry!!.dimension)
+        }
     }
 
     @Test
@@ -183,7 +219,7 @@ class DexStoreTest {
     fun all_isStableAcrossCalls() {
         assertEquals(TechniqueDex.all(), TechniqueDex.all())
         assertEquals(TechniqueDex.ids(), TechniqueDex.all().map { it.id })
-        // 老库 39 条在前，v15 44 条在后 —— 册子的页码要稳定
+        // 老库 39 条在前，v15 59 条在后 —— 册子的页码要稳定
         assertEquals(TechniqueDex.SOURCE_BOOK, TechniqueDex.all().first().source)
         assertEquals(TechniqueDex.SOURCE_V15, TechniqueDex.all().last().source)
     }
@@ -351,7 +387,7 @@ class DexStoreTest {
 
     @Test
     fun shouldUnlock_unknownTipIdIsFalse() {
-        // 解锁一个图鉴里没有的条目，会让"已解锁 N / 83"的 N 与 83 对不上
+        // 解锁一个图鉴里没有的条目，会让"已解锁 N / 98"的 N 与 98 对不上
         assertFalse(
             shouldUnlock(
                 tipId = "not_a_real_technique",

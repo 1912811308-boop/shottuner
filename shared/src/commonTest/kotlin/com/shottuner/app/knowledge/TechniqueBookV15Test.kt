@@ -7,31 +7,37 @@ import kotlin.test.assertTrue
 import kotlin.test.Test
 
 /**
- * 44 条新技法的数据体检。
+ * 59 条新技法的数据体检。
  *
- * 这个文件只回答一个问题：**阶段二的转写有没有走样**。
+ * 这个文件只回答一个问题：**转写与新增有没有走样**。
  * 所以断言分三类 —— 条数与分布、字段字数口径、以及「哪些条目不许进推送池」。
  */
 class TechniqueBookV15Test {
 
+    /**
+     * 分类分布。批次 A/B 是产品口径（`docs/TECHNIQUE-v15.md`），
+     * 批次 C 的 15 条是本轮新增，加在 PORTRAIT / NIGHT / FOOD / LANDSCAPE /
+     * INDOOR / PITFALL / PARAMS 七类上，每类条数见下。
+     */
     private val expectedCounts = mapOf(
-        TechCategory.PORTRAIT to 10,
+        TechCategory.PORTRAIT to 13,
         TechCategory.CAMERA_MOVE to 8,
         TechCategory.SELFIE to 5,
-        TechCategory.PITFALL to 4,
-        TechCategory.LANDSCAPE to 4,
-        TechCategory.PARAMS to 3,
-        TechCategory.NIGHT to 3,
+        TechCategory.PITFALL to 6,
+        TechCategory.LANDSCAPE to 6,
+        TechCategory.PARAMS to 5,
+        TechCategory.NIGHT to 5,
         TechCategory.LIGHT to 3,
         TechCategory.STREET to 2,
-        TechCategory.FOOD to 2
+        TechCategory.FOOD to 4,
+        TechCategory.INDOOR to 2
     )
 
     // ── 条数与分布 ─────────────────────────────────────────────────────────────
 
     @Test
-    fun hasExactlyFortyFourEntries() {
-        assertEquals(44, TechniqueBookV15.list.size, "v1.5 新增必须是 44 条")
+    fun hasExactlyFiftyNineEntries() {
+        assertEquals(59, TechniqueBookV15.list.size, "v1.5 的 44 条 + 批次 C 的 15 条 = 59")
         assertEquals(TechniqueBookV15.EXPECTED_COUNT, TechniqueBookV15.list.size)
         assertTrue(TechniqueBookV15.isReady())
     }
@@ -43,7 +49,7 @@ class TechniqueBookV15Test {
         for ((category, expected) in expectedCounts) {
             assertEquals(expected, actual[category], "${category.label} 条数不对")
         }
-        assertEquals(44, actual.values.sum(), "分布合计必须等于 44")
+        assertEquals(59, actual.values.sum(), "分布合计必须等于 59")
     }
 
     @Test
@@ -51,17 +57,17 @@ class TechniqueBookV15Test {
         val ids = TechniqueBookV15.list.map { it.id }
         assertEquals(ids.size, ids.distinct().size, "新库内 id 必须唯一")
 
-        // 用 legacy（1.4 及以前那 39 条）比对，不能用 all —— all 从 1.5 起已经包含这 44 条
+        // 用 legacy（1.4 及以前那 39 条）比对，不能用 all —— all 从 1.5 起已经包含这 59 条
         val legacy = PhotographyBook.legacy.map { it.id }.toSet()
         assertEquals(39, legacy.size, "老库应该是 39 条")
         val overlap = ids.filter { it in legacy }
-        assertTrue(overlap.isEmpty(), "新 44 条不能与老 39 条撞 id，撞了这些：$overlap")
+        assertTrue(overlap.isEmpty(), "新 59 条不能与老 39 条撞 id，撞了这些：$overlap")
 
-        assertEquals(83, PhotographyBook.all.size, "老库 + 新库 = 83")
+        assertEquals(98, PhotographyBook.all.size, "老库 39 + 新库 59 = 98")
         assertEquals(
-            44,
+            59,
             PhotographyBook.all.count { it.id in ids },
-            "PhotographyBook.all 必须包含这 44 条"
+            "PhotographyBook.all 必须包含这 59 条"
         )
         assertEquals(
             PhotographyBook.all.size,
@@ -200,7 +206,7 @@ class TechniqueBookV15Test {
         assertEquals(
             PhotographyBook.all.size - banned.size,
             TechniqueBookV15.pushEligibleIds.size,
-            "白名单条数 = 83 − 8"
+            "白名单条数 = 98 − 8（自拍 5 + 仅浏览 3）"
         )
         assertTrue((TechniqueBookV15.pushEligibleIds intersect banned).isEmpty(), "禁推条目不得出现在白名单里")
     }

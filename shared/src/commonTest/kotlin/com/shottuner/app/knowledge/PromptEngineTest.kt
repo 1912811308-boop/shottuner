@@ -11,7 +11,7 @@ import kotlin.test.Test
 /**
  * 提示规则表测试。
  *
- * 技法库已落地 83 条（39 老 + 44 新），但这里统一传 `availableTipIds = null`（不过滤），
+ * 技法库已落地 98 条（39 老 + 59 新），但这里统一传 `availableTipIds = null`（不过滤），
  * 只测"规则在什么信号下说话、说什么"。"找不到 id 就静默跳过"单独有一个用例。
  */
 class PromptEngineTest {
@@ -296,7 +296,7 @@ class PromptEngineTest {
     @Test
     fun missingTipIdsAreSkippedSilently() {
         // 传空集合模拟"技法库里一条都查不到"：引擎必须一声不吭而不是崩溃。
-        // 生产环境传的是 `TechniqueBookV15.pushEligibleIds`（83 条去掉 8 条禁推）。
+        // 生产环境传的是 `TechniqueBookV15.pushEligibleIds`（98 条去掉 8 条禁推）。
         val sample = signals(tech = tech(meanLuma = 0.1f, highlightClip = 0.4f), roll = 8f, gridOn = false)
         val result = PromptEngine.evaluate(sample, 20_000L, availableTipIds = emptySet())
         assertTrue(result.isEmpty(), "找不到 tipId 就必须静默跳过")

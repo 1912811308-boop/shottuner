@@ -17,7 +17,7 @@ class PhotographyBookTest {
 
     @Test
     fun allCategoriesCovered() {
-        // 断言原样保留。v1.5 起 `PhotographyBook.all` 就是「39 + 44」的合并库，
+        // 断言原样保留。v1.5 起 `PhotographyBook.all` 就是「39 + 59」的合并库，
         // 所以新增的 4 个分类（自拍/运镜/参数/避坑）会被这条用例自动覆盖，
         // 不需要在这里加任何分支。
         for (category in TechCategory.values()) {

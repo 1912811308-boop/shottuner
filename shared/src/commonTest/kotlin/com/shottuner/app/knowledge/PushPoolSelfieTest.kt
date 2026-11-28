@@ -45,8 +45,27 @@ class PushPoolSelfieTest {
             TechniqueBookV15.byId.size - TechniqueBookV15.BROWSE_ONLY_IDS.size -
                 TechniqueBookV15.SELFIE_IDS.size,
             pool.size,
-            "后置池条数 = 83 − 3 − 5"
+            "后置池条数 = 98 − 3 − 5"
         )
+    }
+
+    /**
+     * 两个池子的**绝对条数**钉在这里。
+     *
+     * 「前置 = 后置 + 5」这条关系下面还有一条用例守着，但它只保证关系成立 ——
+     * 全库少算了几条、或多出几条禁推之外的东西，关系照样成立。所以这里另外钉
+     * 一遍绝对值：批次 C 加了 15 条之后，后置池是 90（98 − 自拍 5 − 仅浏览 3），
+     * 前置池是 95（98 − 仅浏览 3）。两个数都要跟着全库一起动。
+     */
+    @Test
+    fun poolSizesArePinnedToTheBookSize() {
+        val back = TechniqueBookV15.pushEligibleIds(includeSelfie = false)
+        val front = TechniqueBookV15.pushEligibleIds(includeSelfie = true)
+
+        assertEquals(98, TechniqueBookV15.byId.size, "全库 98 条（老库 39 + 新库 59）")
+        assertEquals(90, back.size, "后置池 90 条 = 98 − 自拍 5 − 仅浏览 3")
+        assertEquals(95, front.size, "前置池 95 条 = 98 − 仅浏览 3")
+        assertEquals(back.size + 5, front.size, "前置 = 后置 + 自拍 5 条")
     }
 
     @Test
