@@ -218,6 +218,43 @@ class TechniqueTipFallbackTest {
     }
 
     /**
+     * ⑥ 这次补丁的**验收口径**：批次 C 那 15 条必须真的能被 iOS 的兜底选中。
+     *
+     * 前五条守的是"机制正确"（相位 / 不退化 / 不出空卡片），这一条守的是**用户能看见**：
+     * 15 条新技巧在 iOS 上本来就只进了图鉴、取景时一句都不出现，这次补丁的全部意义
+     * 就是让它们出现。所以直接在"iOS 侧真正会显示的 id"这个口径上断言，
+     * 而不是断言"它们进了池子"—— 进了池子但轮不到，对用户和不存在没有区别。
+     *
+     * 名单与 `PromptEngineTest.batchCIds` 一致（那是 Android 侧的可达性证明）。
+     */
+    @Test
+    fun batchCEntriesAreReachableThroughTheIosFallback() {
+        val batchC = listOf(
+            "portrait_elbow_angle", "portrait_look_off_lens", "portrait_no_three_count",
+            "night_tap_to_focus", "night_lock_exposure",
+            "food_wipe_plate_edge", "food_show_the_cut",
+            "landscape_vertical_for_tall", "landscape_human_scale",
+            "indoor_kill_ceiling_light", "indoor_corner_ultrawide",
+            "pitfall_check_edges", "pitfall_finger_on_lens",
+            "params_portrait_mode_distance", "params_hdr_for_big_contrast"
+        )
+
+        val picked = HashSet<String>()
+        for (scene in SceneType.values()) {
+            for (n in 0L until 120L) {
+                TechniqueTipFallback.pick(scene, windowStart(n))?.let { picked.add(it) }
+            }
+        }
+
+        val never = batchC.filter { it !in picked }
+        assertTrue(
+            never.isEmpty(),
+            "这 ${never.size} 条批次 C 在 120 个窗口里一次都没被 iOS 兜底选中：$never\n" +
+                "（iOS 侧实际选到过 ${picked.size} 条）"
+        )
+    }
+
+    /**
      * ⑤ 每一个可能被选出来的 id 都要解析出文案。
      *
      * 解析失败的表现是 `tipText` 为空、提示卡整块不画 —— 用户那次窗口就白等了 48 秒，
